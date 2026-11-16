@@ -2,7 +2,10 @@ import asyncio
 import json
 import logging
 import os
+import time
+import uuid
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -16,6 +19,7 @@ from showis.services.scanner import ScannerService
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from starlette.requests import ClientDisconnect
 
 logger = logging.getLogger("showis.api.scans")
 
@@ -27,11 +31,115 @@ _MAX_SSE_CONNECTIONS = 3
 _SSE_HEARTBEAT_SECONDS = 20.0
 #: Tek bir SSE akisinin azami omru (sn); `SHOWIS_SSE_MAX_SECONDS` ile override
 _DEFAULT_SSE_MAX_SECONDS = 900.0
+#: T-354: bu sureden uzun sure yenilenmeyen kira "terk edilmis" sayilir ve dusurulur
+_SSE_LEASE_TTL_SECONDS = 90.0
+#: 429 yanitinda istemciye onerilen bekleme (sn)
+_SSE_RETRY_AFTER_SECONDS = 5
 
-#: scan_id -> acik baglanti sayisi (sinif duzeyi, surec ici)
+#: scan_id -> acik baglanti sayisi (turetilmis; geriye uyum + gozlemlenebilirlik)
 _sse_connections: dict[str, int] = {}
 
 _FINAL_STATUSES = {"completed", "failed", "cancelled"}
+
+
+@dataclass
+class SseLease:
+    """Bir SSE baglantisinin slot kirasi (T-354).
+
+    `renewed_at` her ping/olay yaziminda guncellenir. Proxy baglantiyi
+    kapatmadan biraktiginda (Next `fetch` iptali upstream'e ulasmadiginda)
+    `finally` hic calismaz; bu yuzden:
+    * `renewed_at` TTL'i (90 sn) dolan kiralar yeni baglanti isteginde dusurulur,
+    * dongude her turda `request.is_disconnected()` kontrol edilir,
+    * yazim hatasi (`ClientDisconnect`/`OSError`) slotu derhal birakir.
+    """
+
+    lease_id: str
+    scan_id: str
+    created_at: float
+    renewed_at: float
+
+
+#: scan_id -> {lease_id: SseLease} (surec ici)
+_sse_leases: dict[str, dict[str, SseLease]] = {}
+
+
+def _now() -> float:
+    """Kira zamani (testlerde monkeypatch edilir)."""
+    return time.monotonic()
+
+
+def _sync_connection_counter(scan_id: str) -> None:
+    """`_sse_connections` sayacini kira tablosundan turetir (tek kaynak)."""
+    leases = _sse_leases.get(scan_id)
+    if leases:
+        _sse_connections[scan_id] = len(leases)
+    else:
+        _sse_connections.pop(scan_id, None)
+
+
+def reap_stale_sse_leases(scan_id: str, *, now: float | None = None) -> int:
+    """TTL'i dolmus (terk edilmis) kiralari dusurur; dusurulen sayiyi doner.
+
+    Zamanlayici yok: temizlik yeni baglanti isteginde (ve gaita) yapilir.
+    """
+    leases = _sse_leases.get(scan_id)
+    if not leases:
+        return 0
+    current = _now() if now is None else now
+    stale = [
+        lease_id
+        for lease_id, lease in leases.items()
+        if current - lease.renewed_at > _SSE_LEASE_TTL_SECONDS
+    ]
+    for lease_id in stale:
+        leases.pop(lease_id, None)
+    if stale:
+        logger.info(
+            "SSE: %d terk edilmis kira dusuruldu (scan=%s, ttl=%.0fs)",
+            len(stale),
+            scan_id,
+            _SSE_LEASE_TTL_SECONDS,
+        )
+    _sync_connection_counter(scan_id)
+    return len(stale)
+
+
+def acquire_sse_lease(scan_id: str) -> SseLease:
+    """Slot kirasi alir (cagiran once `reap_stale_sse_leases` + limit kontrolu yapar)."""
+    current = _now()
+    lease = SseLease(
+        lease_id=uuid.uuid4().hex,
+        scan_id=scan_id,
+        created_at=current,
+        renewed_at=current,
+    )
+    _sse_leases.setdefault(scan_id, {})[lease.lease_id] = lease
+    _sync_connection_counter(scan_id)
+    return lease
+
+
+def renew_sse_lease(lease: SseLease, *, now: float | None = None) -> None:
+    lease.renewed_at = _now() if now is None else now
+
+
+def release_sse_lease(lease: SseLease) -> None:
+    """Kira slotunu birakir (idempotent)."""
+    leases = _sse_leases.get(lease.scan_id)
+    if leases and leases.pop(lease.lease_id, None) is not None:
+        if not leases:
+            _sse_leases.pop(lease.scan_id, None)
+        _sync_connection_counter(lease.scan_id)
+
+
+def reset_sse_leases() -> None:
+    """Tum kiralari temizler (testler / servis yeniden baslatma)."""
+    _sse_leases.clear()
+    _sse_connections.clear()
+
+
+def active_sse_leases(scan_id: str) -> int:
+    return len(_sse_leases.get(scan_id, {}))
 
 
 def _revoke_celery_task(task_id: str) -> None:
@@ -61,15 +169,35 @@ def _sse_payload(event_type: str, data: dict[str, Any]) -> str:
     return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
 
 
-async def _scan_event_stream(scan_id: str, initial_status: str) -> AsyncIterator[str]:
-    """Sinirli omurlu, heartbeat'li SSE akisi (SEC-16).
+async def _client_disconnected(request: Request | None) -> bool:
+    """Istemci koptu mu? (periyodik kontrol; bloklamaz)"""
+    if request is None:
+        return False
+    try:
+        return bool(await request.is_disconnected())
+    except Exception:  # pragma: no cover - disconnect kontrolu akisi bozmasin
+        return False
 
-    * Ilk baglanti sayaaci burada tutulur, `finally` ile **her durumda** duser.
-    * Tarama zaten bittiyse tek bir terminal olay gonderip hemen kapanir
-      (sonsuz bekleme yok).
-    * `SHOWIS_SSE_MAX_SECONDS` dolunca `: bye` yorumu + kapanis.
+
+async def _scan_event_stream(
+    scan_id: str,
+    initial_status: str,
+    request: Request | None = None,
+    lease: SseLease | None = None,
+) -> AsyncIterator[str]:
+    """Sinirli omurlu, heartbeat'li SSE akisi (SEC-16 + T-354 kira).
+
+    Slot yonetimi:
+    * Kira endpoint'te alinir (429 kontrolu ile atomik), burada **her durumda**
+      `finally` ile birakilir.
+    * Her ping/olay yaziminda `renewed_at` guncellenir (proxy kopuklugunda TTL
+      reap devreye girer).
+    * Her turda `request.is_disconnected()` kontrol edilir; kopmussa cikilir.
+    * Yazim sirasinda `ClientDisconnect`/`OSError` slotu derhal birakir.
+    * Tarama bittiyse tek terminal olay gonderip kapanir; `SHOWIS_SSE_MAX_SECONDS`
+      dolunca `: bye` yorumu ile kapanir.
     """
-    _sse_connections[scan_id] = _sse_connections.get(scan_id, 0) + 1
+    lease = lease or acquire_sse_lease(scan_id)
     queue: asyncio.Queue[dict[str, Any]] | None = None
     try:
         if initial_status in _FINAL_STATUSES:
@@ -80,10 +208,13 @@ async def _scan_event_stream(scan_id: str, initial_status: str) -> AsyncIterator
         # Ilk bayti hemen gonder: proxy/tarayici baglantiyi acik saysin, testler
         # heartbeat beklemesin (SSE yorumlari istemciye olay olarak gitmez).
         yield ": connected\n\n"
-        deadline = asyncio.get_running_loop().time() + _sse_max_seconds()
+        deadline = _now() + _sse_max_seconds()
 
         while True:
-            remaining = deadline - asyncio.get_running_loop().time()
+            if await _client_disconnected(request):
+                logger.info("SSE: istemci koptu, akis kapatiliyor (scan=%s)", scan_id)
+                return
+            remaining = deadline - _now()
             if remaining <= 0:
                 yield ": bye\n\n"
                 return
@@ -91,16 +222,23 @@ async def _scan_event_stream(scan_id: str, initial_status: str) -> AsyncIterator
             try:
                 item = await asyncio.wait_for(queue.get(), timeout=timeout)
             except asyncio.TimeoutError:
-                if asyncio.get_running_loop().time() >= deadline:
+                renew_sse_lease(lease)
+                if _now() >= deadline:
                     yield ": bye\n\n"
                     return
                 yield ": ping\n\n"
                 continue
 
+            renew_sse_lease(lease)
             yield _sse_payload(item["type"], item["data"])
             if item["type"] in ("scan.completed", "scan.failed", "scan.cancelled"):
                 return
+    except (ClientDisconnect, OSError):
+        # Yazim/akis sirasinda kopan baglanti: kira `finally`de birakilir
+        logger.info("SSE: yazim hatasi, akis kapatiliyor (scan=%s)", scan_id)
+        return
     finally:
+        release_sse_lease(lease)
         if queue is not None:
             dropped = getattr(queue, "dropped", 0)
             if dropped:
@@ -112,11 +250,6 @@ async def _scan_event_stream(scan_id: str, initial_status: str) -> AsyncIterator
                     getattr(queue, "maxsize", 0),
                 )
             event_broadcaster.unsubscribe(scan_id, queue)
-        remaining_connections = _sse_connections.get(scan_id, 1) - 1
-        if remaining_connections > 0:
-            _sse_connections[scan_id] = remaining_connections
-        else:
-            _sse_connections.pop(scan_id, None)
 
 
 @router.get("/{scan_id}")
@@ -154,29 +287,46 @@ async def get_scan_status(scan_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/{scan_id}/events")
-async def stream_scan_events(scan_id: str, db: AsyncSession = Depends(get_db)):
-    """Canli SSE olay akisi (SEC-16: kimlik/var olma kontrolu + baglanti siniri)."""
+async def stream_scan_events(
+    scan_id: str, request: Request, db: AsyncSession = Depends(get_db)
+):
+    """Canli SSE olay akisi (SEC-16 + T-354 kira/slot yonetimi).
+
+    Slot yonetimi:
+    * Terk edilmis (90 sn yenilenmeyen) kiralar **yeni baglanti isteginde**
+      dusurulur — ayri zamanlayici yok.
+    * `scan_id` basina en fazla `_MAX_SSE_CONNECTIONS` (3) aktif kira; doluysa
+      `429` + `Retry-After` (kac saniye sonra denenecegi `detail`de).
+    * Kira burada alinir (kontrol ile ayni adimda), akis `finally`de birakir.
+    """
     scan = (
         await db.execute(select(Scan.id, Scan.status).where(Scan.id == scan_id))
     ).first()
     if scan is None:
         raise HTTPException(status_code=404, detail="Scan not found")
 
-    if _sse_connections.get(scan_id, 0) >= _MAX_SSE_CONNECTIONS:
+    reap_stale_sse_leases(scan_id)
+    active = active_sse_leases(scan_id)
+    if active >= _MAX_SSE_CONNECTIONS:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=(
-                f"Bu tarama icin en fazla {_MAX_SSE_CONNECTIONS} canli baglanti acilabilir"
+                f"Bu tarama icin en fazla {_MAX_SSE_CONNECTIONS} canli baglanti "
+                f"acilabilir; {_SSE_RETRY_AFTER_SECONDS} saniye sonra yeniden deneyin"
             ),
+            headers={"Retry-After": str(_SSE_RETRY_AFTER_SECONDS)},
         )
 
+    lease = acquire_sse_lease(scan_id)
     return StreamingResponse(
-        _scan_event_stream(scan_id, str(scan.status)),
+        _scan_event_stream(scan_id, str(scan.status), request=request, lease=lease),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
+            # T-354: proxy/istemci tarama durumunu basliktan gorebilsin
+            "X-Scan-Status": str(scan.status),
         },
     )
 

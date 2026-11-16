@@ -767,32 +767,38 @@ else
   step_fail 16 "/healthz (derin saglik)" "baglanti hatasi"
 fi
 
-# ------------------------------------------------------------ 17) /metrics
+# ----------------------------------------------- 17) metrik ucu (T-329)
+# Dagitilan sozlesme: `/api/v1/metrics` (ops.py router'i `/api/v1` altinda).
+# Kok `/metrics` edge'de web'e gider (404) — T-330 metni kok yolu yazmisti, bu
+# yuzden iki yol da denenir ve HANGISININ yanit verdigi raporlanir.
+METRICS_PATH=""
+for candidate in /api/v1/metrics /metrics; do
+  if http_request auth GET "$candidate"; then
+    if [[ "$HTTP_CODE" == "200" ]]; then METRICS_PATH="$candidate"; break; fi
+  fi
+done
 metrics_ok=0
-if http_request auth GET /metrics; then
-  if [[ "$HTTP_CODE" == "200" ]]; then
-    n_showis="$(printf '%s' "$HTTP_BODY" | grep -c '^showis_' || true)"
-    if (( n_showis >= 5 )); then
-      metrics_ok=1
-      step_pass 17 "/metrics (showis_ metrikleri)" "200, ${n_showis} showis_ satiri"
-    else
-      capability 17 "/metrics (showis_ metrikleri)" 0 "" "yalniz ${n_showis} showis_ satiri (>=5 bekleniyor)"
-    fi
+if [[ -n "$METRICS_PATH" ]]; then
+  n_showis="$(printf '%s' "$HTTP_BODY" | grep -c '^showis_' || true)"
+  if (( n_showis >= 5 )); then
+    metrics_ok=1
+    step_pass 17 "metrik ucu (${METRICS_PATH})" "200, ${n_showis} showis_ satiri"
   else
-    capability 17 "/metrics (showis_ metrikleri)" 0 "" "HTTP $HTTP_CODE"
+    capability 17 "metrik ucu (${METRICS_PATH})" 0 "" "yalniz ${n_showis} showis_ satiri (>=5 bekleniyor)"
   fi
 else
-  step_fail 17 "/metrics (showis_ metrikleri)" "baglanti hatasi"
+  capability 17 "metrik ucu (/api/v1/metrics)" 0 "" \
+    "ne /api/v1/metrics ne /metrics 200 dondurdu (son HTTP $HTTP_CODE)"
 fi
 if [[ "$metrics_ok" -eq 1 ]]; then
-  if http_request - GET /metrics; then
+  if http_request - GET "$METRICS_PATH"; then
     if [[ "$HTTP_CODE" == "401" ]]; then
-      step_pass 17b "/metrics kimliksiz -> 401" "401"
+      step_pass 17b "metrik ucu kimliksiz -> 401" "401 (${METRICS_PATH})"
     else
-      step_fail 17b "/metrics kimliksiz -> 401" "HTTP $HTTP_CODE (auth'suz erisim)"
+      step_fail 17b "metrik ucu kimliksiz -> 401" "HTTP $HTTP_CODE (auth'suz erisim)"
     fi
   else
-    step_fail 17b "/metrics kimliksiz -> 401" "baglanti hatasi"
+    step_fail 17b "metrik ucu kimliksiz -> 401" "baglanti hatasi"
   fi
 else
   step_skip 17b "/metrics kimliksiz -> 401" "metrik ucu yok"

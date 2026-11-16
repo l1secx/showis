@@ -14,9 +14,11 @@ import type { NextRequest } from "next/server";
  * gönderemez, ama yanıt `upstream.body` olarak aynen akıtıldığı için token sunucu
  * tarafında eklenmiş olur ve canlı akış bozulmaz.
  *
- * İptal (T-342): upstream `fetch` çağrısına `signal: request.signal` verilir; istemci
- * bağlantıyı kapatınca (sekme kapanır, SSE dinleyicisi ayrılır) API'ye giden istek de
- * iptal edilir — başıboş SSE akışları birikmez.
+ * İptal (T-342/T-355): upstream `fetch` bir `AbortController` ile çalışır. Sinyal iki
+ * kaynaktan gelir: (a) istemci isteğinin iptali (`request.signal`), (b) yanıt gövdesini
+ * pompalayan `ReadableStream`'in `cancel()`'ı — istemci okumayı bıraktığında (SSE sekmesi
+ * kapanınca) upstream okuyucusu ve fetch iptal edilir; API tarafındaki `finally` çalışır,
+ * bağlantı slotu sızmaz (T-351'de görülen 429).
  *
  * Gövde (T-342): `Content-Length` 10 MB'ı aşarsa istek hiç okunmadan 413 döner; gövde
  * tamponlanmadan (`duplex: "half"`) akıtılır ve akış sırasında da 10 MB tavanı uygulanır.
@@ -102,6 +104,64 @@ function limitedBodyStream(
   );
 }
 
+/**
+ * T-355: yanıt gövdesini istemciye pompalar ve **iptali upstream'e yayar**.
+ *
+ * İstemci okumayı bıraktığında (SSE sekmesi kapanır, sayfadan çıkılır) Next bu
+ * `ReadableStream`'in `cancel()`'ını çağırır. Burada upstream okuyucusu iptal edilir ve
+ * fetch `AbortController`'ı abort edilir → API tarafındaki generator `finally` bloğu
+ * çalışır, `_sse_connections` slotu serbest kalır (T-351'de görülen 429 sızıntısı).
+ *
+ * Chunk'lar geldiği gibi iletilir (tampon yok); SSE akışı bozulmaz.
+ */
+function pumpResponseBody(
+  body: ReadableStream<Uint8Array>,
+  controller: AbortController,
+  label: string,
+  isEventStream: boolean,
+  onDone: () => void
+): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  let finished = false;
+
+  const finish = () => {
+    if (finished) return false;
+    finished = true;
+    onDone();
+    return true;
+  };
+
+  const teardown = (reason: string) => {
+    if (!finish()) return;
+    void reader.cancel(reason).catch(() => undefined);
+    if (!controller.signal.aborted) controller.abort();
+    console.debug(
+      "[api-proxy] upstream akışı kapatıldı:",
+      label,
+      `${isEventStream ? "sse" : "stream"}:${reason}`
+    );
+  };
+
+  return new ReadableStream<Uint8Array>({
+    async pull(streamController) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          if (finish()) streamController.close();
+          return;
+        }
+        if (value) streamController.enqueue(value);
+      } catch (error) {
+        if (!finish()) return; // zaten kapatıldı (istemci iptali)
+        streamController.error(error);
+      }
+    },
+    cancel(reason) {
+      teardown(typeof reason === "string" ? reason : "client-cancel");
+    },
+  });
+}
+
 async function proxy(request: NextRequest, context: RouteContext) {
   const { path } = await context.params;
 
@@ -136,13 +196,22 @@ async function proxy(request: NextRequest, context: RouteContext) {
     return payloadTooLarge();
   }
 
+  // T-355: upstream iptali iki kaynaktan gelebilir — istemci isteği (request.signal)
+  // veya yanıt akışının iptali (aşağıdaki pompa). Tek bir AbortController ikisini birleştirir.
+  const controller = new AbortController();
+  const abortFromClient = () => controller.abort();
+  if (request.signal.aborted) abortFromClient();
+  else request.signal.addEventListener("abort", abortFromClient, { once: true });
+  const detachClientAbort = () => {
+    request.signal.removeEventListener("abort", abortFromClient);
+  };
+
   const init: FetchInitWithDuplex = {
     method,
     headers,
     redirect: "manual",
     cache: "no-store",
-    // T-342: istemci kapanınca upstream isteği de iptal edilir (SSE sızıntısı yok).
-    signal: request.signal,
+    signal: controller.signal,
   };
 
   if (hasBody) {
@@ -159,6 +228,7 @@ async function proxy(request: NextRequest, context: RouteContext) {
   try {
     upstream = await fetch(target, init);
   } catch (error) {
+    detachClientAbort();
     if (isAbortError(error)) {
       // İstemci gitti: sessiz kapanış (log'a hata olarak yazma).
       console.debug("[api-proxy] istemci isteği iptal etti:", target.pathname);
@@ -189,9 +259,29 @@ async function proxy(request: NextRequest, context: RouteContext) {
     responseHeaders.set("X-Accel-Buffering", "no");
   }
 
-  const noBody = upstream.status === 204 || upstream.status === 304 || method === "HEAD";
+  const isEventStream = contentType.includes("text/event-stream");
+  const noBody =
+    upstream.status === 204 || upstream.status === 304 || method === "HEAD" || !upstream.body;
 
-  return new Response(noBody ? null : upstream.body, {
+  if (noBody) {
+    detachClientAbort();
+    return new Response(null, {
+      status: upstream.status,
+      statusText: upstream.statusText,
+      headers: responseHeaders,
+    });
+  }
+
+  // T-355: gövdeyi pompalarken iptali upstream'e yay (özellikle SSE).
+  const body = pumpResponseBody(
+    upstream.body as ReadableStream<Uint8Array>,
+    controller,
+    target.pathname,
+    isEventStream,
+    detachClientAbort
+  );
+
+  return new Response(body, {
     status: upstream.status,
     statusText: upstream.statusText,
     headers: responseHeaders,

@@ -123,5 +123,9 @@ if [ "$mismatch" -eq 0 ]; then
   log "TATBIKAT BASARILI — yedek geri yuklenebilir ve satir sayilari birebir"
   exit 0
 fi
+# T-353: canli sistemde aradan gecen surede veri degisebilir (vaka silme/ekleme, retention).
+# Bu durum yedegin bozuk oldugunu GOSTERMEZ; taze yedekle tekrar deneyin.
 log "TATBIKAT BASARISIZ — $mismatch uyusmazlik"
+log "IPUCU: dump alindiktan sonra canli veri degismis olabilir (vaka silme/ekleme, retention)."
+log "       Teyit icin: bash infra/scripts/backup.sh && bash infra/scripts/backup-verify.sh"
 exit 1

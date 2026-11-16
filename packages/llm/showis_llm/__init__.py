@@ -1,9 +1,14 @@
+from .breaker import CircuitBreaker, get_breaker, llm_stats, reset_breaker
 from .client import DEFAULT_USER_AGENT, LLMClient, LLMClientError
 from .presets import PRESETS, LLMPreset, get_preset
 from .prompts import render_prompt
 from .redact import redact_text
 
 __all__ = [
+    "CircuitBreaker",
+    "get_breaker",
+    "llm_stats",
+    "reset_breaker",
     "LLMClient",
     "LLMClientError",
     "LLMPreset",

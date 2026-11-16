@@ -81,7 +81,7 @@ from showis_engine.scan_modes import (
     variant_cap,
 )
 from showis_engine.variants import generate_variants
-from showis_llm import LLMClient
+from showis_llm import LLMClient, llm_stats
 from sqlalchemy import CursorResult, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -543,6 +543,8 @@ class ScannerService:
             "total_findings": len(all_entities),
             "skipped_tasks": len(leftover),
             "cancelled_tasks": run_stats.cancelled_tasks,
+            # T-333: LLM çağrı/hata/devre kesici sayacları (süreç geneli anlık görüntü)
+            **llm_stats(),
         }
         finished_at = datetime.now(timezone.utc)
         await db.execute(

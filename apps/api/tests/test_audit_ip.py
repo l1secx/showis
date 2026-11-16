@@ -48,11 +48,15 @@ async def client():
 # ---------------------------------------------------------------------------
 
 
-def test_xff_ilk_degere_guvenilmez_son_deger_alinir():
-    # Saldırgan başa 1.2.3.4 yazmış olsa da Caddy'nin eklediği son atlama kazanır
+def test_xff_zincirinde_ilk_guvenilmeyen_ip_alinir():
+    """T-356: sağdan ilk **güvenilmeyen** IP seçilir (güvenilir proxy atlamaları atlanır).
+
+    Varsayılan güvenilir kümede 10.0.0.1 bir proxy atlamasıdır; gerçek istemci
+    en soldaki güvenilmeyen değerdir.
+    """
     assert (
         client_ip_from_headers({"x-forwarded-for": "1.2.3.4, 10.0.0.1"}, "127.0.0.1")
-        == "10.0.0.1"
+        == "1.2.3.4"
     )
 
 
@@ -74,8 +78,10 @@ def test_gecersiz_baslik_degerleri_reddedilir():
         == "10.1.1.1"
     )
     assert client_ip_from_headers({"x-real-ip": "a" * 100}, "10.1.1.1") == "10.1.1.1"
-    # IPv6 kabul edilir
-    assert client_ip_from_headers({"x-real-ip": "2001:db8::1"}, None) == "2001:db8::1"
+    # Peer yoksa başlıklara güvenilemez (T-356) → IP çözülemez
+    assert client_ip_from_headers({"x-real-ip": "2001:db8::1"}, None) is None
+    # IPv6: güvenilir peer (::1) + X-Real-IP
+    assert client_ip_from_headers({"x-real-ip": "2001:db8::1"}, "::1") == "2001:db8::1"
 
 
 # ---------------------------------------------------------------------------
@@ -132,7 +138,7 @@ async def _audit_ip(factory: async_sessionmaker[AsyncSession]) -> str | None:
     return (entry.details or {}).get("actor_ip")
 
 
-async def test_audit_xff_son_degerini_yazar(client, db_factory):
+async def test_audit_xff_zincirinden_guvenilmeyen_ip_yazar(client, db_factory):
     await _seed_finding(db_factory)
     res = await client.patch(
         "/api/v1/findings/finding:github:ipuser",
@@ -140,7 +146,8 @@ async def test_audit_xff_son_degerini_yazar(client, db_factory):
         headers={"X-Forwarded-For": "1.2.3.4, 10.0.0.1"},
     )
     assert res.status_code == 200, res.text
-    assert await _audit_ip(db_factory) == "10.0.0.1"
+    # T-356: 10.0.0.1 güvenilir proxy atlaması → gerçek istemci 1.2.3.4
+    assert await _audit_ip(db_factory) == "1.2.3.4"
 
 
 async def test_audit_x_real_ip_kazanir(client, db_factory):
@@ -167,7 +174,7 @@ async def test_audit_baslik_yokken_client_host_yazar(client, db_factory):
     assert await _audit_ip(db_factory) == "127.0.0.1"
 
 
-async def test_auth_failed_audit_son_xff_degerini_yazar(client, db_factory, monkeypatch):
+async def test_auth_failed_audit_guvenilmeyen_ippyi_yazar(client, db_factory, monkeypatch):
     import showis.db.session as db_session_module
 
     monkeypatch.setattr(db_session_module, "async_session_factory", db_factory)
@@ -185,5 +192,98 @@ async def test_auth_failed_audit_son_xff_degerini_yazar(client, db_factory, monk
             await session.execute(select(AuditLog).where(AuditLog.action == "auth.failed"))
         ).scalars().first()
     assert entry is not None
-    assert entry.details["actor_ip"] == "10.0.0.1"
+    assert entry.details["actor_ip"] == "1.2.3.4"
     assert entry.details["status_code"] == 401
+
+
+# ---------------------------------------------------------------------------
+# T-356: güvenilir proxy kontrolü (peer CIDR'de değilse başlıklar yok sayılır)
+# ---------------------------------------------------------------------------
+
+DEFAULT_PROXIES = "127.0.0.1/32,::1/128,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16"
+
+
+@pytest.fixture
+def trusted_env(monkeypatch):
+    monkeypatch.setenv("SHOWIS_TRUSTED_PROXIES", DEFAULT_PROXIES)
+    return DEFAULT_PROXIES
+
+
+def test_guvenilir_peer_xff_kullanilir(trusted_env):
+    # Docker köprüsünden gelen Caddy isteği: XFF'e güvenilir
+    assert (
+        client_ip_from_headers({"x-forwarded-for": "6.6.6.6"}, "172.19.0.1") == "6.6.6.6"
+    )
+
+
+def test_guvenilmeyen_peer_xff_yok_sayilir(trusted_env):
+    """Ayşe T-350: container ağından sahte XFF → peer döner (sahte IP kabul edilmez)."""
+    assert (
+        client_ip_from_headers({"x-forwarded-for": "6.6.6.6"}, "203.0.113.9")
+        == "203.0.113.9"
+    )
+    assert (
+        client_ip_from_headers(
+            {"x-real-ip": "6.6.6.6", "x-forwarded-for": "6.6.6.6"}, "198.51.100.9"
+        )
+        == "198.51.100.9"
+    )
+
+
+def test_zincirde_sagdan_ilk_guvenilmeyen_ip(monkeypatch):
+    # Daraltılmış küme: 10.0.0.5 güvenilir DEĞİL → beklenen seçim odur
+    monkeypatch.setenv("SHOWIS_TRUSTED_PROXIES", "127.0.0.1/32,172.16.0.0/12")
+    assert (
+        client_ip_from_headers(
+            {"x-forwarded-for": "1.2.3.4, 10.0.0.5, 172.19.0.1"}, "172.19.0.1"
+        )
+        == "10.0.0.5"
+    )
+
+
+def test_tum_atlamalar_guvenilirse_en_soldaki_doner(trusted_env):
+    assert (
+        client_ip_from_headers(
+            {"x-forwarded-for": "10.0.0.5, 172.19.0.1"}, "172.19.0.1"
+        )
+        == "10.0.0.5"
+    )
+
+
+def test_gecersiz_cidr_env_cokmez(monkeypatch):
+    monkeypatch.setenv("SHOWIS_TRUSTED_PROXIES", "127.0.0.1/32, cok-ozel ,,172.16.0.0/12")
+    # Geçersiz girdiler atlanır; geçerli olanlar çalışmaya devam eder
+    assert (
+        client_ip_from_headers({"x-forwarded-for": "6.6.6.6"}, "172.19.0.1") == "6.6.6.6"
+    )
+    # Tamamen bozuk env → boş küme → başlıklara güvenilmez (fail-closed)
+    monkeypatch.setenv("SHOWIS_TRUSTED_PROXIES", "bozuk,###")
+    assert (
+        client_ip_from_headers({"x-forwarded-for": "6.6.6.6"}, "172.19.0.1")
+        == "172.19.0.1"
+    )
+
+
+def test_ipv6_peer_ve_deger(trusted_env):
+    assert client_ip_from_headers({"x-real-ip": "2001:db8::5"}, "::1") == "2001:db8::5"
+    # IPv6 zinciri (güvenilir proxy ::1, istemci 2001:db8::5)
+    assert (
+        client_ip_from_headers({"x-forwarded-for": "2001:db8::5, ::1"}, "::1")
+        == "2001:db8::5"
+    )
+
+
+async def test_audit_guvenilmeyen_peerden_gelen_sahte_ippyi_yazmaz(db_factory, trusted_env):
+    """Uçtan uca: peer 203.0.113.9 + sahte XFF 6.6.6.6 → audit'te peer yazılır."""
+    from httpx import ASGITransport, AsyncClient
+
+    await _seed_finding(db_factory)
+    transport = ASGITransport(app=app, client=("203.0.113.9", 12345))
+    async with AsyncClient(transport=transport, base_url="http://test") as untrusted_client:
+        res = await untrusted_client.patch(
+            "/api/v1/findings/finding:github:ipuser",
+            json={"status": "confirmed"},
+            headers={"X-Forwarded-For": "6.6.6.6", "X-Real-IP": "6.6.6.6"},
+        )
+    assert res.status_code == 200, res.text
+    assert await _audit_ip(db_factory) == "203.0.113.9"

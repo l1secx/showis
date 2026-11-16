@@ -7,6 +7,8 @@ Kurallar:
 * `actor` varsayılanı tek kullanıcılı operatör modeli: ``operator``.
 """
 
+import ipaddress
+import logging
 import os
 import re
 import time
@@ -18,6 +20,8 @@ from fastapi import Request
 from showis.db.models import AuditLog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger("showis.audit")
 
 #: User-agent alanı için üst sınır (log şişmesini önler)
 _MAX_USER_AGENT = 256
@@ -40,37 +44,98 @@ def _clean_ip(value: str | None) -> str | None:
     return candidate
 
 
+#: T-356: XFF/X-Real-IP'ye yalnızca bu CIDR'lerden gelen peer'lar için güvenilir.
+#: Varsayılan = loopback + docker köprüleri (üretimde `SHOWIS_TRUSTED_PROXIES` ile daraltın).
+_TRUSTED_PROXIES_ENV = "SHOWIS_TRUSTED_PROXIES"
+_DEFAULT_TRUSTED_PROXIES = "127.0.0.1/32,::1/128,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16"
+
+#: (ham env değeri, ayrıştırılmış ağlar) — her istekte yeniden parse etmemek için
+_trusted_networks_cache: tuple[str, list[ipaddress.IPv4Network | ipaddress.IPv6Network]] | None = (
+    None
+)
+
+
+def trusted_proxy_networks() -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+    """`SHOWIS_TRUSTED_PROXIES` CIDR listesi (geçersiz değerler atlanır)."""
+    global _trusted_networks_cache
+    raw = (os.getenv(_TRUSTED_PROXIES_ENV) or "").strip() or _DEFAULT_TRUSTED_PROXIES
+    if _trusted_networks_cache is not None and _trusted_networks_cache[0] == raw:
+        return _trusted_networks_cache[1]
+
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for part in raw.split(","):
+        entry = part.strip()
+        if not entry:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(entry, strict=False))
+        except ValueError:
+            logger.warning(
+                "Gecersiz %s girdisi %r atlandi (CIDR beklenir)", _TRUSTED_PROXIES_ENV, entry
+            )
+    _trusted_networks_cache = (raw, networks)
+    return networks
+
+
+def _in_networks(
+    ip: str | None, networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network]
+) -> bool:
+    if not ip:
+        return False
+    try:
+        address = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return any(address in network for network in networks)
+
+
 def client_ip_from_headers(
     headers: Mapping[str, str], client_host: str | None = None
 ) -> str | None:
-    """İstemci IP'sini güven sırasıyla çözer (D-01 düzeltmesi).
+    """İstemci IP'sini **güvenilir proxy** modeliyle çözer (D-01/T-356).
 
-    Güven modeli: API yalnızca Caddy/tailnet arkasından erişilebilir (UFW `DROP`,
-    yalnız `tailscale0`) ve Caddy `X-Forwarded-For`'u **kendisi yazar** (T-319).
-    Bu yüzden:
+    Tehdit: istemci `X-Forwarded-For` uydurabilir. API yalnız Caddy/tailnet
+    arkasından erişilebilir olsa da container ağından doğrudan çağrılabildiği
+    için başlıklara koşulsuz güvenmek adli izi sahteleştirir (Ayşe T-350).
 
-    1. ``X-Real-IP`` — Caddy'nin doğrudan yazdığı tek atlama değeri (en güvenilir).
-    2. ``X-Forwarded-For``'un **son** değeri — zincirin en yakın atlaması. **İlk**
-       değere asla güvenilmez: istemci onu uydurabilir (adli iz sahte olur).
-    3. ``request.client.host`` — başlık yoksa (doğrudan bağlantı).
+    Algoritma:
 
-    Değerler `_clean_ip()` ile doğrulanır; geçersizse bir sonraki kaynağa düşülür.
+    1. **Peer (TCP kaynağı) güvenilir proxy CIDR'lerinde değilse** → `XFF` ve
+       `X-Real-IP` **yok sayılır**, peer döner. (Dışarıdan gelen sahte başlık etkisiz.)
+    2. Peer güvenilirse: `X-Real-IP` (Caddy'nin tek atlama değeri) tercih edilir.
+    3. Aksi halde `X-Forwarded-For` **soldan sağa** okunur ve **sağdan ilk
+       güvenilmeyen** IP döner: zincirin sağındaki güvenilir proxy atlamaları
+       atlanır, ilk güvenilmeyen (gerçek istemci) seçilir. Tüm atlamalar
+       güvenilirse en soldaki değer döner (tümü proxy).
+    4. Hiçbiri yoksa peer döner.
+
+    Not: Caddy (T-319) `XFF`'i **ezer** (`header_up`), yani normalde zincir tek
+    elemanlıdır; çok atlamalı dal savunma derinliğidir.
     """
+    networks = trusted_proxy_networks()
+    peer = _clean_ip(client_host)
+
+    if not _in_networks(peer, networks):
+        # Güvenilmeyen peer: başlıklar saldırgan kontrolünde → yok say
+        return peer
+
     real_ip = _clean_ip(headers.get("x-real-ip"))
     if real_ip:
         return real_ip
 
     forwarded = headers.get("x-forwarded-for") or ""
-    if forwarded:
-        last = _clean_ip(forwarded.split(",")[-1])
-        if last:
-            return last
+    chain = [ip for ip in (_clean_ip(part) for part in forwarded.split(",")) if ip]
+    if chain:
+        for candidate in reversed(chain):
+            if not _in_networks(candidate, networks):
+                return candidate
+        return chain[0]
 
-    return _clean_ip(client_host)
+    return peer
 
 
 def client_ip(request: Request) -> str | None:
-    """İstemci IP'si (X-Real-IP → XFF son → client.host)."""
+    """İstemci IP'si (güvenilir proxy kontrolü: peer → X-Real-IP → XFF zinciri)."""
     client = request.client
     return client_ip_from_headers(request.headers, client.host if client else None)
 

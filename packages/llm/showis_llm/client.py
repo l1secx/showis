@@ -1,18 +1,48 @@
 import asyncio
 import json
 import logging
+import os
 from typing import Any, TypeVar
 
 import httpx
 from pydantic import BaseModel, ValidationError
 
 from .base_url import BaseUrlError, validate_base_url
+from .breaker import get_breaker
 from .redact import redact_text
 
 logger = logging.getLogger("showis.llm")
 T = TypeVar("T", bound=BaseModel)
 
 DEFAULT_USER_AGENT = "Showis/0.1 (+https://github.com/showis-osint)"
+
+#: T-333: hızlı başarısız ol — erişilemeyen LLM taramayı ~90 sn bekletmesin.
+DEFAULT_TIMEOUT_SECONDS = 8.0
+DEFAULT_MAX_RETRIES = 1
+TIMEOUT_ENV = "SHOWIS_LLM_TIMEOUT"
+RETRIES_ENV = "SHOWIS_LLM_RETRIES"
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        return max(0.5, float(str(raw).strip()))
+    except ValueError:
+        logger.warning("Gecersiz %s=%r, varsayilan %s kullanilir", name, raw, default)
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        return max(1, int(str(raw).strip()))
+    except ValueError:
+        logger.warning("Gecersiz %s=%r, varsayilan %s kullanilir", name, raw, default)
+        return default
 
 
 class LLMClientError(Exception):
@@ -27,7 +57,8 @@ class LLMClient:
         model: str,
         session_id: str,
         user_agent: str = DEFAULT_USER_AGENT,
-        timeout_seconds: float = 30.0,
+        timeout_seconds: float | None = None,
+        max_retries: int | None = None,
         strict_base_url: bool = True,
     ):
         # SEC-02/03: sır yalnız allowlist'teki bir host'a gider. Kurulumda ve
@@ -39,7 +70,17 @@ class LLMClient:
         self.model = model
         self.session_id = session_id
         self.user_agent = user_agent
-        self.timeout = timeout_seconds
+        # T-333: env > argüman > varsayılan (8 sn / 1 deneme)
+        self.timeout = (
+            _env_float(TIMEOUT_ENV, DEFAULT_TIMEOUT_SECONDS)
+            if timeout_seconds is None
+            else timeout_seconds
+        )
+        self.max_retries = (
+            _env_int(RETRIES_ENV, DEFAULT_MAX_RETRIES)
+            if max_retries is None
+            else max(1, int(max_retries))
+        )
 
     def _prepare_messages(self, messages: list[dict[str, str]]) -> list[dict[str, str]]:
         redacted_messages = []
@@ -93,10 +134,17 @@ class LLMClient:
         if schema is not None:
             payload["response_format"] = {"type": "json_object"}
 
-        max_retries = 3
+        breaker = get_breaker()
+        if not breaker.allow():
+            # Devre açık: hiç istek atılmaz, çağıran anında fallback'e düşer.
+            raise LLMClientError("LLM devre dışı (cooldown)")
+        breaker.record_call()
+
+        max_retries = self.max_retries
         last_error: Exception | None = None
 
-        for attempt in range(max_retries):
+        # `max_retries` = ek deneme sayisi (1 -> toplam 2 girisim)
+        for attempt in range(max_retries + 1):
             try:
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
                     resp = await client.post(
@@ -125,6 +173,7 @@ class LLMClient:
                     raw_content = choices[0]["message"]["content"]
 
                     if schema is None:
+                        breaker.record_success()
                         return raw_content
 
                     # Validate against schema
@@ -139,7 +188,9 @@ class LLMClient:
                             clean_content = clean_content[:-3]
                         clean_content = clean_content.strip()
 
-                        return schema.model_validate_json(clean_content)
+                        parsed = schema.model_validate_json(clean_content)
+                        breaker.record_success()
+                        return parsed
                     except (ValidationError, json.JSONDecodeError) as val_err:
                         # 1 schema repair retry
                         if attempt == 0:
@@ -166,6 +217,7 @@ class LLMClient:
                 if e.response.status_code == 429 or e.response.status_code >= 500:
                     continue
                 # SEC-08: sağlayıcı gövdesi ve URL query'si sızdırılmaz.
+                breaker.record_failure()
                 raise LLMClientError(
                     f"LLM HTTP error {e.response.status_code}"
                 ) from None
@@ -177,6 +229,8 @@ class LLMClient:
                     "LLM cagrisi basarisiz (deneme %d): %s", attempt, type(e).__name__
                 )
 
+        breaker.record_failure()
         raise LLMClientError(
-            f"LLM request failed after {max_retries} attempts ({type(last_error).__name__})"
+            f"LLM request failed after {max_retries + 1} attempts "
+            f"({type(last_error).__name__})"
         )

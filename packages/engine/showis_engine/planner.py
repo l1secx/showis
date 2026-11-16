@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import os
 
 from showis_contracts import Platform, QueryPlan, SearchQuery, Target, VariantSet
 from showis_llm import LLMClient, render_prompt
@@ -531,9 +533,27 @@ def build_template_fallback_queries(
     return QueryPlan(queries=queries[:50])
 
 
+#: T-333: planlama için LLM'e ayrılan üst süre (sn). Aşılırsa şablon planı.
+PLANNER_TIMEOUT_ENV = "SHOWIS_LLM_PLANNER_TIMEOUT"
+DEFAULT_PLANNER_TIMEOUT = 10.0
+
+
+def _planner_timeout() -> float:
+    raw = os.getenv(PLANNER_TIMEOUT_ENV)
+    if raw is None or not str(raw).strip():
+        return DEFAULT_PLANNER_TIMEOUT
+    try:
+        return max(1.0, float(str(raw).strip()))
+    except ValueError:
+        logger.warning("Gecersiz %s=%r, varsayilan kullanilir", PLANNER_TIMEOUT_ENV, raw)
+        return DEFAULT_PLANNER_TIMEOUT
+
+
 class QueryPlanner:
     def __init__(self, llm_client: LLMClient | None = None):
         self.llm_client = llm_client
+        #: T-333: aynı taramada LLM bir kez başarısız olduysa ikinci kez denenmez.
+        self.llm_disabled = False
 
     async def plan(
         self,
@@ -549,7 +569,7 @@ class QueryPlanner:
                 "Hedef inceleme gerektiriyor: reşit olmayan kişi sinyali (AUP md.7)."
             )
 
-        if self.llm_client is None:
+        if self.llm_client is None or self.llm_disabled:
             return build_template_fallback_queries(target, variants)
 
         try:
@@ -561,10 +581,14 @@ class QueryPlanner:
                 variants=[v.username for v in variants.variants[:10]],
             )
 
-            plan = await self.llm_client.complete(
-                messages=[{"role": "user", "content": prompt_content}],
-                schema=QueryPlan,
-                temperature=0.0,
+            # T-333: LLM erişilemezse ~90 sn beklemek yerine hızla şablona düş.
+            plan = await asyncio.wait_for(
+                self.llm_client.complete(
+                    messages=[{"role": "user", "content": prompt_content}],
+                    schema=QueryPlan,
+                    temperature=0.0,
+                ),
+                timeout=_planner_timeout(),
             )
 
             if isinstance(plan, QueryPlan) and plan.queries:
@@ -576,6 +600,11 @@ class QueryPlanner:
                 return QueryPlan(queries=guarded)
 
         except Exception as e:
-            logger.warning("LLM Planner başarısız oldu, şablon fallback'e geçiliyor: %s", e)
+            # Aynı tarama ömründe ikinci deneme yok (devre kesici + bu bayrak).
+            self.llm_disabled = True
+            logger.warning(
+                "LLM Planner başarısız oldu (%s), şablon fallback'e geçiliyor",
+                type(e).__name__,
+            )
 
         return build_template_fallback_queries(target, variants)

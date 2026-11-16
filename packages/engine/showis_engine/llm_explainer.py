@@ -1,14 +1,44 @@
 import logging
+import os
+import time
 
 from showis_contracts import Finding, Target
 from showis_llm import LLMClient, redact_text, render_prompt
 
 logger = logging.getLogger("showis.explainer")
 
+#: T-333: tarama başına LLM açıklamalarına ayrılan toplam süre (sn).
+#: Bütçe dolunca kalan bulgular deterministik yerel açıklamaya düşer.
+BUDGET_ENV = "SHOWIS_LLM_EXPLAIN_BUDGET_SECONDS"
+DEFAULT_BUDGET_SECONDS = 25.0
+
+
+def _budget_seconds() -> float:
+    raw = os.getenv(BUDGET_ENV)
+    if raw is None or not str(raw).strip():
+        return DEFAULT_BUDGET_SECONDS
+    try:
+        return max(0.0, float(str(raw).strip()))
+    except ValueError:
+        logger.warning("Gecersiz %s=%r, varsayilan kullanilir", BUDGET_ENV, raw)
+        return DEFAULT_BUDGET_SECONDS
+
 
 class FindingExplainer:
-    def __init__(self, llm_client: LLMClient | None = None):
+    def __init__(
+        self, llm_client: LLMClient | None = None, budget_seconds: float | None = None
+    ):
         self.llm_client = llm_client
+        self.budget_seconds = (
+            _budget_seconds() if budget_seconds is None else max(0.0, float(budget_seconds))
+        )
+        #: LLM'e harcanan toplam süre ve bütçe durumu (T-333)
+        self.spent_seconds = 0.0
+        self.llm_disabled = False
+
+    @property
+    def budget_exhausted(self) -> bool:
+        return self.spent_seconds >= self.budget_seconds
 
     @staticmethod
     def _authenticity_note(finding: Finding) -> str:
@@ -37,33 +67,8 @@ class FindingExplainer:
             f"Platform: {finding.platform}, URL: {finding.url}, Etiket: {finding.label}"
         )
 
-        if self.llm_client is None:
-            # Deterministik yerel açıklama
-            signals = []
-            if finding.breakdown.username_exact_match > 0:
-                signals.append("kullanıcı adı çoklu platformda eşleşti")
-            if finding.breakdown.name_similarity > 0:
-                signals.append("isim yüksek oranda benziyor")
-            if finding.breakdown.cross_link > 0:
-                signals.append("profilinde çapraz bağlantı bulundu")
-            if finding.breakdown.bio_location_company > 0:
-                signals.append("lokasyon veya şirket bilgisi uyumlu")
-            if finding.breakdown.commit_email_or_pgp > 0:
-                signals.append("commit e-postası doğrulandı")
-            if finding.breakdown.avatar_exact_hash > 0:
-                signals.append("avatar dosya karması birebir uyuşuyor")
-
-            if signals:
-                plat = finding.platform.capitalize()
-                sig = ", ".join(signals)
-                explanation = f"{plat} profili {sig} nedeniyle bağlandı."
-            else:
-                explanation = (
-                    f"{finding.platform.capitalize()} profili incelendi ancak kanıt kuvveti zayıf."
-                )
-            explanation += self._authenticity_note(finding)
-            finding.explanation = explanation
-            return explanation
+        if self.llm_client is None or self.llm_disabled or self.budget_exhausted:
+            return self._local_explanation(finding)
 
         try:
             prompt_content = render_prompt(
@@ -73,10 +78,12 @@ class FindingExplainer:
                 breakdown=breakdown_info,
             )
 
+            started = time.monotonic()
             response = await self.llm_client.complete(
                 messages=[{"role": "user", "content": prompt_content}],
                 temperature=0.0,
             )
+            self.spent_seconds += time.monotonic() - started
             explanation = str(response).strip()
             # Authenticity uyarısı LLM'e gönderilmez; deterministik olarak eklenir.
             explanation += self._authenticity_note(finding)
@@ -84,9 +91,36 @@ class FindingExplainer:
             return explanation
 
         except Exception as e:
-            logger.warning("LLM Explainer hatası, yerel açıklamaya dönülüyor: %s", e)
-            finding.explanation = (
-                f"{finding.platform.capitalize()} profili bulundu. Güven skoru: {finding.score:.2f}"
-                + self._authenticity_note(finding)
+            self.llm_disabled = True
+            logger.warning(
+                "LLM Explainer hatası (%s), yerel açıklamaya dönülüyor", type(e).__name__
             )
-            return str(finding.explanation)
+            return self._local_explanation(finding)
+
+    def _local_explanation(self, finding: Finding) -> str:
+        """Deterministik (LLM'siz) açıklama — bütçe/başarısızlık yolunda kullanılır."""
+        signals: list[str] = []
+        if finding.breakdown.username_exact_match > 0:
+            signals.append("kullanıcı adı çoklu platformda eşleşti")
+        if finding.breakdown.name_similarity > 0:
+            signals.append("isim yüksek oranda benziyor")
+        if finding.breakdown.cross_link > 0:
+            signals.append("profilinde çapraz bağlantı bulundu")
+        if finding.breakdown.bio_location_company > 0:
+            signals.append("lokasyon veya şirket bilgisi uyumlu")
+        if finding.breakdown.commit_email_or_pgp > 0:
+            signals.append("commit e-postası doğrulandı")
+        if finding.breakdown.avatar_exact_hash > 0:
+            signals.append("avatar dosya karması birebir uyuşuyor")
+
+        if signals:
+            plat = finding.platform.capitalize()
+            sig = ", ".join(signals)
+            explanation = f"{plat} profili {sig} nedeniyle bağlandı."
+        else:
+            explanation = (
+                f"{finding.platform.capitalize()} profili incelendi ancak kanıt kuvveti zayıf."
+            )
+        explanation += self._authenticity_note(finding)
+        finding.explanation = explanation
+        return explanation

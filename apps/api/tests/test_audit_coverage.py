@@ -238,12 +238,17 @@ async def test_sse_baglanti_siniri_429(client, db_factory, monkeypatch):
     await _seed_case_scan(
         db_factory, case_id="case-sse-limit", scan_id="scan-sse-limit", scan_status="running"
     )
-    scans_api._sse_connections["scan-sse-limit"] = scans_api._MAX_SSE_CONNECTIONS
+    # T-354: slot tablosu artik kira (lease) tabanli; sayac kiradan turetilir
+    leases = [
+        scans_api.acquire_sse_lease("scan-sse-limit")
+        for _ in range(scans_api._MAX_SSE_CONNECTIONS)
+    ]
     try:
         res = await client.get("/api/v1/scans/scan-sse-limit/events")
         assert res.status_code == 429
     finally:
-        scans_api._sse_connections.pop("scan-sse-limit", None)
+        for lease in leases:
+            scans_api.release_sse_lease(lease)
 
     # Sinir altinda baglanti kurulur ve akis normal sekilde sonlanir
     monkeypatch.setenv("SHOWIS_SSE_MAX_SECONDS", "0.05")
