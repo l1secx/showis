@@ -1,0 +1,61 @@
+"""Tarama modu profilleri ve sure tahmini testleri."""
+
+import pytest
+from showis_contracts import Target
+from showis_engine.scan_modes import (
+    budget_for_mode,
+    estimate_scan,
+    norm_mode,
+    skipped_connectors,
+    task_allowed,
+)
+
+
+def _target(school: str | None = None) -> Target:
+    hints = {"school": school} if school else {}
+    return Target(first_name="Kerem", last_name="Boz", hints=hints)
+
+
+def test_norm_mode_bilinmeyen_deger_o2():
+    assert norm_mode(None) == "O2"
+    assert norm_mode("standard") == "O2"
+    assert norm_mode("o3") == "O3"
+
+
+def test_o1_slow_connectorlari_atlar():
+    assert task_allowed("O1", "sitecheck") is False
+    assert task_allowed("O2", "sitecheck") is True
+    assert skipped_connectors("O1", ["sitecheck", "github"]) == ["sitecheck"]
+
+
+@pytest.mark.parametrize("mode", ["O1", "O2", "O3"])
+def test_estimate_butceyle_tutarli(mode):
+    est = estimate_scan(_target("ODTÜ"), mode)
+    budget = budget_for_mode(mode)
+    assert est["tasks"] <= budget["max_tasks"]
+    assert est["seconds"] > 0
+    assert est["steps"][0]["key"] == "search"
+    assert est["mode"] == mode
+
+
+def test_estimate_okul_ipucu_sorgu_sayisini_artirir():
+    plain = estimate_scan(_target(), "O2")
+    schooled = estimate_scan(_target("ODTÜ"), "O2")
+    assert schooled["steps"][0]["tasks"] == plain["steps"][0]["tasks"] + 1
+
+
+def test_o2_gercek_olcume_yakin_tahmin(monkeypatch):
+    """Canli O2 taramasi 604 sn / 146 gorev olculdu; tahmin %35 icinde kalmali.
+
+    Olcum siralı yurutmeyle alindi; es zamanlilik 1 iken tahmin bu olcume
+    yakin kalmali, paralelde ise dogrusal olarak dusmeli (T-101/T-102).
+    """
+    monkeypatch.setenv("SHOWIS_SCAN_CONCURRENCY", "1")
+    est = estimate_scan(_target("ODTÜ"), "O2")
+    assert 400 <= est["seconds"] <= 820
+    assert 100 <= est["tasks"] <= 260
+    assert {s["key"] for s in est["steps"]} >= {"search", "api", "sitecheck"}
+
+    monkeypatch.setenv("SHOWIS_SCAN_CONCURRENCY", "4")
+    parallel = estimate_scan(_target("ODTÜ"), "O2")
+    assert 0 < parallel["seconds"] < est["seconds"]

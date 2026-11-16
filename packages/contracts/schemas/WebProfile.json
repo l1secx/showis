@@ -1,0 +1,58 @@
+{
+  "properties": {
+    "url": {
+      "title": "Url",
+      "type": "string"
+    },
+    "title": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Title"
+    },
+    "snippet": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Snippet"
+    },
+    "extracted_usernames": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Extracted Usernames",
+      "type": "array"
+    },
+    "extracted_names": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Extracted Names",
+      "type": "array"
+    },
+    "links": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Links",
+      "type": "array"
+    }
+  },
+  "required": [
+    "url"
+  ],
+  "title": "WebProfile",
+  "type": "object"
+}

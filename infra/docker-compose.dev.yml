@@ -1,0 +1,9 @@
+# Yerel geliştirme (make dev) için postgres/redis'i host'a yayınlar.
+# Kullanım: docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml up -d postgres redis
+services:
+  postgres:
+    ports:
+      - "5432:5432"
+  redis:
+    ports:
+      - "6379:6379"

@@ -1,0 +1,231 @@
+{
+  "$defs": {
+    "ConfidenceBreakdown": {
+      "properties": {
+        "username_exact_match": {
+          "default": 0.0,
+          "title": "Username Exact Match",
+          "type": "number"
+        },
+        "name_similarity": {
+          "default": 0.0,
+          "title": "Name Similarity",
+          "type": "number"
+        },
+        "cross_link": {
+          "default": 0.0,
+          "title": "Cross Link",
+          "type": "number"
+        },
+        "bio_location_company": {
+          "default": 0.0,
+          "title": "Bio Location Company",
+          "type": "number"
+        },
+        "commit_email_or_pgp": {
+          "default": 0.0,
+          "title": "Commit Email Or Pgp",
+          "type": "number"
+        },
+        "avatar_exact_hash": {
+          "default": 0.0,
+          "title": "Avatar Exact Hash",
+          "type": "number"
+        },
+        "contradiction": {
+          "default": 0.0,
+          "title": "Contradiction",
+          "type": "number"
+        },
+        "total": {
+          "default": 0.0,
+          "title": "Total",
+          "type": "number"
+        }
+      },
+      "title": "ConfidenceBreakdown",
+      "type": "object"
+    },
+    "FindingStatus": {
+      "enum": [
+        "candidate",
+        "confirmed",
+        "rejected"
+      ],
+      "title": "FindingStatus",
+      "type": "string"
+    },
+    "Platform": {
+      "enum": [
+        "github",
+        "gitlab",
+        "keybase",
+        "reddit",
+        "tryhackme",
+        "hackthebox",
+        "steam",
+        "gravatar",
+        "hackernews",
+        "npm",
+        "pypi",
+        "dockerhub",
+        "devto",
+        "chess",
+        "leetcode",
+        "codeforces",
+        "bitbucket",
+        "codeberg",
+        "codepen",
+        "kaggle",
+        "codewars",
+        "root-me",
+        "hackerrank",
+        "duolingo",
+        "instagram",
+        "tiktok",
+        "youtube",
+        "medium",
+        "substack",
+        "deviantart",
+        "behance",
+        "dribbble",
+        "pinterest",
+        "tumblr",
+        "about.me",
+        "linktr.ee",
+        "myanimelist",
+        "letterboxd",
+        "goodreads",
+        "lastfm",
+        "soundcloud",
+        "itch.io",
+        "telegram",
+        "vk",
+        "lichess",
+        "hashnode",
+        "wordpress",
+        "bluesky",
+        "huggingface",
+        "kitsu",
+        "wattpad",
+        "flickr",
+        "musicbrainz",
+        "mastodon",
+        "pixelfed",
+        "rubygems",
+        "nuget",
+        "packagist",
+        "9gag",
+        "vs-marketplace",
+        "speakerdeck",
+        "replit",
+        "devpost",
+        "patreon",
+        "vimeo",
+        "bandcamp",
+        "dailymotion",
+        "scratch",
+        "web",
+        "unknown"
+      ],
+      "title": "Platform",
+      "type": "string"
+    }
+  },
+  "properties": {
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "case_id": {
+      "title": "Case Id",
+      "type": "string"
+    },
+    "scan_id": {
+      "title": "Scan Id",
+      "type": "string"
+    },
+    "entity_id": {
+      "title": "Entity Id",
+      "type": "string"
+    },
+    "platform": {
+      "$ref": "#/$defs/Platform"
+    },
+    "url": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Url"
+    },
+    "label": {
+      "title": "Label",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/FindingStatus",
+      "default": "candidate"
+    },
+    "score": {
+      "default": 0.0,
+      "title": "Score",
+      "type": "number"
+    },
+    "breakdown": {
+      "$ref": "#/$defs/ConfidenceBreakdown"
+    },
+    "explanation": {
+      "default": "",
+      "title": "Explanation",
+      "type": "string"
+    },
+    "evidence_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence Ids",
+      "type": "array"
+    },
+    "verified_by": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Verified By"
+    },
+    "verified_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Verified At"
+    }
+  },
+  "required": [
+    "id",
+    "case_id",
+    "scan_id",
+    "entity_id",
+    "platform",
+    "label"
+  ],
+  "title": "Finding",
+  "type": "object"
+}

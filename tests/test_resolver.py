@@ -1,0 +1,153 @@
+import pytest
+from showis_contracts import Entity, EntityType, FindingStatus, Platform, Target
+from showis_engine.llm_explainer import FindingExplainer
+from showis_engine.resolver import Resolver
+
+
+def test_resolver_confirmed_scenario():
+    resolver = Resolver()
+    target = Target(
+        first_name="Ahmet",
+        last_name="Yılmaz",
+        hints={"city": "Ankara", "company": "CyberSec Inc"},
+    )
+    entity = Entity(
+        id="github:ahmetyilmaz",
+        type=EntityType.ACCOUNT,
+        platform=Platform.GITHUB,
+        label="ahmetyilmaz",
+        url="https://github.com/ahmetyilmaz",
+        attributes={
+            "name": "Ahmet Yılmaz",
+            "location": "Ankara, Turkey",
+            "company": "CyberSec Inc",
+        },
+    )
+
+    finding = resolver.resolve_entity(
+        entity,
+        target,
+        case_id="c-1",
+        scan_id="s-1",
+        known_platforms_with_username={"github", "tryhackme"},  # +0.30
+        has_cross_link=True,  # +0.25
+        # name match +0.20, location+company +0.10
+    )
+
+    # 0.30 + 0.20 + 0.25 + 0.10 = 0.85 >= 0.80 -> CONFIRMED
+    assert finding.score == 0.85
+    assert finding.status == FindingStatus.CONFIRMED
+    assert finding.breakdown.username_exact_match == 0.30
+    assert finding.breakdown.name_similarity == 0.20
+    assert finding.breakdown.cross_link == 0.25
+    assert finding.breakdown.bio_location_company == 0.10
+
+
+def test_resolver_candidate_scenario():
+    resolver = Resolver()
+    target = Target(first_name="Selin", last_name="Kara", hints={"city": "Istanbul"})
+    entity = Entity(
+        id="github:selinkara",
+        type=EntityType.ACCOUNT,
+        platform=Platform.GITHUB,
+        label="selinkara",
+        attributes={"name": "Selin Kara", "location": "Istanbul"},
+    )
+
+    finding = resolver.resolve_entity(
+        entity,
+        target,
+        case_id="c-1",
+        scan_id="s-1",
+        known_platforms_with_username={"github", "hackthebox"},  # +0.30
+        has_cross_link=False,
+    )
+
+    # 0.30 + 0.20 (name) + 0.05 (city) = 0.55 -> CANDIDATE (0.50-0.79)
+    assert finding.score == 0.55
+    assert finding.status == FindingStatus.CANDIDATE
+
+
+def test_resolver_rejected_and_contradiction():
+    resolver = Resolver()
+    target = Target(first_name="Can", last_name="Demir")
+    entity = Entity(
+        id="github:candemir",
+        type=EntityType.ACCOUNT,
+        platform=Platform.GITHUB,
+        label="candemir",
+        attributes={"name": "Can Demir"},
+    )
+
+    finding = resolver.resolve_entity(
+        entity,
+        target,
+        case_id="c-1",
+        scan_id="s-1",
+        has_contradiction=True,  # -0.20
+    )
+
+    # name: 0.20, contradiction: -0.20 -> 0.00 -> REJECTED
+    assert finding.score == 0.0
+    assert finding.status == FindingStatus.REJECTED
+
+
+@pytest.mark.asyncio
+async def test_explainer_does_not_change_score():
+    resolver = Resolver()
+    target = Target(first_name="Ahmet", last_name="Yılmaz")
+    entity = Entity(
+        id="github:ayilmaz",
+        type=EntityType.ACCOUNT,
+        platform=Platform.GITHUB,
+        label="ayilmaz",
+        attributes={"name": "Ahmet Yılmaz"},
+    )
+
+    finding = resolver.resolve_entity(entity, target, case_id="c-1", scan_id="s-1")
+    initial_score = finding.score
+
+    explainer = FindingExplainer(llm_client=None)
+    explanation = await explainer.explain(finding, target)
+
+    assert finding.score == initial_score
+    assert len(explanation) > 0
+    assert "Ahmet" in explanation or "Github" in explanation or "ad" in explanation
+
+
+# ---------------------------------------------------------------------------
+# T-301: authenticity ayrı sinyal — güven skoru/eşikleri DEĞİŞMEZ
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "authenticity",
+    [None, 0.0, 0.2, 0.5, 1.0],
+)
+def test_authenticity_skoru_statusu_degistirmez(authenticity):
+    """Authenticity hangi değeri alırsa alsın score/status aynı kalmalı."""
+    resolver = Resolver()
+    target = Target(first_name="Ahmet", last_name="Yılmaz", hints={"city": "Ankara"})
+    entity = Entity(
+        id="github:ahmetyilmaz",
+        type=EntityType.ACCOUNT,
+        platform=Platform.GITHUB,
+        label="ahmetyilmaz",
+        attributes={"name": "Ahmet Yılmaz", "location": "Ankara"},
+    )
+
+    finding = resolver.resolve_entity(
+        entity,
+        target,
+        case_id="c-1",
+        scan_id="s-1",
+        known_platforms_with_username={"github", "gitlab"},
+        authenticity_score=authenticity,
+    )
+
+    assert finding.score == 0.55
+    assert finding.status == FindingStatus.CANDIDATE
+    if authenticity is None:
+        assert finding.authenticity is not None  # resolver kendi hesaplar
+    else:
+        assert finding.authenticity == pytest.approx(authenticity)

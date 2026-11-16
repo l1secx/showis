@@ -1,0 +1,234 @@
+{
+  "$defs": {
+    "Budget": {
+      "properties": {
+        "max_tasks": {
+          "default": 300,
+          "title": "Max Tasks",
+          "type": "integer"
+        },
+        "max_http_requests": {
+          "default": 1500,
+          "title": "Max Http Requests",
+          "type": "integer"
+        },
+        "max_llm_calls": {
+          "default": 20,
+          "title": "Max Llm Calls",
+          "type": "integer"
+        },
+        "max_wall_seconds": {
+          "default": 900,
+          "title": "Max Wall Seconds",
+          "type": "integer"
+        },
+        "max_cost_usd": {
+          "default": 5.0,
+          "title": "Max Cost Usd",
+          "type": "number"
+        }
+      },
+      "title": "Budget",
+      "type": "object"
+    },
+    "Platform": {
+      "enum": [
+        "github",
+        "gitlab",
+        "keybase",
+        "reddit",
+        "tryhackme",
+        "hackthebox",
+        "steam",
+        "gravatar",
+        "hackernews",
+        "npm",
+        "pypi",
+        "dockerhub",
+        "devto",
+        "chess",
+        "leetcode",
+        "codeforces",
+        "bitbucket",
+        "codeberg",
+        "codepen",
+        "kaggle",
+        "codewars",
+        "root-me",
+        "hackerrank",
+        "duolingo",
+        "instagram",
+        "tiktok",
+        "youtube",
+        "medium",
+        "substack",
+        "deviantart",
+        "behance",
+        "dribbble",
+        "pinterest",
+        "tumblr",
+        "about.me",
+        "linktr.ee",
+        "myanimelist",
+        "letterboxd",
+        "goodreads",
+        "lastfm",
+        "soundcloud",
+        "itch.io",
+        "telegram",
+        "vk",
+        "lichess",
+        "hashnode",
+        "wordpress",
+        "bluesky",
+        "huggingface",
+        "kitsu",
+        "wattpad",
+        "flickr",
+        "musicbrainz",
+        "mastodon",
+        "pixelfed",
+        "rubygems",
+        "nuget",
+        "packagist",
+        "9gag",
+        "vs-marketplace",
+        "speakerdeck",
+        "replit",
+        "devpost",
+        "patreon",
+        "vimeo",
+        "bandcamp",
+        "dailymotion",
+        "scratch",
+        "web",
+        "unknown"
+      ],
+      "title": "Platform",
+      "type": "string"
+    },
+    "Seed": {
+      "properties": {
+        "platform": {
+          "$ref": "#/$defs/Platform"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        },
+        "username": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Username"
+        },
+        "email": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Email"
+        },
+        "source": {
+          "default": "manual",
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "platform"
+      ],
+      "title": "Seed",
+      "type": "object"
+    },
+    "Target": {
+      "properties": {
+        "first_name": {
+          "title": "First Name",
+          "type": "string"
+        },
+        "last_name": {
+          "title": "Last Name",
+          "type": "string"
+        },
+        "name_forms": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Name Forms",
+          "type": "array"
+        },
+        "hints": {
+          "additionalProperties": true,
+          "title": "Hints",
+          "type": "object"
+        },
+        "review_required": {
+          "default": false,
+          "title": "Review Required",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "first_name",
+        "last_name"
+      ],
+      "title": "Target",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "case_id": {
+      "title": "Case Id",
+      "type": "string"
+    },
+    "scan_id": {
+      "title": "Scan Id",
+      "type": "string"
+    },
+    "target": {
+      "$ref": "#/$defs/Target"
+    },
+    "seeds": {
+      "items": {
+        "$ref": "#/$defs/Seed"
+      },
+      "title": "Seeds",
+      "type": "array"
+    },
+    "budget": {
+      "$ref": "#/$defs/Budget"
+    },
+    "llm_session_id": {
+      "default": "",
+      "title": "Llm Session Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "case_id",
+    "scan_id",
+    "target"
+  ],
+  "title": "ScanContext",
+  "type": "object"
+}

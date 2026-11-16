@@ -1,0 +1,23 @@
+{
+  "properties": {
+    "username": {
+      "title": "Username",
+      "type": "string"
+    },
+    "pattern": {
+      "title": "Pattern",
+      "type": "string"
+    },
+    "confidence": {
+      "default": 0.0,
+      "title": "Confidence",
+      "type": "number"
+    }
+  },
+  "required": [
+    "username",
+    "pattern"
+  ],
+  "title": "UsernameVariant",
+  "type": "object"
+}

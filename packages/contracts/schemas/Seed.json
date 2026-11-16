@@ -1,0 +1,131 @@
+{
+  "$defs": {
+    "Platform": {
+      "enum": [
+        "github",
+        "gitlab",
+        "keybase",
+        "reddit",
+        "tryhackme",
+        "hackthebox",
+        "steam",
+        "gravatar",
+        "hackernews",
+        "npm",
+        "pypi",
+        "dockerhub",
+        "devto",
+        "chess",
+        "leetcode",
+        "codeforces",
+        "bitbucket",
+        "codeberg",
+        "codepen",
+        "kaggle",
+        "codewars",
+        "root-me",
+        "hackerrank",
+        "duolingo",
+        "instagram",
+        "tiktok",
+        "youtube",
+        "medium",
+        "substack",
+        "deviantart",
+        "behance",
+        "dribbble",
+        "pinterest",
+        "tumblr",
+        "about.me",
+        "linktr.ee",
+        "myanimelist",
+        "letterboxd",
+        "goodreads",
+        "lastfm",
+        "soundcloud",
+        "itch.io",
+        "telegram",
+        "vk",
+        "lichess",
+        "hashnode",
+        "wordpress",
+        "bluesky",
+        "huggingface",
+        "kitsu",
+        "wattpad",
+        "flickr",
+        "musicbrainz",
+        "mastodon",
+        "pixelfed",
+        "rubygems",
+        "nuget",
+        "packagist",
+        "9gag",
+        "vs-marketplace",
+        "speakerdeck",
+        "replit",
+        "devpost",
+        "patreon",
+        "vimeo",
+        "bandcamp",
+        "dailymotion",
+        "scratch",
+        "web",
+        "unknown"
+      ],
+      "title": "Platform",
+      "type": "string"
+    }
+  },
+  "properties": {
+    "platform": {
+      "$ref": "#/$defs/Platform"
+    },
+    "url": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Url"
+    },
+    "username": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Username"
+    },
+    "email": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Email"
+    },
+    "source": {
+      "default": "manual",
+      "title": "Source",
+      "type": "string"
+    }
+  },
+  "required": [
+    "platform"
+  ],
+  "title": "Seed",
+  "type": "object"
+}

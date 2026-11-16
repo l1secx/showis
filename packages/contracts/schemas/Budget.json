@@ -1,0 +1,31 @@
+{
+  "properties": {
+    "max_tasks": {
+      "default": 300,
+      "title": "Max Tasks",
+      "type": "integer"
+    },
+    "max_http_requests": {
+      "default": 1500,
+      "title": "Max Http Requests",
+      "type": "integer"
+    },
+    "max_llm_calls": {
+      "default": 20,
+      "title": "Max Llm Calls",
+      "type": "integer"
+    },
+    "max_wall_seconds": {
+      "default": 900,
+      "title": "Max Wall Seconds",
+      "type": "integer"
+    },
+    "max_cost_usd": {
+      "default": 5.0,
+      "title": "Max Cost Usd",
+      "type": "number"
+    }
+  },
+  "title": "Budget",
+  "type": "object"
+}

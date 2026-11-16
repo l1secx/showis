@@ -1,0 +1,157 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+env:
+  # Runtime bagimliliklari tek kaynaktan (Dockerfile'lar da ayni dosyayi kullanir).
+  LOCKFILE: infra/requirements.lock
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+        cache: 'pip'
+
+    - name: Install runtime dependencies (pinned lock)
+      run: |
+        python -m pip install --upgrade pip
+        pip install --retries 10 --timeout 120 -r "$LOCKFILE"
+
+    - name: Install dev tools (pinned) + local packages
+      run: |
+        pip install --retries 10 --timeout 120 \
+          "pytest==9.2.0" "pytest-asyncio==1.4.1.post1" "respx==0.23.1" \
+          "ruff==0.17.4" "mypy==2.4.1" "aiosqlite==0.22.1"
+        pip install --no-deps -e packages/contracts -e packages/settings \
+          -e packages/llm -e packages/engine -e packages/connectors
+
+    - name: Run lint
+      run: |
+        ruff check packages apps tests
+
+    - name: Run typecheck
+      run: |
+        PYTHONPATH=apps/api:packages/contracts:packages/settings:packages/llm:packages/engine:packages/connectors mypy packages/contracts/showis_contracts packages/settings packages/engine/showis_engine packages/connectors/showis_connectors apps/api/showis
+
+    - name: Run tests
+      run: |
+        PYTHONPATH=apps/api:packages/contracts:packages/settings:packages/llm:packages/engine:packages/connectors pytest
+
+  security:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    # --- Python bagimlilik zafiyetleri (SEC-17) -----------------------------
+    # --strict kullanilmaz. Ignore listesi: infra/pip-audit-ignore.txt (ID'ler, satir basina).
+    - name: pip-audit (runtime lock)
+      run: |
+        python -m pip install --upgrade pip
+        pip install "pip-audit==2.10.1"
+        IGNORES=""
+        if [ -f infra/pip-audit-ignore.txt ]; then
+          IGNORES="$(grep -vE '^\s*(#|$)' infra/pip-audit-ignore.txt | sed 's/^/--ignore-vuln /' | tr '\n' ' ')"
+        fi
+        echo "pip-audit ignore listesi: ${IGNORES:-<bos>}"
+        pip-audit -r "$LOCKFILE" --progress-spinner off $IGNORES | tee pip-audit.txt
+
+    - name: Upload pip-audit report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: pip-audit-report
+        path: pip-audit.txt
+        if-no-files-found: ignore
+
+    # --- Node bagimlilik zafiyetleri (web) ---------------------------------
+    # Yalniz "high"/"critical" CI'i dusurur. Bilinen ve kabul edilmis advisory'ler
+    # ALLOW listesindedir (asagida, gerekcesiyle). Liste bosaltilmadan Next yukseltmesi
+    # yapilmamali; her satir periyodik gozden gecirilir.
+    - name: npm audit (web, high/critical)
+      working-directory: apps/web
+      run: |
+        set -o pipefail
+        npm audit --json --omit=dev > npm-audit.json || true
+        node -e '
+          const fs = require("fs");
+          const report = JSON.parse(fs.readFileSync("npm-audit.json", "utf8"));
+          // Kabul edilen advisory'ler: next 16.3.x icindeki gomulu postcss.
+          // Duzeltme: next@16.4.6+ (breaking major) — planli is.
+          const allow = new Set([
+            "GHSA-qx2v-qp2m-jg93",
+            "GHSA-6g55-p6wh-862q",
+            "GHSA-fxqj-rqcc-2cmp",
+            "GHSA-r28c-9q8g-f849",
+          ]);
+          const bad = [];
+          for (const [name, v] of Object.entries(report.vulnerabilities || {})) {
+            if (!["high", "critical"].includes(v.severity)) continue;
+            const advs = (v.via || []).filter((x) => typeof x === "object");
+            const ids = advs
+              .filter((a) => ["high", "critical"].includes(a.severity))
+              .map((a) => (a.url || "").split("/").pop());
+            const unknown = ids.filter((id) => !allow.has(id));
+            if (unknown.length) bad.push(`${name} (${v.severity}): ${unknown.join(", ")}`);
+          }
+          if (bad.length) {
+            console.error("Yuksek/kritik zafiyet bulundu:\n  " + bad.join("\n  "));
+            process.exit(1);
+          }
+          console.log("npm audit: yuksek/kritik bulgu yok (allowlist haric)");
+        '
+
+    - name: Upload npm audit report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: npm-audit-report
+        path: apps/web/npm-audit.json
+        if-no-files-found: ignore
+
+    # --- Sir taramasi ------------------------------------------------------
+    # gitleaks/trufflehog yerine desen tabanli yerel script (entropi analizi yok).
+    # Git deposunda yalniz izlenen dosyalari tarar (.env gibi dosyalar taranmaz).
+    - name: Secret scan
+      run: |
+        bash infra/scripts/check-secrets.sh
+
+  dockerfile-lint:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: hadolint
+      uses: hadolint/hadolint-action@v3.1.0
+      with:
+        dockerfile: infra/docker/Dockerfile.api
+        failure-threshold: error
+
+    - name: hadolint (worker)
+      uses: hadolint/hadolint-action@v3.1.0
+      with:
+        dockerfile: infra/docker/Dockerfile.worker
+        failure-threshold: error
+
+    - name: hadolint (web)
+      uses: hadolint/hadolint-action@v3.1.0
+      with:
+        dockerfile: infra/docker/Dockerfile.web
+        failure-threshold: error

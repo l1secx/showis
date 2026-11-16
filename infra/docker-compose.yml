@@ -1,0 +1,261 @@
+version: "3.8"
+
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
+  egress:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  report_data:
+
+services:
+  caddy:
+    # Digest pinli (v2.7.6). Tag'e surum yazmak yerine digest: ayni imaj, kaymaz.
+    image: caddy:2.7-alpine@sha256:2e1d4592f1718bb47645da5a83a846fe19094f18e6c921fdf56d174f05c63213
+    container_name: showis-caddy
+    restart: unless-stopped
+    ports:
+      - "8083:8083"
+    environment:
+      # Ikinci savunma katmani (opsiyonel, env-gated). Bos ise basic_auth devre disi.
+      - SHOWIS_CADDY_USER=${SHOWIS_CADDY_USER:-}
+      - SHOWIS_CADDY_PASSWORD_HASH=${SHOWIS_CADDY_PASSWORD_HASH:-}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./scripts/caddy-render-config.sh:/usr/local/bin/caddy-render-config.sh:ro
+    # Caddyfile'da kosullu blok yok: basic_auth bloğu baslangicta render edilir.
+    command: ["/bin/sh", "/usr/local/bin/caddy-render-config.sh"]
+    tmpfs:
+      - /tmp
+    networks:
+      - frontend
+    depends_on:
+      api:
+        condition: service_healthy
+
+  postgres:
+    # Digest pinli (PostgreSQL 16.15).
+    image: postgres:16-alpine@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139
+    container_name: showis-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-showis}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_DB: ${POSTGRES_DB:-showis}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-showis} -d ${POSTGRES_DB:-showis}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    # Digest pinli (Redis 7.4.12).
+    image: redis:7-alpine@sha256:7b1753b4c5ad8458906c272a8132b8c15f5557b000379eb115fb239706a384b7
+    container_name: showis-redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    # `latest` KALDIRILDI (SEC-17): digest pinli, DEVELOPMENT.2025-05-24 build'i.
+    # Not: upstream minio/minio Docker Hub'dan kaldirildi; bitnami legacy arsivi kullaniliyor.
+    image: bitnamilegacy/minio@sha256:451fe6858cb770cc9d0e77ba811ce287420f781c7c1b806a386f6896471a349c
+    container_name: showis-minio
+    restart: unless-stopped
+    command: server /bitnami/minio/data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    volumes:
+      - minio_data:/bitnami/minio/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/live || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ..
+      dockerfile: infra/docker/Dockerfile.api
+    container_name: showis-api
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-showis}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-showis}
+      - REDIS_URL=redis://redis:6379/0
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin}
+      - MINIO_BUCKET=${MINIO_BUCKET:-showis-evidence}
+      - MASTER_KEY=${MASTER_KEY:-}
+      - BROWSER_SERVICE_URL=http://browser:8081
+      - SHOWIS_REPORT_DIR=/app/data/reports
+      - SHOWIS_EVIDENCE_DIR=/app/data/evidence
+      - USE_CELERY=${USE_CELERY:-0}
+      # SEC-01: API kimlik dogrulamasi. Bos birakilirsa API fail-closed (503) calisir,
+      # bu yuzden compose seviyesinde zorunlu tutuluyor (fail-fast).
+      - SHOWIS_API_TOKEN=${SHOWIS_API_TOKEN:?SHOWIS_API_TOKEN tanimli degil - infra/.env dosyasina ekleyin (bkz. infra/.env.example)}
+    volumes:
+      - report_data:/app/data
+    networks:
+      - frontend
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build:
+      context: ..
+      dockerfile: infra/docker/Dockerfile.web
+      args:
+        - API_URL=http://api:8000
+    container_name: showis-web
+    restart: unless-stopped
+    # 8005 publish'i KALDIRILDI (T-111): web yalniz frontend aginda, erisim Caddy
+    # uzerinden http://localhost:8083. Dogrudan 8005 tam API yuzeyi veriyordu.
+    environment:
+      - API_URL=http://api:8000
+      # Runtime env (build arg DEGIL): token Next standalone imaja gomulmez,
+      # yalniz sunucu surecinde okunur (apps/web/app/api/[...path]/route.ts).
+      - SHOWIS_API_TOKEN=${SHOWIS_API_TOKEN:?SHOWIS_API_TOKEN tanimli degil - infra/.env dosyasina ekleyin (bkz. infra/.env.example)}
+    networks:
+      - frontend
+    depends_on:
+      - api
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    cpus: 0.5
+
+  worker:
+    build:
+      context: ..
+      dockerfile: infra/docker/Dockerfile.worker
+    container_name: showis-worker
+    restart: unless-stopped
+    # --concurrency: mem_limit 1g altinda 12 prefork cocuk OOM riski tasir;
+    # varsayilan 2, gerektiginde SHOWIS_WORKER_CONCURRENCY ile yukseltilir.
+    command: ["celery", "-A", "showis.services.worker.celery_app", "worker", "-l", "INFO", "-Q", "${SHOWIS_SCAN_QUEUE:-osint}", "--concurrency", "${SHOWIS_WORKER_CONCURRENCY:-2}"]
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-showis}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-showis}
+      - REDIS_URL=redis://redis:6379/0
+      - BROWSER_SERVICE_URL=http://browser:8081
+      - MASTER_KEY=${MASTER_KEY:-}
+      - SHOWIS_REPORT_DIR=/app/data/reports
+      - SHOWIS_EVIDENCE_DIR=/app/data/evidence
+      - SHOWIS_STALE_SCAN_SECONDS=${SHOWIS_STALE_SCAN_SECONDS:-1800}
+      - SHOWIS_SCAN_MAX_RECOVERY_ATTEMPTS=${SHOWIS_SCAN_MAX_RECOVERY_ATTEMPTS:-2}
+      - SHOWIS_SCAN_MAX_RETRIES=${SHOWIS_SCAN_MAX_RETRIES:-2}
+      - SHOWIS_SCAN_RECOVERY_INTERVAL=${SHOWIS_SCAN_RECOVERY_INTERVAL:-120}
+    volumes:
+      - report_data:/app/data
+    networks:
+      - backend
+      - egress
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+    cpus: 1.0
+
+  beat:
+    build:
+      context: ..
+      dockerfile: infra/docker/Dockerfile.worker
+    container_name: showis-beat
+    restart: unless-stopped
+    command: ["celery", "-A", "showis.services.worker.celery_app", "beat", "-l", "INFO", "--schedule", "/tmp/celerybeat-schedule"]
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-showis}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-showis}
+      - REDIS_URL=redis://redis:6379/0
+      - MASTER_KEY=${MASTER_KEY:-}
+      - SHOWIS_SCAN_RECOVERY_INTERVAL=${SHOWIS_SCAN_RECOVERY_INTERVAL:-120}
+      - SHOWIS_STALE_SCAN_SECONDS=${SHOWIS_STALE_SCAN_SECONDS:-1800}
+      - SHOWIS_SCAN_MAX_RECOVERY_ATTEMPTS=${SHOWIS_SCAN_MAX_RECOVERY_ATTEMPTS:-2}
+    networks:
+      - backend
+    depends_on:
+      - worker
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    cpus: 0.25
+
+  browser:
+    build:
+      context: ..
+      dockerfile: infra/docker/Dockerfile.browser
+    container_name: showis-browser
+    restart: unless-stopped
+    networks:
+      - backend
+      - egress
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 2g
+    cpus: 2.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 5

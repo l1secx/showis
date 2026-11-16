@@ -1,0 +1,144 @@
+{
+  "$defs": {
+    "EntityType": {
+      "enum": [
+        "person",
+        "account",
+        "domain",
+        "email",
+        "username"
+      ],
+      "title": "EntityType",
+      "type": "string"
+    },
+    "Platform": {
+      "enum": [
+        "github",
+        "gitlab",
+        "keybase",
+        "reddit",
+        "tryhackme",
+        "hackthebox",
+        "steam",
+        "gravatar",
+        "hackernews",
+        "npm",
+        "pypi",
+        "dockerhub",
+        "devto",
+        "chess",
+        "leetcode",
+        "codeforces",
+        "bitbucket",
+        "codeberg",
+        "codepen",
+        "kaggle",
+        "codewars",
+        "root-me",
+        "hackerrank",
+        "duolingo",
+        "instagram",
+        "tiktok",
+        "youtube",
+        "medium",
+        "substack",
+        "deviantart",
+        "behance",
+        "dribbble",
+        "pinterest",
+        "tumblr",
+        "about.me",
+        "linktr.ee",
+        "myanimelist",
+        "letterboxd",
+        "goodreads",
+        "lastfm",
+        "soundcloud",
+        "itch.io",
+        "telegram",
+        "vk",
+        "lichess",
+        "hashnode",
+        "wordpress",
+        "bluesky",
+        "huggingface",
+        "kitsu",
+        "wattpad",
+        "flickr",
+        "musicbrainz",
+        "mastodon",
+        "pixelfed",
+        "rubygems",
+        "nuget",
+        "packagist",
+        "9gag",
+        "vs-marketplace",
+        "speakerdeck",
+        "replit",
+        "devpost",
+        "patreon",
+        "vimeo",
+        "bandcamp",
+        "dailymotion",
+        "scratch",
+        "web",
+        "unknown"
+      ],
+      "title": "Platform",
+      "type": "string"
+    }
+  },
+  "properties": {
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "type": {
+      "$ref": "#/$defs/EntityType"
+    },
+    "platform": {
+      "$ref": "#/$defs/Platform"
+    },
+    "label": {
+      "title": "Label",
+      "type": "string"
+    },
+    "url": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Url"
+    },
+    "attributes": {
+      "additionalProperties": true,
+      "title": "Attributes",
+      "type": "object"
+    },
+    "evidence_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence Ids",
+      "type": "array"
+    },
+    "first_seen": {
+      "format": "date-time",
+      "title": "First Seen",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "type",
+    "platform",
+    "label"
+  ],
+  "title": "Entity",
+  "type": "object"
+}

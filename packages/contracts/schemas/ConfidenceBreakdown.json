@@ -1,0 +1,46 @@
+{
+  "properties": {
+    "username_exact_match": {
+      "default": 0.0,
+      "title": "Username Exact Match",
+      "type": "number"
+    },
+    "name_similarity": {
+      "default": 0.0,
+      "title": "Name Similarity",
+      "type": "number"
+    },
+    "cross_link": {
+      "default": 0.0,
+      "title": "Cross Link",
+      "type": "number"
+    },
+    "bio_location_company": {
+      "default": 0.0,
+      "title": "Bio Location Company",
+      "type": "number"
+    },
+    "commit_email_or_pgp": {
+      "default": 0.0,
+      "title": "Commit Email Or Pgp",
+      "type": "number"
+    },
+    "avatar_exact_hash": {
+      "default": 0.0,
+      "title": "Avatar Exact Hash",
+      "type": "number"
+    },
+    "contradiction": {
+      "default": 0.0,
+      "title": "Contradiction",
+      "type": "number"
+    },
+    "total": {
+      "default": 0.0,
+      "title": "Total",
+      "type": "number"
+    }
+  },
+  "title": "ConfidenceBreakdown",
+  "type": "object"
+}

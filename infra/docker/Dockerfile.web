@@ -1,0 +1,48 @@
+# syntax=docker/dockerfile:1
+# Base imaj DIGEST ile pinli (T-304): node:22-alpine, digest 2026-11-16.
+# Digest guncellemesi: docker pull node:22-alpine && docker image inspect \
+#   node:22-alpine --format '{{index .RepoDigests 0}}'
+FROM node:22-alpine@sha256:0e1754758c2df4cfa3e68d59e2e1b7374bb7fd9ea6328eaaacf15cc934af8202 AS base
+
+# npm agi dalgalanmalarina karsi: retry + uzun timeout (T-304).
+ENV npm_config_fetch_retries=5 \
+    npm_config_fetch_retry_maxtimeout=120000 \
+    npm_config_fetch_timeout=120000
+
+# Dependencies (package-lock.json ile tam pinli)
+FROM base AS deps
+RUN apk add --no-cache libc6-compat
+WORKDIR /app
+COPY apps/web/package.json apps/web/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+
+# Builder
+FROM base AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY apps/web ./
+ARG API_URL=http://localhost:8000
+ENV API_URL=$API_URL
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN npm run build
+
+# Runner
+FROM base AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+
+RUN addgroup --system --gid 10001 nodejs
+RUN adduser --system --uid 10001 nextjs
+
+COPY --from=builder /app/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+
+USER nextjs
+
+EXPOSE 3000
+ENV PORT=3000
+ENV HOSTNAME="0.0.0.0"
+
+CMD ["node", "server.js"]

@@ -1,0 +1,11 @@
+# pip-audit ignore listesi (SEC-17 CI kapisi)
+#
+# Bicim: satir basina tek zafiyet ID'si (OSV/PYSEC/GHSA). Yorumlar ve bos satirlar yok sayilir.
+# Kullanim: CI bu dosyadaki her satiri `--ignore-vuln <ID>` olarak pip-audit'e gecirir.
+#
+# KURAL: buraya yalnizca (a) yamasi olmayan, (b) uygulanamaz/dogrulanmis yanlis pozitif
+# olan kayitlar girer. Her satira tarih + gerekce YORUM olarak eklenmeli ve 90 gunde bir
+# gozden gecirilmelidir. Cozulen kayit satiri silinir.
+#
+# Su an bos: 2026-11-16 itibariyla infra/requirements.lock'ta bilinen zafiyet yok
+# (pip-audit 2.10.1 -> "No known vulnerabilities found").

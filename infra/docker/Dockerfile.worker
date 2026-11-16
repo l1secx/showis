@@ -1,0 +1,42 @@
+# syntax=docker/dockerfile:1
+# Base imaj DIGEST ile pinli (T-304): python:3.12-slim, digest 2026-11-16.
+# Digest guncellemesi: docker pull python:3.12-slim && docker image inspect \
+#   python:3.12-slim --format '{{index .RepoDigests 0}}'
+FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
+
+WORKDIR /app
+
+# PIP_*: PyPI dalgalanmasinda build dusmesin (ReadTimeoutError tekrar eden ariza).
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_RETRIES=10 \
+    PIP_DEFAULT_TIMEOUT=120 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONPATH=/app/apps/api:/app/packages/contracts:/app/packages/connectors:/app/packages/engine:/app/packages/llm:/app/packages/settings
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    -o Acquire::Retries=5 \
+    curl \
+    build-essential \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Bagimliliklar TAM PINLI lock dosyasindan kurulur (SEC-17).
+COPY infra/requirements.lock /app/infra/requirements.lock
+RUN pip install --no-cache-dir --retries 10 --timeout 120 \
+    -r /app/infra/requirements.lock
+
+COPY pyproject.toml /app/
+COPY packages /app/packages
+# Yerel paket: bagimliliklari lock saglar, bu yuzden --no-deps.
+# hadolint ignore=DL3013: yerel paket, bagimliliklar lock'tan geliyor (--no-deps).
+RUN pip install --no-cache-dir --no-deps --retries 10 --timeout 120 \
+    -e /app/packages/contracts
+
+COPY apps/api /app/apps/api
+
+RUN useradd -u 10001 -m showis && chown -R showis:showis /app
+RUN mkdir -p /app/data/reports /app/data/evidence && chown -R showis:showis /app/data
+USER showis
+
+CMD ["celery", "-A", "showis.services.worker.celery_app", "worker", "-l", "INFO", "-Q", "osint"]

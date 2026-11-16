@@ -1,0 +1,359 @@
+"""Tarama modlari (O1/O2/O3): connector secimi, butce ve sure tahmini.
+
+Tek kaynak: hem scanner hangi connector'lari planlayacagini, hem API sure
+tahminini buradan alir. Boylece tahmin ile gercek tarama ayrismaz.
+
+Sure tahmini iki katmandan olusur:
+
+1. ``_COST`` — canli bir O2 taramasindan olculmus *heuristic* varsayilanlar.
+2. ``calibration.json`` — ``scripts/calibrate_scan.py`` ile gercek gorev
+   surelerinden uretilen kalibre degerler. Dosya varsa ve gecerliyse
+   varsayilanlarin yerine gecer; yoksa/bozuksa sessizce varsayilana donulur.
+
+Paralel yurutme (T-101) ag-bekleme agir adimlari hizlandirdigi icin tahmin,
+``SHOWIS_SCAN_CONCURRENCY`` (varsayilan 4, 1..8) ile olceklenir. Deger 1 iken
+tahmin siralı yurutmenin tahminine **birebir** esittir.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import math
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from showis_contracts import Target
+
+from .variants import generate_variants
+
+logger = logging.getLogger("showis.scan_modes")
+
+#: Sadece site-check / render gibi yavas connector'lar mod ile elenir.
+SLOW_CONNECTORS = {"sitecheck", "sitecheck_search", "rendered", "tryhackme", "hackthebox"}
+
+#: Mod basina butce ve site-check kullanici adi sayisi.
+MODE_PROFILES: dict[str, dict[str, int]] = {
+    "O1": {
+        "max_tasks": 140,
+        "max_http_requests": 500,
+        "max_wall_seconds": 420,
+        "usernames": 0,
+        "variant_tasks": 2,
+    },
+    "O2": {
+        "max_tasks": 260,
+        "max_http_requests": 1200,
+        "max_wall_seconds": 1200,
+        "usernames": 6,
+        "variant_tasks": 6,
+    },
+    "O3": {
+        "max_tasks": 420,
+        "max_http_requests": 2000,
+        "max_wall_seconds": 1800,
+        "usernames": 10,
+        "variant_tasks": 10,
+    },
+}
+
+#: Gercek bir O2 taramasindan olculen maliyetler (saniye).
+_COST = {
+    "setup": 60.0,  # varyant + planlama + ilk ag gecikmesi
+    "query": 30.0,  # arama motoru sorgusu (DDG lite)
+    "api_task": 1.1,  # herkese acik API cagrisi (profil)
+    "slow_task": 9.0,  # tryhackme / hackthebox (yavas API)
+    "site_username": 22.0,  # 48 site, 6 es zamanli istek
+    "identifier_task": 4.0,  # aramada bulunan kullanici adlarinin dogrulanmasi
+    "entity": 1.0,  # entity/finding yazimi + skorlama
+    "rendered_task": 8.0,  # playwright render
+}
+_SITE_COUNT = 48
+_API_CONNECTORS = 18
+_IDENTIFIER_TASKS = 10
+_RENDER_EVENTS = 6
+
+#: Paralel yurutmede bolunebilen (ag bekleyen) adimlar. ``setup`` ve entity
+#: yazimi seri kaldigi icin bolunmez.
+_PARALLEL_COST_KEYS = frozenset(
+    {"query", "api_task", "slow_task", "site_username", "identifier_task", "rendered_task"}
+)
+
+#: Kalibrasyon dosyasi (``scripts/calibrate_scan.py`` tarafindan yazilir).
+CALIBRATION_FILENAME = "calibration.json"
+CALIBRATION_ENV = "SHOWIS_CALIBRATION_PATH"
+DEFAULT_CALIBRATION_PATH = Path(__file__).with_name(CALIBRATION_FILENAME)
+
+#: Kalibrasyon kaynaklari — dusukten yuksege guvenilirlik.
+_CALIBRATION_SOURCES = ("db", "live")
+
+#: Eşzamanlılık (T-101 ile ayni env).
+CONCURRENCY_ENV = "SHOWIS_SCAN_CONCURRENCY"
+DEFAULT_CONCURRENCY = 4
+MIN_CONCURRENCY = 1
+MAX_CONCURRENCY = 8
+
+
+@dataclass(frozen=True)
+class Calibration:
+    """``calibration.json`` icerigi (gecerli alanlar disi atilir)."""
+
+    costs: dict[str, float] = field(default_factory=dict)
+    source: str = "heuristic"
+    sample_count: int = 0
+    generated_at: str | None = None
+
+    @property
+    def is_calibrated(self) -> bool:
+        """En az bir gecerli maliyet override'i var mi?"""
+        return bool(self.costs)
+
+
+#: (yol, mtime_ns, boyut) -> Calibration; dosya degismedikce yeniden okunmaz.
+_calibration_cache: dict[tuple[str, int, int], Calibration] = {}
+
+
+def calibration_path(explicit: str | Path | None = None) -> Path:
+    """Kalibrasyon dosyasi yolu: arguman > env > paket varsayilani."""
+    if explicit is not None:
+        return Path(explicit)
+    env_path = os.getenv(CALIBRATION_ENV)
+    if env_path and env_path.strip():
+        return Path(env_path.strip())
+    return DEFAULT_CALIBRATION_PATH
+
+
+def _empty_calibration(source: str = "heuristic") -> Calibration:
+    return Calibration(costs={}, source=source, sample_count=0, generated_at=None)
+
+
+def _sanitize_costs(raw: Any) -> dict[str, float]:
+    """Yalnizca bilinen anahtarlar ve pozitif sonlu sayilar kabul edilir."""
+    if not isinstance(raw, dict):
+        return {}
+    costs: dict[str, float] = {}
+    for key, value in raw.items():
+        if key not in _COST:
+            logger.warning("Kalibrasyon: bilinmeyen maliyet anahtari atlandi: %s", key)
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            logger.warning("Kalibrasyon: %s sayisal degil, varsayilan kullanilacak", key)
+            continue
+        number = float(value)
+        if not math.isfinite(number) or number <= 0:
+            logger.warning("Kalibrasyon: %s gecersiz (%s), varsayilan kullanilacak", key, value)
+            continue
+        costs[str(key)] = number
+    return costs
+
+
+def _parse_calibration(data: Any) -> Calibration:
+    if not isinstance(data, dict):
+        raise ValueError("kalibrasyon kok nesnesi obje olmali")
+    costs = _sanitize_costs(data.get("costs"))
+    source = str(data.get("source") or "heuristic").strip().lower()
+    if source not in _CALIBRATION_SOURCES:
+        source = "heuristic"
+    try:
+        sample_count = int(data.get("sample_count") or 0)
+    except (TypeError, ValueError):
+        sample_count = 0
+    generated_at = data.get("generated_at")
+    return Calibration(
+        costs=costs,
+        source=source if costs else "heuristic",
+        sample_count=max(sample_count, 0),
+        generated_at=str(generated_at) if generated_at else None,
+    )
+
+
+def load_calibration(path: str | Path | None = None) -> Calibration:
+    """Kalibrasyon dosyasini okur; yok/bozuksa heuristic'e duser.
+
+    Hata durumunda **istisna firlatmaz**: tahmin ucu asla 500 vermez.
+    """
+    target = calibration_path(path)
+    try:
+        stat = target.stat()
+    except FileNotFoundError:
+        return _empty_calibration()
+    except OSError as exc:  # izin vb.
+        logger.warning("Kalibrasyon dosyasina erisilemedi (%s): %s", target, exc)
+        return _empty_calibration()
+
+    key = (str(target), stat.st_mtime_ns, stat.st_size)
+    cached = _calibration_cache.get(key)
+    if cached is not None:
+        return cached
+
+    try:
+        with target.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        calibration = _parse_calibration(data)
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError, OSError) as exc:
+        logger.warning("Kalibrasyon dosyasi okunamadi, varsayilan maliyetler: %s", exc)
+        calibration = _empty_calibration()
+
+    _calibration_cache[key] = calibration
+    return calibration
+
+
+def reset_calibration_cache() -> None:
+    """Testler ve ``calibrate_scan.py`` icin: dosya yeniden okunsun."""
+    _calibration_cache.clear()
+
+
+def effective_costs(calibration: Calibration | None = None) -> dict[str, float]:
+    """Varsayilan maliyetlerin kalibrasyonla ezilmis hali."""
+    costs = dict(_COST)
+    calibration = calibration if calibration is not None else load_calibration()
+    costs.update(calibration.costs)
+    return costs
+
+
+def scan_concurrency() -> int:
+    """``SHOWIS_SCAN_CONCURRENCY`` (varsayilan 4, 1..8 araligina kirpilir)."""
+    raw = os.getenv(CONCURRENCY_ENV)
+    if raw is None or not str(raw).strip():
+        return DEFAULT_CONCURRENCY
+    try:
+        value = int(str(raw).strip())
+    except ValueError:
+        logger.warning("%s sayisal degil (%r), varsayilan %s", CONCURRENCY_ENV, raw,
+                       DEFAULT_CONCURRENCY)
+        return DEFAULT_CONCURRENCY
+    if value < MIN_CONCURRENCY:
+        logger.warning("%s=%s cok kucuk, %s kullanilacak", CONCURRENCY_ENV, value, MIN_CONCURRENCY)
+        return MIN_CONCURRENCY
+    if value > MAX_CONCURRENCY:
+        logger.warning("%s=%s cok buyuk, %s kullanilacak", CONCURRENCY_ENV, value, MAX_CONCURRENCY)
+        return MAX_CONCURRENCY
+    return value
+
+
+def norm_mode(mode: str | None) -> str:
+    """Eski/bilinmeyen mod degerlerini O1/O2/O3'e indirger."""
+    value = (mode or "O2").strip().upper()
+    if value.startswith("O1") or "FAST" in value or "HIZLI" in value:
+        return "O1"
+    if value.startswith("O3") or "DEEP" in value or "DERIN" in value:
+        return "O3"
+    return "O2"
+
+
+def task_allowed(mode: str | None, connector: str) -> bool:
+    """O1'de yavas connector'lar hic planlanmaz (ag istegi de yapilmaz)."""
+    if norm_mode(mode) == "O1" and connector in SLOW_CONNECTORS:
+        return False
+    return True
+
+
+def variant_cap(mode: str | None) -> int:
+    """Connector basina denenecek kullanici adi varyanti (O1 hizli kalsin)."""
+    return MODE_PROFILES[norm_mode(mode)]["variant_tasks"]
+
+
+def skipped_connectors(mode: str | None, connectors: list[str]) -> list[str]:
+    return [c for c in connectors if not task_allowed(mode, c)]
+
+
+def budget_for_mode(mode: str | None) -> dict[str, Any]:
+    profile = MODE_PROFILES[norm_mode(mode)]
+    return {
+        "max_tasks": profile["max_tasks"],
+        "max_http_requests": profile["max_http_requests"],
+        "max_llm_calls": 20,
+        "max_wall_seconds": profile["max_wall_seconds"],
+        "max_cost_usd": 5.0,
+    }
+
+
+def _step_seconds(
+    tasks: int, cost_key: str, costs: dict[str, float], concurrency: int
+) -> float:
+    """Bir adimin toplam saniyesi; ag adimlari es zamanlilikla bolunur."""
+    raw = tasks * costs[cost_key]
+    if cost_key in _PARALLEL_COST_KEYS and concurrency > 1:
+        return raw / concurrency
+    return raw
+
+
+def estimate_scan(
+    target: Target,
+    mode: str | None = "O2",
+    *,
+    calibration_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Tahmini gorev/istek sayisi ve toplam sure (saniye).
+
+    Maliyetler sirayla: ``calibration.json`` (varsa) → ``_COST`` varsayilanlari.
+    ``confidence`` alani tahminin kaynagini soyler: ``calibrated`` | ``heuristic``.
+    """
+    profile = MODE_PROFILES[norm_mode(mode)]
+    calibration = load_calibration(calibration_path)
+    costs = effective_costs(calibration)
+    concurrency = scan_concurrency()
+
+    hints = target.hints or {}
+    variants = generate_variants(target.first_name, target.last_name, hints).variants
+    api_usernames = min(variant_cap(mode), len(variants))
+
+    hint_count = sum(1 for k in ("school", "city", "company") if str(hints.get(k) or "").strip())
+    search_tasks = 1 + hint_count
+    api_tasks = api_usernames * _API_CONNECTORS
+    slow_tasks = min(api_usernames, 8) * 2
+    site_usernames = min(profile["usernames"], len(variants))
+
+    steps: list[dict[str, Any]] = []
+
+    def add_step(key: str, label: str, tasks: int, cost_key: str) -> float:
+        seconds = _step_seconds(tasks, cost_key, costs, concurrency)
+        steps.append({"key": key, "label": label, "tasks": tasks, "seconds": round(seconds, 1)})
+        return seconds
+
+    # setup seri kalir (varyant uretimi + planlama + ilk ag gecikmesi).
+    seconds = costs["setup"]
+    seconds += add_step("search", "Web araması (isim + ipuçları)", search_tasks, "query")
+    seconds += add_step("api", "Herkese açık API connector'ları", api_tasks, "api_task")
+    seconds += add_step("slow", "Yavaş API'ler (TryHackMe, HackTheBox)", slow_tasks, "slow_task")
+
+    if site_usernames:
+        seconds += add_step(
+            "sitecheck",
+            f"Site-check ({site_usernames} kullanıcı adı × {_SITE_COUNT} site)",
+            site_usernames,
+            "site_username",
+        )
+        seconds += add_step(
+            "identifiers",
+            "Aramada çıkan kullanıcı adlarının doğrulanması",
+            _IDENTIFIER_TASKS,
+            "identifier_task",
+        )
+    if norm_mode(mode) == "O3":
+        seconds += add_step(
+            "rendered", "Tarayıcı ile profil render", _RENDER_EVENTS, "rendered_task"
+        )
+
+    tasks = sum(s["tasks"] for s in steps)
+    # Entity/finding yazimi tek DB yazari uzerinden seri kalir.
+    seconds += tasks * costs["entity"]
+
+    return {
+        "mode": norm_mode(mode),
+        "seconds": int(seconds + 0.999),
+        "tasks": min(tasks, profile["max_tasks"]),
+        "requests": tasks + site_usernames * _SITE_COUNT,
+        "steps": steps,
+        "budget": budget_for_mode(mode),
+        # Ek alanlar (sozlesme bozulmaz, UI kullanmak zorunda degil).
+        "confidence": "calibrated" if calibration.is_calibrated else "heuristic",
+        "concurrency": concurrency,
+        "calibration": {
+            "source": calibration.source,
+            "sample_count": calibration.sample_count,
+            "generated_at": calibration.generated_at,
+        },
+    }

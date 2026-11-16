@@ -1,0 +1,72 @@
+"""Site-check connector'a web arama entegrasyonu.
+
+Ad/soyad girildiğinde sadece username varyantlarını değil, arama motorundan
+gelen gerçek profile linklerini de taramaya dahil eder. SearchProvider'dan
+gelen sonuçlardan platform + identifier çıkarılır, sitecheck engine'e
+username olarak geçilir.
+
+Bu, kullanıcının doğrudan username bilmediği durumlarda bile (yalnızca
+isim/soyisim ile) gerçek OSINT sonuçları üretmesini sağlar.
+"""
+
+from __future__ import annotations
+
+import logging
+
+from showis_contracts import ScanContext, TaskSpec
+
+from showis_connectors.websearch import SearchProvider, extract_platform_from_url
+
+from .connector import SiteCheckConnector
+
+logger = logging.getLogger("showis.sitecheck.search")
+
+
+class SiteCheckSearchConnector(SiteCheckConnector):
+    """Site-check motoru + plan aşamasında web araması.
+
+    Tarama/normalize mantığı tamamen SiteCheckConnector'dadır; burada yalnızca
+    plana arama sonuçlarından gelen ek username'ler eklenir.
+    """
+
+    name: str = "sitecheck_search"
+    supported_kinds: set[str] = {"search_and_check"}
+    detection: str = "sitecheck_search"
+
+    def __init__(
+        self,
+        *,
+        search_provider: SearchProvider | None = None,
+        max_usernames: int = 10,
+        **kwargs,
+    ):
+        super().__init__(max_usernames=max_usernames, **kwargs)
+        self.search_provider = search_provider
+
+    async def plan(self, ctx: ScanContext) -> list[TaskSpec]:
+        tasks = await super().plan(ctx)
+        if not self.search_provider:
+            return tasks
+
+        fullname = f"{ctx.target.first_name} {ctx.target.last_name}".strip()
+        if not fullname:
+            return tasks
+
+        seen = {str(t.params.get("username") or "") for t in tasks}
+        try:
+            # Tirnakli arama: ayni adi tasiyan ilgisiz kisileri ele
+            hits = await self.search_provider.search(
+                query=f'"{fullname}"', limit=30, site=None
+            )
+        except Exception as exc:
+            logger.warning("Arama sağlayıcısı başarısız oldu: %s", exc)
+            return tasks
+
+        for hit in hits:
+            _, ident = extract_platform_from_url(hit.url)
+            if ident and ident not in seen:
+                seen.add(ident)
+                if not self.plan_registry.claim(ctx.scan_id, ident, self.name):
+                    continue
+                tasks.append(self._make_task(ident, priority=3))
+        return tasks

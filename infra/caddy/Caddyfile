@@ -1,0 +1,50 @@
+# Showis — tek giris noktasi (T-111 / T-113)
+#
+#   tarayici --HTTP--> :8083 (bu Caddy)
+#     /health -> api:8000  (container healthcheck; kimlik dogrulamasi YOK)
+#     /api/*  -> web:3000  (Next.js route handler; X-API-Token'i SUNUCU tarafinda ekler)
+#     /*      -> web:3000  (UI)
+#
+# Erisim modeli (T-113 karari):
+#   * Edge kimlik dogrulamasi = HTTP Basic (basicauth @gate). /health DISINDA her yol
+#     korumali: UI + /api/*.
+#   * Neden API de korumali: /api/* Next proxy'sine gidiyor ve proxy token'i her istege
+#     kendisi ekliyor (tarayici token gondermez). Yani X-API-Token edge'de ayirt edici
+#     degil; tek gercek kapi basic auth. Token yine de derinlemesine savunma olarak
+#     API<->proxy arasinda gecerli.
+#   * SSE (text/event-stream): ayni origin'de tarayici, basic auth kimlik bilgisini
+#     EventSource istegine otomatik ekler (401 + WWW-Authenticate sonrasi kimlik onbellegi).
+#   * /api/* dogrudan api:8000'e BAGLANMAZ (tarayici token gondermedigi icin 401 olurdu).
+
+:8083 {
+	# /health disindaki her sey edge kimlik dogrulamasina tabi.
+	@gate {
+		not path /health
+	}
+
+	# Asagidaki satir container baslarken infra/scripts/caddy-render-config.sh
+	# tarafindan render edilir:
+	#   SHOWIS_CADDY_USER + SHOWIS_CADDY_PASSWORD_HASH doluysa -> basicauth blogu
+	#   degilse -> satir tamamen kaldirilir (basic auth devre disi + UYARI logu;
+	#   bu durumda API korumasi yalniz X-API-Token katmaninda kalir)
+	# Hash: caddy hash-password --plaintext '<parola>'  (duz parola commit edilmez)
+	__BASIC_AUTH_PLACEHOLDER__
+
+	# Healthcheck muaftir: token/basic auth istemez.
+	handle /health {
+		reverse_proxy api:8000
+	}
+
+	# /api/* -> Next.js sunucu tarafli proxy (token burada, sunucu tarafinda eklenir).
+	# SSE akislari da bu yoldan gecer; tamponlama kapali olmali.
+	handle /api/* {
+		reverse_proxy web:3000 {
+			# SSE / uzun suren istekler icin akis tamponlamasi kapali
+			flush_interval -1
+		}
+	}
+
+	handle {
+		reverse_proxy web:3000
+	}
+}
