@@ -6,6 +6,7 @@ from showis_contracts import (
     Finding,
     FindingStatus,
     Target,
+    make_finding_id,
 )
 
 from showis_engine.authenticity import compute_authenticity
@@ -169,7 +170,7 @@ class Resolver:
             status = FindingStatus.REJECTED
 
         return Finding(
-            id=f"finding:{entity.id}",
+            id=make_finding_id(entity.id),
             case_id=case_id,
             scan_id=scan_id,
             entity_id=entity.id,

@@ -125,9 +125,18 @@ jobs:
         path: apps/web/npm-audit.json
         if-no-files-found: ignore
 
-    # --- Sir taramasi ------------------------------------------------------
+    # --- Sir taramasi (T-304 + T-325) --------------------------------------
     # gitleaks/trufflehog yerine desen tabanli yerel script (entropi analizi yok).
     # Git deposunda yalniz izlenen dosyalari tarar (.env gibi dosyalar taranmaz).
+    #
+    # Cikis kodu politikasi (T-325):
+    #   * test DISI bir yolda bulgu            -> exit 1 (CI FAIL)  <- gercek sir riski
+    #   * test yolunda allowlist'te yer tutucu -> exit 0 (rapor "allowlist")
+    #   * test yolunda allowlist DISI deger    -> exit 0 + UYARI (varsayilan)
+    #     (test fixture'lari gercek deger degil; yine de gozden gecirilmeli)
+    #   * --strict ile test yollarindaki uyarilar da FAIL olur (elle calistirmak icin)
+    #
+    # Allowlist: infra/secret-scan-allowlist.txt (desen + gerekce; yalniz test yollarinda).
     - name: Secret scan
       run: |
         bash infra/scripts/check-secrets.sh

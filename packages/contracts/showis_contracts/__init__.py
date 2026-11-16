@@ -1,4 +1,11 @@
-from .entities import Edge, Entity
+from .entities import (
+    FINDING_ID_PREFIX,
+    IDENTITY_ID_MAX_LENGTH,
+    Edge,
+    Entity,
+    make_entity_id,
+    make_finding_id,
+)
 from .enums import (
     EdgeType,
     EntityType,
@@ -24,6 +31,10 @@ __all__ = [
     "Observation",
     "Entity",
     "Edge",
+    "IDENTITY_ID_MAX_LENGTH",
+    "FINDING_ID_PREFIX",
+    "make_entity_id",
+    "make_finding_id",
     "ConfidenceBreakdown",
     "Finding",
     "TaskSpec",

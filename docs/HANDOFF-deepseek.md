@@ -1,60 +1,89 @@
 # Handoff — Showis geliştirme notları
 
-Bu not, aynı depoda çalışan ikinci asistan (freebuff/deepseek) için yazıldı.
+Bu not, aynı depoda çalışan asistana devir için yazıldı.
 Amaç: **isim + soyisim (+ okul) verildiğinde anlamlı sonuç üretmek**, sonuçları
-Bulgular sekmesine akıtmak, tarama süresini önceden tahmin etmek ve arayüzü
-gerçek bir OSINT ürünü gibi göstermek.
+Bulgular sekmesine akıtmak, kimlik grafiğini kurmak, tarama süresini önceden
+tahmin etmek ve raporu tek sayfada karar verilebilir hale getirmek.
 
-## Bu turda ne değişti
+> **Son güncelleme:** 2026-11-17 00:5x (gece kampanyası sonu, T-101 → T-324).
+> Önceki sürümdeki "açık işler" listesi büyük ölçüde kapandı; güncel liste aşağıda.
 
-### Backend
+## Bu gece ne değişti (özet)
 
-| Dosya | Değişiklik |
-| --- | --- |
-| `packages/connectors/showis_connectors/websearch/connector.py` | Yeni `WebSearchConnector`: hedef ad + ipuçları (okul/şehir/şirket) ile web araması yapar, her sonucu `Entity`'ye çevirir (`name`, `search_title`, `search_snippet`). Tier C olduğu için yalnızca `search` görevi üretir. |
-| `apps/api/showis/services/connectors_factory.py` | `WebSearchConnector` listenin başına eklendi — hesap bulunamasa bile isim araması bulgu üretir. |
-| `packages/engine/showis_engine/resolver.py` | İsim skoru artık arama sonucu başlığını da kullanır (`search_title`); okul ipucu bio/snippet içinde geçerse +0.05; yeni `LEAD` statüsü (0.5 altı ama isim/konum sinyali olan sonuçlar). |
-| `packages/engine/showis_engine/scan_modes.py` | O1/O2/O3 profilleri (görev/istek/duvar saati/varyant sayısı) + `estimate_scan()` süre tahmini + `task_allowed()/variant_cap()`. |
-| `apps/api/showis/services/scanner.py` | (a) Moda göre connector eleme, (b) **drain loop**: connector'lar çalışırken eklediği görevler de koşar, (c) bütçe/zaman aşımında kalan görevler `skipped` işaretlenir, (d) **artımlı skorlama**: her 10 görevde bulgular Bulgular sekmesine düşer, (e) LLM açıklaması yalnızca aday+ bulgular için ve en fazla 12 tanesi için yapılır (her çağrı ~6 sn). |
-| `apps/api/showis/api/v1/cases.py` | `POST /cases/{id}/scan` artık moda göre bütçe kuruyor; yeni uç: `GET /cases/{id}/scan/estimate?mode=O2`. |
-| `packages/connectors/showis_connectors/websearch/duckduckgo.py` | Reklam/yonlendirme (`google.com/goto`, `duckduckgo.com/y.js`) sonuçları elenir — bulgulara çöp URL düşmüyordu. |
-
-### Frontend (`apps/web`)
-
-- `tailwind.config.js` + `globals.css`: slate/blue ölçekleri yeniden tanımlandı (cyan aksan), kart/buton/rozet/`input` bileşen sınıfları, ızgara arka plan, Inter + JetBrains Mono.
-- `app/cases/[id]/scan-context.tsx`: **sekme gezinmesinde state kaybını çözen** `ScanSessionProvider` (SSE + polling, sessionStorage ile `scanId`, mod, bulgu filtresi korunur).
-- `app/cases/[id]/panels.tsx`: O1/O2/O3 seçimi + "tahmini süre / görev / istek" kartı, canlı olay akışı, ilerleme çubuğu, filtreli Bulgular.
-- `app/cases/new/page.tsx`: hedef-öncelikli form, "Oluştur ve tara" akışı (`/cases/{id}/scan?start=1`).
+| Alan | Dosya / konu | Değişiklik |
+| --- | --- | --- |
+| Tarama hızı | `services/scanner.py`, `showis_engine/{http,ratelimit}.py` | Paralel yürütme (`SHOWIS_SCAN_CONCURRENCY=4`), host limiter, contextvar istek sayacı, HTTP katmanında fail-closed bütçe. **O2: 636 sn → 337 sn (-47 %)**, 140 görev |
+| İptal | `services/scanner.py`, `api/v1/scans.py` | Sınıf düzeyi `asyncio.Event` kanalı; uçuştaki görevler `CancelledError` ile kesiliyor; final durum **koşullu UPDATE** (`cancelled` ezilmiyor); Celery revoke |
+| Kimlik doğrulama | `core/security.py`, `main.py` | `SHOWIS_API_TOKEN` (X-API-Token / Bearer, `hmac.compare_digest`), 401 + `WWW-Authenticate`, token yoksa 503; `/health` açık; `/docs`,`/redoc`,`/openapi.json` varsayılan **kapalı** (`SHOWIS_DOCS_ENABLED`) |
+| Edge | `infra/caddy/*`, `apps/web/app/api/[...path]/route.ts` | Caddy basic auth, `X-Forwarded-For`/`X-Real-IP` **ezilir**, token sunucu tarafında eklenir; `8005` publish kaldırıldı |
+| Audit | `services/audit.py`, `main.py` | `finding.update`, `report.download`, `scan.cancel`, `case.delete/export`, `settings.provider.*`, `auth.failed`, `request.rejected(413)`; `actor_ip` = X-Real-IP → XFF **son** değeri (D-01) |
+| SSE | `api/v1/scans.py`, `services/orchestrator.py` | `scan_id` doğrulama (404), tarama başına 3 bağlantı (429), 15 dk üst sınır, 20 sn heartbeat, kuyruk `maxsize=500` + en eskiyi düşür |
+| Rapor | `showis_engine/report.py`, `services/report_service.py` | Yönetici özeti, platform dağılımı, kimlik/cross-link tablosu, kronoloji, kanıt özeti; **HTML** biçimi + CSP; vaka bazlı klasör `data/reports/<case>/`; Jinja2 autoescape (XSS/SSTI kapalı) |
+| Platform kapsamı | `publicapi/{stackoverflow,bitbucket,mastodon,codeberg}.py` | 4 yeni anahtarsız connector (toplam **29**, profil connector'ı 26) |
+| Kalibrasyon | `showis_engine/{scan_modes,calibration}.py`, `scripts/calibrate_scan.py` | Gerçek görev sürelerinden süre tahmini (`calibration.json`: 151 örnek), `tasks.started_at` ölçümü |
+| Kimlik grafiği | `showis_engine/identity_edges.py`, `scripts/backfill_edges.py` | `SAME_PERSON`/`CROSS_LINK` edge üretimi + geçmiş taramalar için dry-run backfill |
+| Authenticity | `showis_engine/authenticity.py` | Sahte/spam hesap sinyalleri (hesap yaşı, aktivite, boş bio, varsayılan avatar, cross-link tutarlılığı) resolver skoruna giriyor |
+| Site-check | `connectors/sitecheck/{cache,dedupe,engine}.py` | Sonuç önbelleği (`SHOWIS_SITECHECK_CACHE_TTL`), tekrar eden kullanıcı adı dedupe |
+| Güvenlik sertleştirme | `main.py`, `services/audit.py` | Gövde sınırı 8 MB → 413 (`SHOWIS_MAX_BODY_BYTES`), CORS allowlist, yasaklı host/SSRF politikası, log redaksiyonu |
+| Ops | `infra/scripts/{backup,backup-verify,restore,ensure-perms}.sh`, `ci.yml` | Yedek + restore tatbikatı (700/600 izinler), digest'li imajlar, CI'da pip-audit + npm audit + secret tarama |
 
 ## Doğrulama
 
 ```bash
-make test                      # 144 test
+make test                      # 406+ test (pytest)
+make lint                      # ruff
+make typecheck                 # mypy
 cd apps/web && npm run build   # tip kontrolü + build
-cd infra && docker compose build api worker web && docker compose up -d
+
+# canlı (Caddy tek giriş noktası, basic auth + token):
+SHOWIS_API_TOKEN=*** SHOWIS_BASIC_AUTH_USER=*** SHOWIS_BASIC_AUTH_PASSWORD=*** \
+  bash scripts/e2e_acceptance.sh          # uçtan uca kabul
+bash scripts/smoke_scan.sh --mode O2      # süre ölçümü + DB kanıtı
 ```
 
-Canlı doğrulama (isim + okul):
-
-```bash
-curl -s localhost:8005/api/v1/cases/<id>/scan/estimate?mode=O2
-curl -s -X POST localhost:8005/api/v1/cases/<id>/scan -H 'Content-Type: application/json' -d '{"mode":"O2"}'
-curl -s localhost:8005/api/v1/cases/<id>/findings
-```
-
-Ölçülen referans (Kerem Boz + ODTÜ, O2): ~10 dk, ~140 görev, ~41 bulgu.
-Tahmin: 688 sn / 139 görev — aynı mertebede.
+Ölçülen referans (canlı, O2): **337 sn / 140 görev / 906 istek / 138 bulgu**;
+tahmin ucu 305 sn (±%11). Sıralı yürütme referansı 636 sn idi.
 
 ## Açık işler (öncelik sırası)
 
-1. **Görevler sıralı çalışıyor.** Bağımsız API görevleri `asyncio.gather` + rate-limit ile paralelleştirilirse O2 ~10 dk'dan ~3 dk'ya iner. En yüksek kazanç burada.
-2. **Süre tahmini tek ölçüme dayanıyor.** `_COST` sabitleri `packages/engine/showis_engine/scan_modes.py` içinde; gerçek görev sürelerini `tasks.finished_at - created_at`'tan toplayıp kalibre edilmeli.
-3. ~~`browser` servisi crash-loop~~ **ÇÖZÜLDÜ (2026-11-15)**: kök neden `packages/engine/showis_engine/links.py:17` `from PIL import Image` idi ama `packages/engine/pyproject.toml` pillow'ı bildirmiyordu; `Dockerfile.api`/`Dockerfile.worker` elle pillow kurup gizliyordu, `Dockerfile.browser` kurmuyordu. `pillow>=10.0.0` engine bağımlılıklarına eklendi, `browser` yeniden derlendi. Doğrulama: `POST http://browser:8081/render {"url":"https://example.com"}` → 200 + HTML.
-4. **Reddedilen bulgular gürültülü**: yalnızca username eşleşmesi 0.30 skorla `rejected` düşüyor ve listede görünüyor. Bulgular varsayılan filtresi "aday ve üzeri" olabilir.
-5. **Planner çıktısı hâlâ kullanılmıyor**: `QueryPlanner.plan()` sonuçları loglanıyor, connector sorgularına girmiyor. LLM varsa buradan gelen sorgular `WebSearchConnector`'a beslenmeli.
-6. **sitecheck** 48 site × kullanıcı adı; tek görevde seri kalıyor. Kullanıcı adı başına paralel görev veya sonuç önbelleği (aynı kullanıcı adı tekrar taranmasın) gerekli.
+1. **Dağıtım (bloklayıcı).** T-302/T-304/T-313/T-316/T-320 imajları **canlıya alınmadı**
+   (`docker compose up -d --no-deps api web worker` Mert'te). SEC-13 (`auth.failed` +
+   `actor_ip`) ve SEC-16 (404 + 3 bağlantı limiti) canlıda doğrulanmadan final teslim
+   için NO-GO. Retest: `GET /api/v1/scans/<yok>/events` → 404, 4. bağlantı → 429,
+   `audit_logs`'ta `auth.failed` + `details.actor_ip`.
+2. **npm audit / `postcss` (next 16 yükseltmesi).** `next@16.3.x` içindeki gömülü
+   `postcss<=8.5.22` high advisory (4 GHSA) Mert'in CI allowlist'inde. `next@16.4.6`
+   (breaking) yükseltmesi sonrası allowlist **silinmeli**, kapı blocking kalmalı.
+   Ayrıca `caddy:2.7.x` sürüm yükseltmesi (digest'li ama eski).
+3. **Çok kiracılı sahiplik (IDOR'a hazırlık).** Tek kullanıcı/paylaşılan token modeli
+   var; `owner_id` kolonu + her sorguda sahiplik filtresi (404 dönüşü) eklenmeden
+   çok kiracıya geçilmemeli. `cases/findings/settings` uçları bugün yalnız auth'lu.
+4. **SEC-10 — `guard_query` hâlâ yalnız LLM yolunda.** `planner.build_template_fallback_queries`
+   hint'ten üretilen sorguları guard'dan geçirmiyor (`hints` allowlist'i var ama `extra`
+   alanına yasak desen yazılırsa şablon sorgusu denetimsiz çıkar). Düzeltme:
+   şablon sorgularını da `guard_query`'den geçir + `policy.query_blocked` audit'i.
+5. **`settings.py` audit'lerinde `actor_ip` yok.** `settings.provider.update/delete`
+   `record_audit(...)` kullanıyor; `record_request_audit(db, request, ...)`'e geçiş
+   (tek satır × 2) — sır rotasyonu izinin IP'si eksik kalıyor.
+6. **`edge`'ler için canlı backfill onayı.** `scripts/backfill_edges.py` hazır
+   (varsayılan dry-run). Canlı DB'ye yazma Atlas onayı bekliyor; dry-run raporu
+   `outbox/software-architect.md` (T-309) içinde.
+7. **SEC-19 — host `data/reports/` eski kopyaları.** Konteyner artık docker volume
+   kullanıyor ama host'ta eski (PII içeren) PDF/JSON dosyaları dünya-okunur durumda;
+   `chmod 700/600` + KVKK saklama taraması (Mert).
+8. **SEC-20 — `storage_key` istemciye dönüyor** (`findings.py`: evidence yanıtı).
+   Yalnız dosya adı/`evidence_id` dönmeli (düşük, tek satır).
+9. **Planner çıktısı connector sorgularına girmiyor** (eski madde 5): `QueryPlanner.plan()`
+   sonuçları loglanıyor; LLM varsa buradan gelen sorgular `WebSearchConnector`'a beslenmeli.
+10. **Çoklu dil + docx/xlsx + evidence gallery** (ROADMAP 5.2 kalanı) ve
+    `case.export`'un `GET` yerine `POST`'a taşınması (yan etkili okuma).
 
 ## Dokunmadan önce sor
 
-- `packages/contracts/showis_contracts/enums.py` (`FindingStatus`) ve resolver skor ağırlıkları: API/DB şeması ve tüm testler bunlara bağlı.
-- Tier politikası (`packages/engine/showis_engine/policy.py`): Tier C connector yalnızca arama görevi üretebilir; bu kural güvenlik sınırı.
+- `packages/contracts/showis_contracts/enums.py` (`FindingStatus`, `Platform`) ve
+  resolver/authenticity skor ağırlıkları: API/DB şeması ve tüm testler bağlı.
+- Tier politikası (`showis_engine/policy.py`): Tier C connector yalnız arama görevi
+  üretebilir — güvenlik sınırı.
+- `.env.example` / `infra/.env.example` yalnız **anahtar adı** taşır; değer yazmayın.
+- `apps/web/lib/types.ts` şema jeneratöründen üretilir (`make schemas`); `Platform`
+  enum'una ekleme yaptıysanız jeneratörü çalıştırıp farkı commit edin.

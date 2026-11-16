@@ -102,6 +102,15 @@ async def _scan_event_stream(scan_id: str, initial_status: str) -> AsyncIterator
                 return
     finally:
         if queue is not None:
+            dropped = getattr(queue, "dropped", 0)
+            if dropped:
+                # Yavas istemci: olay kaybi sessiz kalmasin (SEC-16)
+                logger.warning(
+                    "SSE akisi kapandi (scan=%s): %d olay dusuruldu (kapasite=%d)",
+                    scan_id,
+                    dropped,
+                    getattr(queue, "maxsize", 0),
+                )
             event_broadcaster.unsubscribe(scan_id, queue)
         remaining_connections = _sse_connections.get(scan_id, 1) - 1
         if remaining_connections > 0:

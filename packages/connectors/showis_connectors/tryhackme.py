@@ -20,6 +20,11 @@ from .websearch.base import SearchProvider
 
 THM_PROFILE_RE = re.compile(r"tryhackme\.com/p/([A-Za-z0-9_.-]+)", re.IGNORECASE)
 
+#: UUID bicimli platform kimlikleri kullanici adi sayilmaz (T-347)
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
+)
+
 # TryHackMe profil metninden alan cikarimi icin regex'ler
 _RANK_RE = re.compile(r"rank[^\d]{0,15}(?:#\s*)?([\d,]{1,10})", re.IGNORECASE)
 _STREAK_RE = re.compile(r"streak[^\d]{0,15}(\d{1,4})", re.IGNORECASE)
@@ -104,7 +109,14 @@ class TryHackMeConnector(RenderedProfileConnector):
         text = data.get("text_excerpt", "")
 
         # THM'e ozgu alanlar
-        data["username"] = identifier
+        # T-347: URL'den gelen kimlik normalde kullanici adidir; uuid ise
+        # kullanici adi sayilmaz, `platform_user_id` olarak saklanir.
+        if _UUID_RE.match(str(identifier or "")):
+            data["platform_user_id"] = identifier
+            data.pop("username", None)
+        else:
+            data["username"] = identifier
+            data["platform_user_id"] = identifier
         data["rank"] = _first_int(_RANK_RE, text)
         data["streak"] = _first_int(_STREAK_RE, text)
         data["rooms_completed"] = _first_int(_ROOMS_DONE_RE, text) or _first_int(
@@ -135,4 +147,7 @@ class TryHackMeConnector(RenderedProfileConnector):
         # display_name -> name (resolver name_similarity icin)
         if data.get("display_name"):
             attrs["name"] = data["display_name"]
+        for key in ("username", "platform_user_id", "joined_at", "created_at", "bio"):
+            if data.get(key) is not None:
+                attrs[key] = data[key]
         return attrs

@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import os
 import uuid
 from collections import deque
 from contextlib import suppress
@@ -75,7 +74,12 @@ from showis_engine.llm_explainer import FindingExplainer
 from showis_engine.planner import QueryPlanner
 from showis_engine.policy import PolicyViolationError, enforce_tier
 from showis_engine.resolver import Resolver
-from showis_engine.scan_modes import skipped_connectors, task_allowed, variant_cap
+from showis_engine.scan_modes import (
+    resolve_concurrency,
+    skipped_connectors,
+    task_allowed,
+    variant_cap,
+)
 from showis_engine.variants import generate_variants
 from showis_llm import LLMClient
 from sqlalchemy import CursorResult, select, update
@@ -86,25 +90,25 @@ logger = logging.getLogger("showis.scanner")
 #: Tek taramada LLM ile aciklanacak azami bulgu (her cagri ~6 sn)
 _MAX_LLM_EXPLANATIONS = 12
 
-#: Paralel gorev yurutme varsayilani / sinirlari.
+#: OLAY BEKLEME DILIMI (T-322): `asyncio.wait` en fazla bu kadar bekler, sonra
+#: dongu basi iptal/butce durumunu yeniden degerlendirir. Asili gorev taramayi
+#: sonsuza kadar bekletemez; 1 sn, iptal gecikmesini kabul edilebilir tutar.
+_WAIT_SLICE = 1.0
+
+#: Paralel gorev yurutme varsayilani / sinirlari (cozumleme `scan_modes`).
 #: `SHOWIS_SCAN_CONCURRENCY=1` eski sirali davranisi birebir korur.
 _DEFAULT_SCAN_CONCURRENCY = 4
 _MIN_SCAN_CONCURRENCY = 1
 _MAX_SCAN_CONCURRENCY = 8
 
 
-def scan_concurrency(explicit: int | None = None) -> int:
-    """Gorev es zamanlilik sinirini cozer (acik deger > env > varsayilan, 1..8)."""
-    if explicit is not None:
-        value = explicit
-    else:
-        raw = os.getenv("SHOWIS_SCAN_CONCURRENCY", str(_DEFAULT_SCAN_CONCURRENCY))
-        try:
-            value = int(str(raw).strip())
-        except ValueError:
-            logger.warning("Gecersiz SHOWIS_SCAN_CONCURRENCY=%r, varsayilan kullanilir", raw)
-            value = _DEFAULT_SCAN_CONCURRENCY
-    return max(_MIN_SCAN_CONCURRENCY, min(_MAX_SCAN_CONCURRENCY, value))
+def scan_concurrency(explicit: int | None = None, mode: str | None = None) -> int:
+    """Gorev es zamanlilik sinirini cozer: acik deger > env > **mod profili** > varsayilan.
+
+    T-321: mod bazli varsayilanlar (`O1=2, O2=6, O3=8`) `scan_modes.MODE_PROFILES`
+    icinde tek kaynakta; env (`SHOWIS_SCAN_CONCURRENCY`) her zaman onlari ezer.
+    """
+    return resolve_concurrency(mode, explicit=explicit)
 
 
 @dataclass
@@ -236,6 +240,11 @@ class ScannerService:
                     )
             except Exception:
                 logger.exception("Scan %s hata durumu yazilamadi", scan_id)
+        finally:
+            # T-344/B: `_cancel_events` sinif duzeyinde (surec geneli) bir sozluk;
+            # hata yolunda temizlenmezse ayni scan_id icin bayat "iptal" isareti
+            # kalir ve bellek sizar. Basarili yol zaten temizliyor (idempotent).
+            self.clear_cancel(scan_id)
 
     async def _run_scan(self, scan_id: str, db: AsyncSession) -> None:
         res = await db.execute(select(Scan).where(Scan.id == scan_id))
@@ -378,7 +387,7 @@ class ScannerService:
         edge_map: dict[str, Edge] = {}
         seed_emails = {s.email.lower() for s in seeds if s.email}
 
-        concurrency = scan_concurrency(self.concurrency)
+        concurrency = scan_concurrency(self.concurrency, scan.mode)
         if concurrency > 1:
             await event_broadcaster.broadcast(
                 scan.id,
@@ -730,11 +739,12 @@ class ScannerService:
             now = datetime.now(timezone.utc)
 
             if outcome.error is not None:
-                stats.http_requests += outcome.requests
                 db_task.status = "failed"
                 db_task.error = str(outcome.error)
                 db_task.finished_at = now
                 await db.commit()
+                # Sayac yalniz commit basariliysa artar (T-344/A)
+                stats.http_requests += outcome.requests
                 if outcome.budget_exceeded:
                     # Kalan gorevler dispatch edilmesin (fail-closed butce)
                     stats.budget_hit = "max_http_requests"
@@ -744,8 +754,6 @@ class ScannerService:
                 return
 
             obs_list = outcome.observations
-            # Butce gercek istek sayisini sayar (bir gorev ~35 istek atabilir)
-            stats.http_requests += max(1, outcome.requests)
             db_task.status = "done"
             db_task.observation_count = len(obs_list)
             db_task.finished_at = now
@@ -765,6 +773,13 @@ class ScannerService:
                     },
                 )
             )
+
+            # T-344/A: bellek durumu (entity_map/edge_map) ve sayaclar COMMIT
+            # basarili olduktan sonra guncellenir; aksi halde commit hatasinda
+            # findings DB'de var olmayan entity/kanitlara isaret ediyordu.
+            pending_entities: dict[str, Entity] = {}
+            pending_edges: dict[str, Edge] = {}
+            new_observations = 0
 
             for obs in obs_list:
                 # Kanitlari DB'ye yaz (expires_at = case retention)
@@ -799,20 +814,20 @@ class ScannerService:
                     error=obs.error,
                 )
                 db.add(db_obs)
-                stats.total_observations += 1
+                new_observations += 1
 
                 # Normalize into entities + edges (sirali merge -> deterministik)
                 ents, edges = connector.normalize(obs)
                 for ent in ents:
-                    existing = entity_map.get(ent.id)
+                    existing = pending_entities.get(ent.id)
                     if existing is None:
-                        entity_map[ent.id] = ent
+                        pending_entities[ent.id] = ent
                     else:
                         _merge_entity(existing, ent)
                     # Entity'ler step 2b'de toplu yazilir (dedupe + merge sonrasi)
 
                 for edge in edges:
-                    edge_map[edge.id] = edge
+                    pending_edges[edge.id] = edge
 
                 await event_broadcaster.broadcast(
                     scan_id,
@@ -828,6 +843,17 @@ class ScannerService:
                 scan_id, "task.finished", {"task_id": db_task.id, "observations": len(obs_list)}
             )
             await db.commit()
+
+            # Commit basarili: simdi bellek durumunu ve sayaclari guncelle.
+            for ent_id, ent in pending_entities.items():
+                existing = entity_map.get(ent_id)
+                if existing is None:
+                    entity_map[ent_id] = ent
+                else:
+                    _merge_entity(existing, ent)
+            edge_map.update(pending_edges)
+            stats.total_observations += new_observations
+            stats.http_requests += max(1, outcome.requests)
 
             # Artimli skorlama: bulgular tarama bitmeden Bulgular sekmesine duser
             if stats.executed % 10 == 0:
@@ -863,7 +889,11 @@ class ScannerService:
 
         try:
             while True:
-                if not stats.cancelled and await _is_cancelled():
+                # T-322: iptal sinyali `asyncio.wait`e varmadan gelebilir; bu durumda
+                # `cancel_waiter` zaten done olur ve waiters'a eklenmez. Event'i her turda
+                # ayrica kontrol etmek bu yarisi kapatir (DB kontrolu tek basina yetmez:
+                # event, iptal ucunun DB commit'i ile ayni anda set edilir).
+                if not stats.cancelled and (cancel_event.is_set() or await _is_cancelled()):
                     # Iptal: yeni gorev dispatch edilmez, ucustakiler kesilir.
                     # Durum DB'ye de yazilir (kanal tek basina da tutarli kalsin).
                     stats.cancelled = True
@@ -894,10 +924,28 @@ class ScannerService:
                 waiters: set[asyncio.Task[Any]] = set(inflight)
                 if not stats.cancelled and not cancel_waiter.done():
                     waiters.add(cancel_waiter)
-                done, _ = await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+                # T-322: en fazla `_WAIT_SLICE` saniye beklenir; sonra dongu basi
+                # durumu (iptal, max_wall_seconds, yeni beklemedeki gorevler)
+                # yeniden degerlendirir. Asili kalan bir gorev taramayi sonsuza
+                # kadar bekletemez.
+                done, _ = await asyncio.wait(
+                    waiters,
+                    return_when=asyncio.FIRST_COMPLETED,
+                    timeout=_WAIT_SLICE,
+                )
                 # Iptal sinyali bir gorev degil: sadece uyandirir
                 done.discard(cancel_waiter)
                 if not done:
+                    # Zaman asimi: duvar saati butcesi asildiysa ucanlari kes
+                    # (aksi halde asili gorev yuzunden tarama hic bitmez).
+                    if not stats.cancelled and _budget_reason() == "max_wall_seconds":
+                        stats.budget_hit = "max_wall_seconds"
+                        logger.warning(
+                            "Tarama %s: duvar saati butcesi asildi, ucan gorevler iptal ediliyor",
+                            scan_id,
+                        )
+                        for running in inflight:
+                            running.cancel()
                     continue
                 # Ayni turda biten gorevler planlama sirasina gore yazilir:
                 # entity merge'i tekrar uretilebilir kalsin.
@@ -1067,6 +1115,9 @@ class ScannerService:
                 breakdown=finding.breakdown.model_dump(),
                 explanation=finding.explanation,
                 evidence_ids=finding.evidence_ids,
+                # T-326/T-301: sahte/atil hesap sinyali DB'de kalici (0004 migration).
+                authenticity=finding.authenticity,
+                authenticity_reasons=finding.authenticity_reasons or [],
             )
             # SEC-15: kullanicinin confirmed/rejected karari yeniden taramada
             # EZILMEZ. Karar varsa (verified_at dolu veya status candidate degil)
@@ -1081,6 +1132,9 @@ class ScannerService:
                 existing.score = db_finding.score
                 existing.breakdown = db_finding.breakdown
                 existing.explanation = db_finding.explanation
+                # Kullanici karari korunur; kanit sinyalleri (skor gibi) guncellenir.
+                existing.authenticity = db_finding.authenticity
+                existing.authenticity_reasons = db_finding.authenticity_reasons
             else:
                 existing.scan_id = db_finding.scan_id
                 existing.entity_id = db_finding.entity_id

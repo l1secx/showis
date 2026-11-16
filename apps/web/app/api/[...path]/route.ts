@@ -13,6 +13,13 @@ import type { NextRequest } from "next/server";
  * SSE (`/api/v1/scans/{id}/events`) de buradan geçer: `EventSource` özel header
  * gönderemez, ama yanıt `upstream.body` olarak aynen akıtıldığı için token sunucu
  * tarafında eklenmiş olur ve canlı akış bozulmaz.
+ *
+ * İptal (T-342): upstream `fetch` çağrısına `signal: request.signal` verilir; istemci
+ * bağlantıyı kapatınca (sekme kapanır, SSE dinleyicisi ayrılır) API'ye giden istek de
+ * iptal edilir — başıboş SSE akışları birikmez.
+ *
+ * Gövde (T-342): `Content-Length` 10 MB'ı aşarsa istek hiç okunmadan 413 döner; gövde
+ * tamponlanmadan (`duplex: "half"`) akıtılır ve akış sırasında da 10 MB tavanı uygulanır.
  */
 
 export const runtime = "nodejs";
@@ -20,6 +27,9 @@ export const dynamic = "force-dynamic";
 
 const API_URL = (process.env.API_URL || "http://localhost:8000").replace(/\/+$/, "");
 const API_TOKEN = process.env.SHOWIS_API_TOKEN?.trim() || "";
+
+/** Caddy'nin 10 MB tavanıyla aynı — proxy tarafında savunma katmanı. */
+const MAX_BODY_BYTES = 10 * 1024 * 1024;
 
 /** Uçtan uca taşınmaması gereken hop-by-hop başlıklar. */
 const HOP_BY_HOP = new Set([
@@ -31,9 +41,66 @@ const HOP_BY_HOP = new Set([
   "trailer",
   "transfer-encoding",
   "upgrade",
+  // undici (fetch) 100-continue akışını desteklemez: istemcinin `Expect` başlığı
+  // upstream'e taşınırsa istek "expect header not supported" ile düşer (T-342).
+  "expect",
 ]);
 
 type RouteContext = { params: Promise<{ path: string[] }> };
+type FetchInitWithDuplex = RequestInit & { duplex?: "half" };
+
+class BodyTooLargeError extends Error {
+  constructor() {
+    super("BODY_TOO_LARGE");
+    this.name = "BodyTooLargeError";
+  }
+}
+
+/** 10 MB üstü gövde: savunma katmanı (Caddy tavanı zaten var, bu ikinci kat). */
+function payloadTooLarge(): Response {
+  return Response.json(
+    { detail: "İstek gövdesi çok büyük (üst sınır 10 MB)" },
+    { status: 413 }
+  );
+}
+
+/** undici hatayı `fetch failed` + `cause` zinciriyle sarar: tavan aşımını zincirde ara. */
+function isBodyTooLarge(error: unknown, depth = 0): boolean {
+  if (!error || depth > 4) return false;
+  if (error instanceof BodyTooLargeError) return true;
+  const message = error instanceof Error ? error.message : "";
+  if (message.includes("BODY_TOO_LARGE")) return true;
+  return isBodyTooLarge((error as { cause?: unknown }).cause, depth + 1);
+}
+
+/** İstemci kaynaklı iptal: AbortError, TimeoutError veya Next'in ResponseAborted'ı. */
+function isAbortError(error: unknown, depth = 0): boolean {
+  if (!error || depth > 4) return false;
+  const name = error instanceof Error ? error.name : "";
+  if (name === "AbortError" || name === "TimeoutError" || name === "ResponseAborted") {
+    return true;
+  }
+  return isAbortError((error as { cause?: unknown }).cause, depth + 1);
+}
+
+/** Akışı sayarak geçirir; tavan aşılırsa akışı hataya düşürür (bellek şişmez). */
+function limitedBodyStream(
+  stream: ReadableStream<Uint8Array>
+): ReadableStream<Uint8Array> {
+  let total = 0;
+  return stream.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        total += chunk.byteLength;
+        if (total > MAX_BODY_BYTES) {
+          controller.error(new BodyTooLargeError());
+          return;
+        }
+        controller.enqueue(chunk);
+      },
+    })
+  );
+}
 
 async function proxy(request: NextRequest, context: RouteContext) {
   const { path } = await context.params;
@@ -61,18 +128,47 @@ async function proxy(request: NextRequest, context: RouteContext) {
   if (API_TOKEN) headers.set("X-API-Token", API_TOKEN);
 
   const method = request.method.toUpperCase();
-  const body = method === "GET" || method === "HEAD" ? undefined : await request.arrayBuffer();
+  const hasBody = method !== "GET" && method !== "HEAD";
+
+  // Bildirilen boyut tavanı aşıyorsa gövdeyi hiç okumadan reddet.
+  const declaredLength = Number(request.headers.get("content-length") ?? "");
+  if (hasBody && Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES) {
+    return payloadTooLarge();
+  }
+
+  const init: FetchInitWithDuplex = {
+    method,
+    headers,
+    redirect: "manual",
+    cache: "no-store",
+    // T-342: istemci kapanınca upstream isteği de iptal edilir (SSE sızıntısı yok).
+    signal: request.signal,
+  };
+
+  if (hasBody) {
+    if (request.body) {
+      // T-342: tamponlamak yerine akıt (duplex: "half" — Node/undici streaming gövde).
+      init.body = limitedBodyStream(request.body);
+      init.duplex = "half";
+    } else {
+      init.body = new ArrayBuffer(0);
+    }
+  }
 
   let upstream: Response;
   try {
-    upstream = await fetch(target, {
-      method,
-      headers,
-      body,
-      redirect: "manual",
-      cache: "no-store",
-    });
-  } catch {
+    upstream = await fetch(target, init);
+  } catch (error) {
+    if (isAbortError(error)) {
+      // İstemci gitti: sessiz kapanış (log'a hata olarak yazma).
+      console.debug("[api-proxy] istemci isteği iptal etti:", target.pathname);
+      return new Response(null, { status: 499 });
+    }
+    // Akış sırasında tavan aşımı: undici hatayı `fetch failed` + cause olarak sarar.
+    if (isBodyTooLarge(error)) {
+      return payloadTooLarge();
+    }
+    console.error("[api-proxy] upstream hatası:", error);
     return Response.json(
       { detail: "API'ye ulaşılamadı (servis kapalı veya yapılandırma hatalı)" },
       { status: 502 }

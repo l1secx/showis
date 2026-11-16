@@ -1,0 +1,41 @@
+# Showis BROWSER servisi bagimlilik kilidi (T-337, T-341)
+#
+# Neden ayri lock: `showis-browser` yalnizca HTTP API + engine calistirir. Ana
+# `infra/requirements.lock` icindeki celery/sqlalchemy/alembic/asyncpg/reportlab gibi agir
+# runtime paketleri tarayici imajinda gereksiz (imaji sisirir, saldiri yuzeyini buyutur).
+#
+# KURAL: ana lock ile ortak paketlerde surumler BIREBIR aynidir (elle surum yazilmaz).
+#   * Tohum: fastapi, uvicorn, pydantic, httpx (servis) + pillow (engine bagimliligi)
+#   * T-341: `playwright==1.55.0` — base imajdaki tarayici ikilileriyle ESLESEN surum
+#     (dogrulama: `playwright install --dry-run chromium` -> Install location:
+#     /ms-playwright/chromium-1187; imajda chromium-1187 hazir). Base imajda Python
+#     paketi YOKTU; bu yuzden servis aylarca httpx fallback'inde calisiyordu.
+#   * `greenlet` (3.5.6) ve `pyee` (13.0.1) playwright'in bagimliliklari; greenlet ana
+#     lock'ta da ayni surumde, pyee yalnizca tarayici tarafinda.
+#   * Tarayici ikilileri (chromium/firefox/webkit) imajdan gelir — `playwright install`
+#     CALISTIRILMAZ (imaj zaten hazir kuruyor, indirme yok).
+#
+# BAKIM: ortak satirlar `infra/requirements.lock`'tan birebir kopyalanir; yeni bir
+# transitif bagimlilik cikarsa imajda `pip freeze` ile closure yeniden olculur.
+
+annotated-doc==0.0.6
+annotated-types==0.8.0
+anyio==4.16.0
+certifi==2026.10.23
+click==8.5.1
+fastapi==0.163.1
+greenlet==3.5.6
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.20
+opentelemetry-api==1.45.2
+pillow==13.0.0
+playwright==1.55.0
+pyee==13.0.1
+pydantic==2.14.3
+pydantic_core==2.50.4
+starlette==1.10.0
+typing-inspection==0.4.5
+typing_extensions==4.16.0
+uvicorn==0.54.0

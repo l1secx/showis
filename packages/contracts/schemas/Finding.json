@@ -48,6 +48,7 @@
     },
     "FindingStatus": {
       "enum": [
+        "lead",
         "candidate",
         "confirmed",
         "rejected"
@@ -73,6 +74,7 @@
         "chess",
         "leetcode",
         "codeforces",
+        "stackoverflow",
         "bitbucket",
         "codeberg",
         "codepen",
@@ -216,6 +218,25 @@
       ],
       "default": null,
       "title": "Verified At"
+    },
+    "authenticity": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Authenticity"
+    },
+    "authenticity_reasons": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Authenticity Reasons",
+      "type": "array"
     }
   },
   "required": [

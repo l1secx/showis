@@ -11,8 +11,9 @@ Sure tahmini iki katmandan olusur:
    varsayilanlarin yerine gecer; yoksa/bozuksa sessizce varsayilana donulur.
 
 Paralel yurutme (T-101) ag-bekleme agir adimlari hizlandirdigi icin tahmin,
-``SHOWIS_SCAN_CONCURRENCY`` (varsayilan 4, 1..8) ile olceklenir. Deger 1 iken
-tahmin siralı yurutmenin tahminine **birebir** esittir.
+es zamanlilik ile olceklenir. Cozumleme sirasi (T-321): **env** (``SHOWIS_SCAN_CONCURRENCY``)
+> **mod profili** (O1=2, O2=6, O3=8) > varsayilan. Deger 1 iken tahmin sirali
+yurutmenin tahminine **birebir** esittir.
 """
 
 from __future__ import annotations
@@ -42,6 +43,7 @@ MODE_PROFILES: dict[str, dict[str, int]] = {
         "max_wall_seconds": 420,
         "usernames": 0,
         "variant_tasks": 2,
+        "concurrency": 2,
     },
     "O2": {
         "max_tasks": 260,
@@ -49,6 +51,7 @@ MODE_PROFILES: dict[str, dict[str, int]] = {
         "max_wall_seconds": 1200,
         "usernames": 6,
         "variant_tasks": 6,
+        "concurrency": 6,
     },
     "O3": {
         "max_tasks": 420,
@@ -56,6 +59,7 @@ MODE_PROFILES: dict[str, dict[str, int]] = {
         "max_wall_seconds": 1800,
         "usernames": 10,
         "variant_tasks": 10,
+        "concurrency": 8,
     },
 }
 
@@ -213,24 +217,49 @@ def effective_costs(calibration: Calibration | None = None) -> dict[str, float]:
     return costs
 
 
-def scan_concurrency() -> int:
-    """``SHOWIS_SCAN_CONCURRENCY`` (varsayilan 4, 1..8 araligina kirpilir)."""
-    raw = os.getenv(CONCURRENCY_ENV)
-    if raw is None or not str(raw).strip():
+def profile_concurrency(mode: str | None = None) -> int:
+    """Modun varsayilan es zamanlilik degeri (O1=2, O2=6, O3=8).
+
+    Gerekce (T-321, canli O2 olcumu): 140 gorevde ortalama yurutme 6.3 sn, ortalama
+    kuyruk beklemesi 76.5 sn, etkin paralellik ~2.6x idi — yani gorevler hizli,
+    sirada bekliyordu. Host limiter zaten host basina 2 istekle nezaketi korudugu
+    icin gorev seviyesinde paralelligi artirmak guvenli.
+    """
+    if mode is None:
         return DEFAULT_CONCURRENCY
-    try:
-        value = int(str(raw).strip())
-    except ValueError:
-        logger.warning("%s sayisal degil (%r), varsayilan %s", CONCURRENCY_ENV, raw,
-                       DEFAULT_CONCURRENCY)
-        return DEFAULT_CONCURRENCY
+    return int(MODE_PROFILES[norm_mode(mode)]["concurrency"])
+
+
+def resolve_concurrency(mode: str | None = None, explicit: int | None = None) -> int:
+    """Es zamanlilik: acik deger > env > mod profili > varsayilan (1..8 kirpilir)."""
+    if explicit is not None:
+        value = explicit
+    else:
+        raw = os.getenv(CONCURRENCY_ENV)
+        if raw is not None and str(raw).strip():
+            try:
+                value = int(str(raw).strip())
+            except ValueError:
+                logger.warning(
+                    "%s sayisal degil (%r), mod profili kullanilacak",
+                    CONCURRENCY_ENV,
+                    raw,
+                )
+                value = profile_concurrency(mode)
+        else:
+            value = profile_concurrency(mode)
     if value < MIN_CONCURRENCY:
-        logger.warning("%s=%s cok kucuk, %s kullanilacak", CONCURRENCY_ENV, value, MIN_CONCURRENCY)
+        logger.warning("Es zamanlilik %s cok kucuk, %s kullanilacak", value, MIN_CONCURRENCY)
         return MIN_CONCURRENCY
     if value > MAX_CONCURRENCY:
-        logger.warning("%s=%s cok buyuk, %s kullanilacak", CONCURRENCY_ENV, value, MAX_CONCURRENCY)
+        logger.warning("Es zamanlilik %s cok buyuk, %s kullanilacak", value, MAX_CONCURRENCY)
         return MAX_CONCURRENCY
     return value
+
+
+def scan_concurrency(mode: str | None = None) -> int:
+    """Geriye donuk uyumlu sarmalayici: ``resolve_concurrency(mode)``."""
+    return resolve_concurrency(mode)
 
 
 def norm_mode(mode: str | None) -> str:
@@ -294,7 +323,7 @@ def estimate_scan(
     profile = MODE_PROFILES[norm_mode(mode)]
     calibration = load_calibration(calibration_path)
     costs = effective_costs(calibration)
-    concurrency = scan_concurrency()
+    concurrency = resolve_concurrency(norm_mode(mode))
 
     hints = target.hints or {}
     variants = generate_variants(target.first_name, target.last_name, hints).variants

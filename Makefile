@@ -1,4 +1,4 @@
-.PHONY: help dev lint typecheck test schemas docker-up docker-down backup restore demo demo-smoke seed-keys eval
+.PHONY: help dev lint typecheck test schemas docker-up docker-down backup restore demo demo-smoke seed-keys eval gate
 
 PYTHON ?= .venv/bin/python
 PIP ?= .venv/bin/pip
@@ -52,6 +52,9 @@ demo-smoke:
 
 eval:
 	PYTHONPATH=apps/api:packages/contracts:packages/settings:packages/llm:packages/engine:packages/connectors $(PYTHON) tests/eval/run_eval.py
+
+gate:
+	bash scripts/final_gate.sh
 
 seed-keys:
 	bash infra/scripts/seed_keys.sh

@@ -24,6 +24,7 @@ from showis_contracts import (
     ScanContext,
     Seed,
     TaskSpec,
+    make_entity_id,
 )
 from showis_engine.http import EvidenceStore, HttpClient
 
@@ -259,7 +260,7 @@ class PublicProfileConnector:
         ident = str(obs.data.get("identifier") or obs.subject)
         ev_ids = [ev.id for ev in obs.evidence]
         entity = Entity(
-            id=f"{self.platform.value}:{ident}",
+            id=make_entity_id(self.platform.value, str(ident)),
             type=EntityType.ACCOUNT,
             platform=self.platform,
             label=str(obs.data.get("name") or obs.data.get("display_name") or ident),

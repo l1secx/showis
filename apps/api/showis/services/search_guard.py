@@ -40,7 +40,8 @@ class SearchProviderSanitizer:
         site: str | None = None,
     ) -> list[SearchHit]:
         try:
-            return await self._inner.search(query, limit=limit, site=site)
+            hits = await self._inner.search(query, limit=limit, site=site)
+            return list(hits)
         except SearchProviderError:
             raise
         except Exception as exc:  # noqa: BLE001 - her saglayici hatasi sirsizlastirilir

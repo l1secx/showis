@@ -23,6 +23,7 @@ from showis_contracts import (
     ScanContext,
     Seed,
     TaskSpec,
+    make_entity_id,
 )
 from showis_engine.http import EvidenceStore, HttpClient
 
@@ -252,7 +253,7 @@ class SiteCheckConnector:
 
             entities.append(
                 Entity(
-                    id=f"{platform.value}:{username}",
+                    id=make_entity_id(platform.value, str(username)),
                     type=EntityType.ACCOUNT,
                     platform=platform,
                     label=username,

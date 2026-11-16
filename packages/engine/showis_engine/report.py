@@ -1,8 +1,14 @@
-"""Rapor üretimi — PDF (Türkçe) + JSON dışa aktarma.
+"""Rapor üretimi — PDF (Türkçe) + JSON + HTML dışa aktarma.
 
 PDF için reportlab kullanılır; sistemde DejaVuSans TTF bulunursa Türkçe
 karakterler doğru gömülür, bulunamazsa Helvetica + ASCII-normalleştirme
 yedeğine düşülür.
+
+Güvenlik (T-313): tüm metin üretimi **Jinja2** ile ve `autoescape=True` ortamında
+yapılır. Kullanıcı verisi hiçbir zaman şablon olarak derlenmez; `{{7*7}}`,
+`${...}`, `<script>` gibi girdiler kaçışlanmış (escaped) metin olarak çıkar.
+`reportlab` `Paragraph` hücreleri de XML-escape'li metinle beslenir; böylece
+`<b>`/`<br/>` enjeksiyonu PDF'i bozamaz.
 """
 
 from __future__ import annotations
@@ -11,8 +17,11 @@ import html
 import json
 import logging
 import unicodedata
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+from jinja2 import Environment
 
 logger = logging.getLogger("showis.report")
 
@@ -30,6 +39,21 @@ _FONT_BOLD_CANDIDATES = [
 _FONT_REGULAR = "Helvetica"
 _FONT_BOLD = "Helvetica-Bold"
 _FONT_REGISTERED = False
+
+#: HTML/PDF metin üretiminde kullanılan tek ortam — autoescape DAİMA açık.
+#: Kullanıcı verisi `{{ }}` ile basılır ve Jinja tarafından kaçışlanır; şablon
+#: olarak **derlenmez** (SSTI yok).
+report_env = Environment(autoescape=True, trim_blocks=True, lstrip_blocks=True)
+
+_STATUS_LABELS = {
+    "confirmed": "Doğrulandı",
+    "candidate": "Aday",
+    "lead": "İpucu",
+    "rejected": "Reddedildi",
+}
+
+#: Kronoloji için kabul edilen tarih attribute'ları (T-301 ile aynı adlar)
+_DATE_ATTRIBUTES = ("created_at", "joined_at", "created", "ctime")
 
 
 def _find_font(candidates: list[str]) -> str | None:
@@ -77,17 +101,464 @@ def _t(text: Any) -> str:
 
 
 def _e(text: Any) -> str:
-    """Kullanici verisi icin Paragraph-guvenli metin: XML-escape + Turkce fallback.
-
-    Paragraph mini-HTML parser & < > karakterlerini yorumlar; URL'lerdeki
-    '&' veya '<script>' benzeri icerik PDF uretimini kirar.
-    """
+    """Kullanıcı verisi için Paragraph-güvenli metin: XML-escape + Türkçe fallback."""
     return _t(html.escape("" if text is None else str(text), quote=False))
 
 
+# ---------------------------------------------------------------------------
+# Ortak bölüm verisi (JSON + PDF + HTML aynı kaynaktan beslenir)
+# ---------------------------------------------------------------------------
+
+
+def _norm_username(value: Any) -> str:
+    return str(value or "").strip().lstrip("@").lower()
+
+
+def _as_iso(value: Any) -> str | None:
+    """Tarih değerini ISO 8601 metnine indirger (epoch / ISO / None)."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if value <= 0:
+            return None
+        try:
+            return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat()
+        except (OverflowError, OSError, ValueError):
+            return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.isdigit():
+        try:
+            return datetime.fromtimestamp(int(text), tz=timezone.utc).isoformat()
+        except (OverflowError, OSError, ValueError):
+            return None
+    return text
+
+
+def _entity_username(entity: dict[str, Any]) -> str:
+    attrs = entity.get("attributes") or {}
+    raw = attrs.get("username") or attrs.get("login") or entity.get("label")
+    return _norm_username(raw)
+
+
+def _one_line_reason(finding: dict[str, Any], limit: int = 120) -> str:
+    """Bulgu için tek satır gerekçe: açıklama veya en güçlü sinyal."""
+    explanation = (finding.get("explanation") or "").strip()
+    if explanation:
+        first_line = explanation.splitlines()[0].strip()
+        return first_line[:limit] + ("…" if len(first_line) > limit else "")
+    breakdown = {
+        k: v
+        for k, v in (finding.get("breakdown") or {}).items()
+        if k != "total" and isinstance(v, (int, float)) and v
+    }
+    if breakdown:
+        key, value = max(breakdown.items(), key=lambda item: float(item[1]))
+        return f"En güçlü sinyal: {key}={float(value):.2f}"
+    return "Sinyal kırılımı yok"
+
+
+def build_report_sections(report_data: dict[str, Any]) -> dict[str, Any]:
+    """Raporun karar-odaklı bölümlerini üretir (JSON/PDF/HTML ortak kaynak).
+
+    Dönen yapı API sözleşmesine **eklenir**; mevcut alanlar değişmez.
+    """
+    case = report_data.get("case") or {}
+    target = report_data.get("target") or {}
+    findings: list[dict[str, Any]] = list(report_data.get("findings") or [])
+    entities: list[dict[str, Any]] = list(report_data.get("entities") or [])
+    evidence: list[dict[str, Any]] = list(report_data.get("evidence") or [])
+    edges: list[dict[str, Any]] = list(report_data.get("edges") or [])
+    scan = report_data.get("scan") or {}
+
+    # --- durum dağılımı ---------------------------------------------------
+    status_counts = {status: 0 for status in _STATUS_LABELS}
+    for finding in findings:
+        status = str(finding.get("status") or "")
+        status_counts[status] = status_counts.get(status, 0) + 1
+
+    # --- platform dağılımı ------------------------------------------------
+    platform_scores: dict[str, list[float]] = {}
+    for finding in findings:
+        platform = str(finding.get("platform") or "unknown")
+        platform_scores.setdefault(platform, []).append(float(finding.get("score") or 0.0))
+    platform_distribution = [
+        {
+            "platform": platform,
+            "findings": len(scores),
+            "max_score": round(max(scores), 3) if scores else 0.0,
+            "avg_score": round(sum(scores) / len(scores), 3) if scores else 0.0,
+        }
+        for platform, scores in sorted(
+            platform_scores.items(), key=lambda item: (-max(item[1]), item[0])
+        )
+    ]
+
+    # --- en yüksek 5 bulgu ------------------------------------------------
+    top_findings = [
+        {
+            "platform": str(finding.get("platform") or ""),
+            "label": str(finding.get("label") or ""),
+            "status": str(finding.get("status") or ""),
+            "score": round(float(finding.get("score") or 0.0), 3),
+            "reason": _one_line_reason(finding),
+            "url": finding.get("url"),
+        }
+        for finding in sorted(
+            findings, key=lambda item: float(item.get("score") or 0.0), reverse=True
+        )[:5]
+    ]
+
+    # --- kimlik / çapraz bağlantı ----------------------------------------
+    username_groups: dict[str, dict[str, Any]] = {}
+    for entity in entities:
+        username = _entity_username(entity)
+        if not username:
+            continue
+        group = username_groups.setdefault(
+            username, {"username": username, "platforms": [], "entities": 0}
+        )
+        platform = str(entity.get("platform") or "unknown")
+        if platform not in group["platforms"]:
+            group["platforms"].append(platform)
+        group["entities"] += 1
+
+    groups = sorted(
+        username_groups.values(), key=lambda item: (-len(item["platforms"]), item["username"])
+    )
+    shared_username_groups = [group for group in groups if len(group["platforms"]) >= 2]
+
+    max_platforms = max((len(group["platforms"]) for group in groups), default=0)
+    if max_platforms >= 3:
+        confidence_note = (
+            f"{max_platforms} platformda aynı kullanıcı adı görüldü → "
+            "kimlik eşleşmesi **yüksek olasılıklı**."
+        )
+    elif max_platforms == 2:
+        confidence_note = (
+            "2 platformda aynı kullanıcı adı görüldü → orta olasılıklı eşleşme; "
+            "kanıt URL'leriyle doğrulanmalı."
+        )
+    else:
+        confidence_note = (
+            "Platformlar arasında paylaşılan kullanıcı adı yok → eşleşme düşük olasılıklı, "
+            "her bulgu tek başına değerlendirilmeli."
+        )
+
+    identity_links = {
+        "edges": [
+            {
+                "type": str(edge.get("type") or ""),
+                "source": str(edge.get("source_entity_id") or ""),
+                "target": str(edge.get("target_entity_id") or ""),
+                "confidence": round(float(edge.get("confidence") or 0.0), 3),
+                "reason": edge.get("reason"),
+            }
+            for edge in sorted(
+                edges, key=lambda item: float(item.get("confidence") or 0.0), reverse=True
+            )
+        ],
+        "shared_username_groups": shared_username_groups,
+        "confidence_note": confidence_note,
+    }
+
+    # --- kronoloji --------------------------------------------------------
+    timeline: list[dict[str, Any]] = []
+    for entity in entities:
+        attrs = entity.get("attributes") or {}
+        for key in _DATE_ATTRIBUTES:
+            value = _as_iso(attrs.get(key))
+            if value:
+                timeline.append(
+                    {
+                        "date": value,
+                        "platform": str(entity.get("platform") or "unknown"),
+                        "label": str(entity.get("label") or _entity_username(entity)),
+                        "event": key,
+                        "url": entity.get("url"),
+                    }
+                )
+                break
+    timeline.sort(key=lambda item: item["date"])
+
+    # --- kanıt özeti ------------------------------------------------------
+    evidence_by_entity: list[dict[str, Any]] = []
+    evidence_ids: set[str] = {str(ev.get("id")) for ev in evidence if ev.get("id")}
+    for entity in entities:
+        count = len((entity.get("evidence_ids") or []))
+        if count:
+            evidence_by_entity.append(
+                {
+                    "entity_id": str(entity.get("id") or ""),
+                    "platform": str(entity.get("platform") or ""),
+                    "label": str(entity.get("label") or ""),
+                    "evidence": count,
+                }
+            )
+    evidence_by_entity.sort(key=lambda item: item["evidence"], reverse=True)
+
+    retention_until: str | None = None
+    expiry_values: list[str] = [
+        value for value in (_as_iso(ev.get("expires_at")) for ev in evidence) if value
+    ]
+    if expiry_values:
+        retention_until = max(expiry_values)
+    elif case.get("created_at") and case.get("retention_days"):
+        try:
+            created = datetime.fromisoformat(str(case["created_at"]))
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            retention_until = (
+                created + timedelta(days=int(case["retention_days"]))
+            ).isoformat()
+        except (TypeError, ValueError):
+            retention_until = None
+
+    executive_summary = {
+        "target_name": " ".join(
+            part
+            for part in (target.get("first_name") or "", target.get("last_name") or "")
+            if part
+        ).strip(),
+        "case_name": case.get("name"),
+        "mode": scan.get("mode"),
+        "scan_started_at": scan.get("started_at"),
+        "scan_finished_at": scan.get("finished_at"),
+        "generated_at": report_data.get("generated_at"),
+        "totals": {
+            "entities": len(entities),
+            "platforms": len({str(e.get("platform") or "") for e in entities}),
+            "findings": len(findings),
+            "evidence": len(evidence_ids),
+        },
+        "status_counts": status_counts,
+        "top_findings": top_findings,
+        "confidence_note": confidence_note,
+    }
+
+    evidence_summary = {
+        "total": len(evidence),
+        "linked_to_entities": len(evidence_ids),
+        "retention_until": retention_until,
+        "by_entity": evidence_by_entity[:20],
+    }
+
+    return {
+        "executive_summary": executive_summary,
+        "platform_distribution": platform_distribution,
+        "identity_links": identity_links,
+        "timeline": timeline,
+        "evidence_summary": evidence_summary,
+    }
+
+
 def generate_json_report(report_data: dict[str, Any]) -> bytes:
-    """Rapor verisini JSON bytes olarak döndürür."""
-    return json.dumps(report_data, ensure_ascii=False, indent=2, default=str).encode("utf-8")
+    """Rapor verisini JSON bytes olarak döndürür (bölümler dahil, geriye uyumlu)."""
+    payload = dict(report_data)
+    sections = build_report_sections(payload)
+    for key, value in sections.items():
+        payload.setdefault(key, value)
+    return json.dumps(payload, ensure_ascii=False, indent=2, default=str).encode("utf-8")
+
+
+# ---------------------------------------------------------------------------
+# HTML (tarayıcı / arşiv görünümü) — Jinja2 autoescape
+# ---------------------------------------------------------------------------
+
+_HTML_TEMPLATE_SRC = """<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8"/>
+<title>Showis OSINT Raporu — {{ report.case.name }}</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; margin: 32px;
+         color: #111827; max-width: 960px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 24px 0 8px; border-bottom: 1px solid #e5e7eb;
+       padding-bottom: 4px; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  th, td { border: 1px solid #e5e7eb; padding: 4px 6px; text-align: left;
+           vertical-align: top; }
+  th { background: #1f2937; color: #fff; }
+  tr:nth-child(even) td { background: #f9fafb; }
+  .muted { color: #6b7280; font-size: 11px; }
+  .tag { font-family: ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<h1>Showis OSINT İnceleme Raporu</h1>
+<p class="muted">Gizlilik: bu rapor yalnızca yetkili kişi tarafından, belirtilen amaç
+doğrultusunda kullanılabilir.</p>
+
+<h2>1. Yönetici Özeti</h2>
+<table>
+  <tr><th>Hedef</th><td>{{ sections.executive_summary.target_name or "-" }}</td></tr>
+  <tr><th>Vaka</th><td>{{ report.case.name }}</td></tr>
+  <tr><th>Mod / tarama</th><td>{{ sections.executive_summary.mode or "-" }} ·
+      {{ sections.executive_summary.scan_started_at or "-" }} →
+      {{ sections.executive_summary.scan_finished_at or "-" }}</td></tr>
+  <tr><th>Toplam</th><td>{{ sections.executive_summary.totals.entities }} entity ·
+      {{ sections.executive_summary.totals.platforms }} platform ·
+      {{ sections.executive_summary.totals.findings }} bulgu ·
+      {{ sections.executive_summary.totals.evidence }} kanıt</td></tr>
+  <tr><th>Durum dağılımı</th><td>
+    {% for status, count in sections.executive_summary.status_counts.items() %}
+      {{ status }}: {{ count }}{% if not loop.last %} · {% endif %}
+    {% endfor %}
+  </td></tr>
+</table>
+<p>{{ sections.executive_summary.confidence_note }}</p>
+
+{% if sections.executive_summary.top_findings %}
+<h2>En yüksek 5 bulgu</h2>
+<table>
+  <tr><th>Platform</th><th>Etiket</th><th>Skor</th><th>Durum</th><th>Gerekçe</th></tr>
+  {% for finding in sections.executive_summary.top_findings %}
+  <tr><td>{{ finding.platform }}</td><td>{{ finding.label }}</td>
+      <td>{{ "%.2f"|format(finding.score) }}</td><td>{{ finding.status }}</td>
+      <td>{{ finding.reason }}</td></tr>
+  {% endfor %}
+</table>
+{% endif %}
+
+<h2>2. Platform Dağılımı</h2>
+{% if sections.platform_distribution %}
+<table>
+  <tr><th>Platform</th><th>Bulgu</th><th>En yüksek skor</th><th>Ortalama skor</th></tr>
+  {% for row in sections.platform_distribution %}
+  <tr><td>{{ row.platform }}</td><td>{{ row.findings }}</td>
+      <td>{{ "%.2f"|format(row.max_score) }}</td>
+      <td>{{ "%.2f"|format(row.avg_score) }}</td></tr>
+  {% endfor %}
+</table>
+{% else %}<p>Bulgu yok.</p>{% endif %}
+
+<h2>3. Kimlik / Çapraz Bağlantılar</h2>
+{% if sections.identity_links.edges %}
+<table>
+  <tr><th>Tip</th><th>Kaynak</th><th>Hedef</th><th>Güven</th><th>Gerekçe</th></tr>
+  {% for edge in sections.identity_links.edges %}
+  <tr><td>{{ edge.type }}</td><td class="tag">{{ edge.source }}</td>
+      <td class="tag">{{ edge.target }}</td>
+      <td>{{ "%.2f"|format(edge.confidence) }}</td>
+      <td>{{ edge.reason or "-" }}</td></tr>
+  {% endfor %}
+</table>
+{% elif sections.identity_links.shared_username_groups %}
+<table>
+  <tr><th>Kullanıcı adı</th><th>Platformlar</th><th>Entity</th></tr>
+  {% for group in sections.identity_links.shared_username_groups %}
+  <tr><td class="tag">{{ group.username }}</td>
+      <td>{{ group.platforms|join(", ") }}</td><td>{{ group.entities }}</td></tr>
+  {% endfor %}
+</table>
+{% else %}<p>Platformlar arasında paylaşılan kullanıcı adı bulunmadı.</p>{% endif %}
+
+{% if sections.timeline %}
+<h2>4. Kronoloji (hesap oluşturma)</h2>
+<table>
+  <tr><th>Tarih</th><th>Platform</th><th>Etiket</th><th>Alan</th></tr>
+  {% for row in sections.timeline %}
+  <tr><td>{{ row.date }}</td><td>{{ row.platform }}</td>
+      <td>{{ row.label }}</td><td>{{ row.event }}</td></tr>
+  {% endfor %}
+</table>
+{% endif %}
+
+<h2>5. Bulgular</h2>
+{% if report.findings %}
+<table>
+  <tr><th>Platform</th><th>Etiket</th><th>Skor</th><th>Durum</th><th>URL</th></tr>
+  {% for finding in report.findings %}
+  <tr><td>{{ finding.platform }}</td><td>{{ finding.label }}</td>
+      <td>{{ "%.2f"|format(finding.score) }}</td><td>{{ finding.status }}</td>
+      <td class="tag">{{ finding.url or "-" }}</td></tr>
+  {% endfor %}
+</table>
+{% else %}<p>Bulgu bulunamadı.</p>{% endif %}
+
+<h2>6. Kanıt Özeti</h2>
+<table>
+  <tr><th>Toplam kanıt</th><td>{{ sections.evidence_summary.total }}</td></tr>
+  <tr><th>Entity'ye bağlı</th><td>{{ sections.evidence_summary.linked_to_entities }}</td></tr>
+  <tr><th>Saklama bitişi</th><td>{{ sections.evidence_summary.retention_until or "-" }}</td></tr>
+</table>
+
+<h2>7. Sınırlamalar</h2>
+<p class="muted">Bu rapor yalnızca kamuya açık verileri içerir. Platformlar verilerini
+değiştirebilir; bulgular tarama anındaki durumdur. Olası yanlış eşleşmeler için kanıt
+URL'lerini kontrol ediniz.</p>
+</body>
+</html>
+"""
+
+_HTML_TEMPLATE = report_env.from_string(_HTML_TEMPLATE_SRC)
+
+
+def render_html_report(report_data: dict[str, Any]) -> str:
+    """HTML raporu (autoescape açık Jinja2 ortamı) döndürür."""
+    sections = build_report_sections(report_data)
+    return _HTML_TEMPLATE.render(report=report_data, sections=sections)
+
+
+def generate_html_report(report_data: dict[str, Any]) -> bytes:
+    return render_html_report(report_data).encode("utf-8")
+
+
+# ---------------------------------------------------------------------------
+# PDF (reportlab) — Jinja2 ile üretilen, kaçışlanmış paragraflar
+# ---------------------------------------------------------------------------
+
+_PDF_FRAGMENTS = {
+    "case_summary": report_env.from_string(
+        "<b>Vaka:</b> {{ case.name or '-' }}<br/>"
+        "<b>Amaç:</b> {{ case.purpose or '-' }}<br/>"
+        "<b>Hukuki dayanak:</b> {{ case.legal_basis or '-' }}<br/>"
+        "<b>Oluşturulma:</b> {{ case.created_at or '-' }}<br/>"
+        "<b>Rapor tarihi:</b> {{ generated_at or '-' }}"
+    ),
+    "target": report_env.from_string(
+        "<b>Ad Soyad:</b> {{ target.first_name }} {{ target.last_name }}<br/>"
+        "<b>İpuçları:</b> {{ target.hints }}"
+    ),
+    "executive": report_env.from_string(
+        "<b>Mod:</b> {{ scan.mode or '-' }} &nbsp; "
+        "<b>Tarama:</b> {{ scan.started_at or '-' }} → {{ scan.finished_at or '-' }}<br/>"
+        "<b>Toplam:</b> {{ totals.entities }} entity, {{ totals.platforms }} platform, "
+        "{{ totals.findings }} bulgu, {{ totals.evidence }} kanıt<br/>"
+        "<b>Durum:</b> {{ status_text }}<br/>"
+        "<b>Yorum:</b> {{ confidence_note }}"
+    ),
+    "finding_line": report_env.from_string(
+        "<b>{{ platform }}</b> — {{ label }} · skor {{ score }} · {{ status }}<br/>{{ reason }}"
+    ),
+    "signal_line": report_env.from_string(
+        "Sinyal kırılımı: {{ signals }}"
+    ),
+    "identity_note": report_env.from_string("{{ note }}"),
+    "evidence_meta": report_env.from_string(
+        "Toplam {{ total }} kanıt · entity'ye bağlı {{ linked }} · saklama bitişi "
+        "{{ retention or '-' }}"
+    ),
+}
+
+
+def _pdf_cell(value: Any) -> str:
+    """Tablo hücresi: Paragraph olarak yorumlanacak kaçışlanmış metin."""
+    return _pdf_text(value)
+
+
+def _pdf_text(value: Any) -> str:
+    """PDF'e giden kullanıcı metni: XML-escape + açı parantezleri nötrlenir.
+
+    reportlab `Paragraph` mini-HTML yorumlar; `_e()` etiketleri kaçışlar ama
+    reportlab bunları çözerek yeniden `<script>` metnine dönüştürür. PDF'te
+    meta karakter bulunmasın diye `<`/`>` görünür ama etkisiz karakterlere
+    (`‹`/`›`) çevrilir — çıktı hem inert hem de taranabilir kalır.
+    """
+    escaped = _e(value)
+    return escaped.replace("&lt;", "‹").replace("&gt;", "›")
 
 
 def generate_pdf_report(report_data: dict[str, Any]) -> bytes:
@@ -112,7 +583,8 @@ def generate_pdf_report(report_data: dict[str, Any]) -> bytes:
     doc = SimpleDocTemplate(
         buffer,
         pagesize=A4,
-        title=f"Showis OSINT Raporu — {report_data.get('case', {}).get('name', '')}",
+        # Meta veri de kullanıcı verisi içerir: aynı nötrleme uygulanır
+        title=_pdf_text(f"Showis OSINT Raporu — {report_data.get('case', {}).get('name', '')}"),
         author="Showis OSINT",
         leftMargin=2 * cm,
         rightMargin=2 * cm,
@@ -143,6 +615,12 @@ def generate_pdf_report(report_data: dict[str, Any]) -> bytes:
         fontSize=10,
         leading=14,
     )
+    cell_style = ParagraphStyle(
+        "ShowisCell",
+        parent=body_style,
+        fontSize=7.5,
+        leading=9,
+    )
     small_style = ParagraphStyle(
         "ShowisSmall",
         parent=body_style,
@@ -150,11 +628,53 @@ def generate_pdf_report(report_data: dict[str, Any]) -> bytes:
         textColor=colors.HexColor("#555555"),
     )
 
+    def _table(rows: list[list[Any]], widths: list[float]) -> Table:
+        data = [
+            [
+                cell if isinstance(cell, Paragraph) else Paragraph(_pdf_cell(cell), cell_style)
+                for cell in row
+            ]
+            for row in rows
+        ]
+        header = [
+            Paragraph(f"<b>{_pdf_cell(cell)}</b>", cell_style)
+            for cell in rows[0]
+        ]
+        data[0] = header
+        table = Table(data, colWidths=widths, repeatRows=1)
+        table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f2937")),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ("FONTNAME", (0, 0), (-1, 0), _FONT_BOLD),
+                    ("FONTSIZE", (0, 0), (-1, -1), 7.5),
+                    ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cccccc")),
+                    (
+                        "ROWBACKGROUNDS",
+                        (0, 1),
+                        (-1, -1),
+                        [colors.white, colors.HexColor("#f5f5f5")],
+                    ),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ]
+            )
+        )
+        return table
+
     case = report_data.get("case", {})
     target = report_data.get("target", {})
     findings = report_data.get("findings", [])
     evidence = report_data.get("evidence", [])
     generated_at = report_data.get("generated_at", "")
+    sections = build_report_sections(report_data)
+    summary = sections["executive_summary"]
+    scan = report_data.get("scan") or {}
+
+    status_text = " · ".join(
+        f"{_STATUS_LABELS.get(status, status)}: {count}"
+        for status, count in summary["status_counts"].items()
+    )
 
     story: list[Any] = [
         Paragraph(_t("Showis OSINT İnceleme Raporu"), title_style),
@@ -168,114 +688,231 @@ def generate_pdf_report(report_data: dict[str, Any]) -> bytes:
             body_style,
         ),
         Spacer(1, 10),
-        Paragraph(_t("1. Vaka Özeti"), h2_style),
+        # 1) Yönetici özeti — ilk bölüm: tek sayfada karar
+        Paragraph(_t("1. Yönetici Özeti"), h2_style),
         Paragraph(
             _t(
-                f"<b>Vaka:</b> {_e(case.get('name', '-'))}<br/>"
-                f"<b>Amaç:</b> {_e(case.get('purpose', '-'))}<br/>"
-                f"<b>Hukuki dayanak:</b> {_e(case.get('legal_basis', '-'))}<br/>"
-                f"<b>Oluşturulma:</b> {_e(case.get('created_at', '-'))}<br/>"
-                f"<b>Rapor tarihi:</b> {_e(generated_at)}"
+                _PDF_FRAGMENTS["executive"].render(
+                    scan=scan,
+                    totals=summary["totals"],
+                    status_text=status_text,
+                    confidence_note=summary["confidence_note"],
+                )
             ),
             body_style,
         ),
-        Paragraph(_t("2. Hedef"), h2_style),
-        Paragraph(
-            _t(
-                f"<b>Ad Soyad:</b> {_e(target.get('first_name', ''))} "
-                f"{_e(target.get('last_name', ''))}<br/>"
-                f"<b>İpuçları:</b> {_e(target.get('hints', {}))}"
-            ),
-            body_style,
-        ),
-        Paragraph(_t("3. Yöntem"), h2_style),
-        Paragraph(
-            _t(
-                "Kamuya açık kaynaklar tarandı: GitHub REST API (Tier A), "
-                "TryHackMe ve HackTheBox herkese açık profil sayfaları (Tier B, "
-                "tarayıcı render), web arama sağlayıcı indeksleri (Tier C). "
-                "Hiçbir giriş duvarı arkasına erişilmedi, CAPTCHA/bot koruması "
-                "aşılmadı, yasak host'lara istek atılmadı. Bulgular deterministik "
-                "sinyal skoru (0.00-1.00) ile sıralandı; LLM yalnızca kanıta "
-                "dayalı açıklama metni üretti."
-            ),
-            body_style,
-        ),
-        Paragraph(_t("4. Bulgular"), h2_style),
     ]
 
-    if findings:
-        rows = [["Platform", "Etiket", "Skor", "Durum", "URL"]]
-        for f in findings:
-            rows.append(
-                [
-                    _e(f.get("platform", "")),
-                    _e(f.get("label", "")),
-                    f"{float(f.get('score', 0.0)):.2f}",
-                    _e(f.get("status", "")),
-                    _e(f.get("url") or "-"),
-                ]
-            )
-        table = Table(rows, colWidths=[2.2 * cm, 4.5 * cm, 1.6 * cm, 2.2 * cm, 5.5 * cm])
-        table.setStyle(
-            TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f2937")),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                    ("FONTNAME", (0, 0), (-1, 0), _FONT_BOLD),
-                    ("FONTSIZE", (0, 0), (-1, -1), 8),
-                    ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cccccc")),
-                    (
-                        "ROWBACKGROUNDS",
-                        (0, 1),
-                        (-1, -1),
-                        [colors.white, colors.HexColor("#f5f5f5")],
-                    ),
-                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ]
-            )
-        )
-        story.append(table)
+    if summary["top_findings"]:
+        story.append(Spacer(1, 6))
+        story.append(_table(
+            [
+                ["#", "Platform", "Etiket", "Skor", "Durum", "Gerekçe"],
+                *[
+                    [
+                        str(index + 1),
+                        item["platform"],
+                        item["label"],
+                        f"{item['score']:.2f}",
+                        item["status"],
+                        item["reason"],
+                    ]
+                    for index, item in enumerate(summary["top_findings"])
+                ],
+            ],
+            [0.8 * cm, 2.2 * cm, 3.2 * cm, 1.3 * cm, 1.8 * cm, 7.7 * cm],
+        ))
 
-        for f in findings:
-            breakdown = f.get("breakdown") or {}
-            story.append(Spacer(1, 8))
+    story.extend(
+        [
+            Paragraph(_t("2. Vaka Özeti"), h2_style),
+            Paragraph(
+                _t(
+                    _PDF_FRAGMENTS["case_summary"].render(
+                        case=case, generated_at=generated_at
+                    )
+                ),
+                body_style,
+            ),
+            Paragraph(_t("3. Hedef"), h2_style),
+            Paragraph(_t(_PDF_FRAGMENTS["target"].render(target=target)), body_style),
+            Paragraph(_t("4. Yöntem"), h2_style),
+            Paragraph(
+                _t(
+                    "Kamuya açık kaynaklar tarandı: GitHub REST API (Tier A), "
+                    "TryHackMe ve HackTheBox herkese açık profil sayfaları (Tier B, "
+                    "tarayıcı render), web arama sağlayıcı indeksleri (Tier C). "
+                    "Hiçbir giriş duvarı arkasına erişilmedi, CAPTCHA/bot koruması "
+                    "aşılmadı, yasak host'lara istek atılmadı. Bulgular deterministik "
+                    "sinyal skoru (0.00-1.00) ile sıralandı; LLM yalnızca kanıta "
+                    "dayalı açıklama metni üretti."
+                ),
+                body_style,
+            ),
+            Paragraph(_t("5. Platform Dağılımı"), h2_style),
+        ]
+    )
+
+    if sections["platform_distribution"]:
+        story.append(_table(
+            [
+                ["Platform", "Bulgu", "En yüksek skor", "Ortalama skor"],
+                *[
+                    [
+                        row["platform"],
+                        str(row["findings"]),
+                        f"{row['max_score']:.2f}",
+                        f"{row['avg_score']:.2f}",
+                    ]
+                    for row in sections["platform_distribution"]
+                ],
+            ],
+            [5.0 * cm, 3.0 * cm, 4.0 * cm, 5.0 * cm],
+        ))
+    else:
+        story.append(Paragraph(_t("Bulgu yok."), body_style))
+
+    story.append(Paragraph(_t("6. Kimlik / Çapraz Bağlantılar"), h2_style))
+    identity = sections["identity_links"]
+    identity_note = _PDF_FRAGMENTS["identity_note"].render(
+        note=identity["confidence_note"]
+    )
+    story.append(Paragraph(_t(identity_note), body_style))
+    if identity["edges"]:
+        story.append(_table(
+            [
+                ["Tip", "Kaynak", "Hedef", "Güven", "Gerekçe"],
+                *[
+                    [
+                        edge["type"],
+                        edge["source"],
+                        edge["target"],
+                        f"{edge['confidence']:.2f}",
+                        edge["reason"] or "-",
+                    ]
+                    for edge in identity["edges"][:30]
+                ],
+            ],
+            [2.2 * cm, 4.4 * cm, 4.4 * cm, 1.4 * cm, 4.6 * cm],
+        ))
+    elif identity["shared_username_groups"]:
+        story.append(_table(
+            [
+                ["Kullanıcı adı", "Platformlar", "Entity"],
+                *[
+                    [
+                        group["username"],
+                        ", ".join(group["platforms"]),
+                        str(group["entities"]),
+                    ]
+                    for group in identity["shared_username_groups"][:30]
+                ],
+            ],
+            [4.0 * cm, 9.0 * cm, 4.0 * cm],
+        ))
+    else:
+        story.append(Paragraph(_t("Paylaşılan kullanıcı adı bulunmadı."), body_style))
+
+    if sections["timeline"]:
+        story.append(Paragraph(_t("7. Kronoloji (hesap oluşturma)"), h2_style))
+        story.append(_table(
+            [
+                ["Tarih", "Platform", "Etiket", "Alan"],
+                *[
+                    [row["date"], row["platform"], row["label"], row["event"]]
+                    for row in sections["timeline"][:40]
+                ],
+            ],
+            [4.6 * cm, 3.2 * cm, 6.2 * cm, 3.0 * cm],
+        ))
+
+    story.append(Paragraph(_t("8. Bulgular"), h2_style))
+    if findings:
+        story.append(_table(
+            [
+                ["Platform", "Etiket", "Skor", "Durum", "URL"],
+                *[
+                    [
+                        f.get("platform", ""),
+                        f.get("label", ""),
+                        f"{float(f.get('score', 0.0)):.2f}",
+                        f.get("status", ""),
+                        f.get("url") or "-",
+                    ]
+                    for f in findings
+                ],
+            ],
+            [2.2 * cm, 4.0 * cm, 1.4 * cm, 2.0 * cm, 7.4 * cm],
+        ))
+
+        for f in findings[:25]:
+            story.append(Spacer(1, 6))
             story.append(
                 Paragraph(
                     _t(
-                        f"<b>{_e(f.get('label', ''))}</b> ({_e(f.get('platform', ''))}) — "
-                        f"skor {float(f.get('score', 0.0)):.2f}, durum {_e(f.get('status', ''))}"
+                        _PDF_FRAGMENTS["finding_line"].render(
+                            platform=f.get("platform", ""),
+                            label=f.get("label", ""),
+                            score=f"{float(f.get('score', 0.0)):.2f}",
+                            status=f.get("status", ""),
+                            reason=f.get("explanation") or _one_line_reason(f),
+                        )
                     ),
                     body_style,
                 )
             )
-            if f.get("explanation"):
-                story.append(Paragraph(_e(f["explanation"]), small_style))
-            story.append(
-                Paragraph(
-                    _t(
-                        "Sinyal kırılımı: "
-                        + ", ".join(
-                            f"{_e(k)}={_e(v)}"
-                            for k, v in breakdown.items()
-                            if k != "total" and v
-                        )
-                    ),
-                    small_style,
+            breakdown = f.get("breakdown") or {}
+            if breakdown:
+                signals = ", ".join(
+                    f"{key}={value}"
+                    for key, value in breakdown.items()
+                    if key != "total" and value
                 )
-            )
+                story.append(
+                    Paragraph(
+                        _t(_PDF_FRAGMENTS["signal_line"].render(signals=signals)),
+                        small_style,
+                    )
+                )
     else:
         story.append(Paragraph(_t("Bulgu bulunamadı."), body_style))
 
-    story.append(Paragraph(_t("5. Kanıt Ekleri"), h2_style))
+    evidence_summary = sections["evidence_summary"]
+    story.append(Paragraph(_t("9. Kanıt Özeti"), h2_style))
+    story.append(
+        Paragraph(
+            _t(
+                _PDF_FRAGMENTS["evidence_meta"].render(
+                    total=evidence_summary["total"],
+                    linked=evidence_summary["linked_to_entities"],
+                    retention=evidence_summary["retention_until"],
+                )
+            ),
+            body_style,
+        )
+    )
+    if evidence_summary["by_entity"]:
+        story.append(_table(
+            [
+                ["Platform", "Etiket", "Kanıt"],
+                *[
+                    [row["platform"], row["label"], str(row["evidence"])]
+                    for row in evidence_summary["by_entity"][:20]
+                ],
+            ],
+            [4.0 * cm, 9.0 * cm, 4.0 * cm],
+        ))
+
+    story.append(Paragraph(_t("10. Kanıt Ekleri"), h2_style))
     if evidence:
         for ev in evidence:
             story.append(
                 Paragraph(
                     _t(
-                        f"• [{_e(ev.get('kind', ''))}] {_e(ev.get('source_url', '-'))} "
-                        f"(hash: {_e(str(ev.get('content_hash', ''))[:16])}…, "
-                        f"tarih: {_e(ev.get('fetched_at', '-'))})"
+                        f"• [{_pdf_text(ev.get('kind', ''))}] "
+                        f"{_pdf_text(ev.get('source_url', '-'))} "
+                        f"(hash: {_pdf_text(str(ev.get('content_hash', ''))[:16])}…, "
+                        f"tarih: {_pdf_text(ev.get('fetched_at', '-'))})"
                     ),
                     small_style,
                 )
@@ -283,7 +920,7 @@ def generate_pdf_report(report_data: dict[str, Any]) -> bytes:
     else:
         story.append(Paragraph(_t("Kayıtlı kanıt yok."), body_style))
 
-    story.append(Paragraph(_t("6. Sınırlamalar"), h2_style))
+    story.append(Paragraph(_t("11. Sınırlamalar"), h2_style))
     story.append(
         Paragraph(
             _t(

@@ -2,20 +2,27 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
+  Activity,
   AlertTriangle,
   ArrowUpRight,
+  BarChart3,
+  CalendarClock,
   Check,
   ChevronDown,
   Clock,
   ExternalLink,
   Eye,
   EyeOff,
+  FileText,
+  Fingerprint,
   Gauge,
   Loader2,
   Play,
   Radio,
+  RefreshCw,
   ShieldCheck,
   Square,
+  Users,
   X,
 } from "lucide-react";
 import {
@@ -25,6 +32,8 @@ import {
   type FindingItem,
   type ReportInfo,
 } from "../../../lib/api";
+import type { CaseReportJson } from "../../../lib/types";
+import { platformMeta } from "./platform-meta";
 import { formatDuration, useScanSession } from "./scan-context";
 
 const STATUS_STYLE: Record<string, string> = {
@@ -67,6 +76,25 @@ export function Badge({ value }: { value: string }) {
       }`}
     >
       {STATUS_TR[value] || value}
+    </span>
+  );
+}
+
+/** Platform rozeti — `platform-meta.ts` etiket/renklerini kullanır, bilinmeyende nötr fallback. */
+export function PlatformBadge({ platform }: { platform: string }) {
+  const meta = platformMeta(platform);
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium text-slate-200"
+      style={{ borderColor: `${meta.accent}66`, backgroundColor: `${meta.accent}14` }}
+      title={meta.label === platform ? undefined : platform}
+    >
+      <span
+        className="h-1.5 w-1.5 shrink-0 rounded-full"
+        style={{ backgroundColor: meta.accent }}
+        aria-hidden
+      />
+      {meta.label}
     </span>
   );
 }
@@ -377,6 +405,127 @@ function readStoredShowRejected(caseId: string): boolean {
   return window.sessionStorage.getItem(findingsRejectedKey(caseId)) === "1";
 }
 
+/* --- T-301: authenticity (hesap güvenilirliği) --- */
+
+/** Düşük güvenilirlik eşiği — backend'in uyarı cümlesiyle aynı (0.35). */
+const LOW_AUTH_THRESHOLD = 0.35;
+
+type FindingWithAuth = FindingItem & {
+  authenticity?: number | null;
+  authenticity_reasons?: string[];
+};
+
+const findingsLowAuthKey = (caseId: string) => `showis:findings:hide-low-auth:${caseId}`;
+
+function readStoredHideLowAuth(caseId: string): boolean {
+  if (typeof window === "undefined") return false;
+  return window.sessionStorage.getItem(findingsLowAuthKey(caseId)) === "1";
+}
+
+function isLowAuthenticity(f: FindingWithAuth): boolean {
+  return typeof f.authenticity === "number" && f.authenticity < LOW_AUTH_THRESHOLD;
+}
+
+function authenticityTone(score: number): { text: string; border: string; bar: string; label: string } {
+  if (score < LOW_AUTH_THRESHOLD) {
+    return {
+      text: "text-red-300",
+      border: "border-red-500/40 bg-red-500/10",
+      bar: "bg-red-500",
+      label: "düşük güvenilirlik",
+    };
+  }
+  if (score < 0.6) {
+    return {
+      text: "text-amber-300",
+      border: "border-amber-500/40 bg-amber-500/10",
+      bar: "bg-amber-400",
+      label: "orta güvenilirlik",
+    };
+  }
+  return {
+    text: "text-emerald-300",
+    border: "border-emerald-500/40 bg-emerald-500/10",
+    bar: "bg-emerald-400",
+    label: "güvenilir hesap",
+  };
+}
+
+/**
+ * Authenticity göstergesi. `authenticity` yoksa (eski kayıt) hiçbir şey render etmez —
+ * geriye uyum için tek kontrol noktası burasıdır.
+ */
+function AuthenticityChip({
+  score,
+  reasons,
+}: {
+  score: number | null | undefined;
+  reasons?: string[];
+}) {
+  const [open, setOpen] = useState(false);
+  const panelId = useId();
+  if (typeof score !== "number") return null;
+
+  const pct = Math.round(Math.max(0, Math.min(1, score)) * 100);
+  const tone = authenticityTone(score);
+  const hasReasons = Boolean(reasons && reasons.length > 0);
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span
+        className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium ${tone.border} ${tone.text}`}
+        title={
+          hasReasons
+            ? `Güvenilirlik ${pct}% — ${tone.label}\n${(reasons ?? []).join("\n")}`
+            : `Güvenilirlik ${pct}% — ${tone.label}`
+        }
+      >
+        <Fingerprint size={11} aria-hidden />
+        güvenilirlik <span className="mono">{pct}%</span>
+      </span>
+      <span className="h-1 w-14 overflow-hidden rounded-full bg-slate-800" aria-hidden>
+        <span
+          className={`block h-full rounded-full ${tone.bar}`}
+          style={{ width: `${Math.max(4, pct)}%` }}
+        />
+      </span>
+      {hasReasons && (
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={panelId}
+          onClick={() => setOpen((v) => !v)}
+          className={`inline-flex items-center gap-1 rounded text-[10px] ${tone.text} underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40`}
+        >
+          {reasons!.length} neden
+          <ChevronDown
+            size={10}
+            aria-hidden
+            className={`transition-transform ${open ? "" : "-rotate-90"}`}
+          />
+        </button>
+      )}
+      {hasReasons && open && (
+        <ul
+          id={panelId}
+          className="mt-1 w-full basis-full space-y-0.5 rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-1.5 text-[11px] text-slate-400"
+        >
+          {reasons!.map((reason) => (
+            <li key={reason} className="flex items-start gap-1.5">
+              <span
+                className={`mt-1 h-1 w-1 shrink-0 rounded-full ${tone.bar}`}
+                aria-hidden
+              />
+              {reason}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+
 function ScoreBreakdown({
   breakdown,
   score,
@@ -471,12 +620,14 @@ function FindingCard({
   finding: f,
   evidence,
   expanded,
+  highlighted = false,
   onToggleEvidence,
   onVerify,
 }: {
-  finding: FindingItem;
+  finding: FindingWithAuth;
   evidence?: EvidenceItem[];
   expanded: boolean;
+  highlighted?: boolean;
   onToggleEvidence: (id: string) => void;
   onVerify: (id: string, status: "confirmed" | "rejected") => void;
 }) {
@@ -485,16 +636,23 @@ function FindingCard({
   const evidencePanelId = useId();
 
   return (
-    <div className="card card-hover p-4">
+    <div
+      id={`finding-${f.id}`}
+      tabIndex={highlighted ? -1 : undefined}
+      className={`card card-hover p-4 ${
+        highlighted ? "ring-2 ring-blue-500/50 border-blue-500/40" : ""
+      } focus:outline-none`}
+    >
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <span className="truncate font-medium text-slate-100">{f.label}</span>
-            <Badge value={f.platform} />
+            <PlatformBadge platform={f.platform} />
             <Badge value={f.status} />
             <span className="mono text-sm font-medium text-blue-300" title={`Güven skoru ${pct}%`}>
               {pct}%
             </span>
+            <AuthenticityChip score={f.authenticity} reasons={f.authenticity_reasons} />
           </div>
           {f.url && (
             <a
@@ -594,13 +752,17 @@ function FindingCard({
 
 export function FindingsTab({ caseId }: { caseId: string }) {
   const { findingsVersion, scan } = useScanSession();
-  const [findings, setFindings] = useState<FindingItem[]>([]);
+  const [findings, setFindings] = useState<FindingWithAuth[]>([]);
   const [evidence, setEvidence] = useState<Record<string, EvidenceItem[]>>({});
   const [expanded, setExpanded] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   // Varsayılan: Tümü + reddedilenler kapalı (= aday ve üzeri görünür).
   const [filter, setFilter] = useState<FindingFilter>("all");
   const [showRejected, setShowRejected] = useState(false);
+  // T-301: düşük güvenilirlikli hesapları gizle (varsayılan kapalı).
+  const [hideLowAuth, setHideLowAuth] = useState(false);
+  // T-303 → T-318: grafikten gelen entity (bulgular sekmesinde vurgulanır).
+  const [focusEntity, setFocusEntity] = useState<string | null>(null);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   // Tercih yalnızca istemcide okunur: SSR/CSR hidrasyon uyuşmazlığı olmasın.
@@ -608,7 +770,29 @@ export function FindingsTab({ caseId }: { caseId: string }) {
     const storedFilter = readStoredFilter(caseId);
     setFilter(storedFilter);
     setShowRejected(storedFilter === "rejected" ? true : readStoredShowRejected(caseId));
+    setHideLowAuth(readStoredHideLowAuth(caseId));
   }, [caseId]);
+
+  // Grafikten gelen `?entity=<id>` parametresi — filtre durumuna dokunmadan vurgular.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const readFocus = () => {
+      const value = new URLSearchParams(window.location.search).get("entity");
+      setFocusEntity(value && value.trim() ? value.trim() : null);
+    };
+    readFocus();
+    window.addEventListener("popstate", readFocus);
+    return () => window.removeEventListener("popstate", readFocus);
+  }, []);
+
+  const clearFocus = () => {
+    setFocusEntity(null);
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("entity");
+      window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+    }
+  };
 
   const load = useCallback(() => {
     api.listFindings(caseId).then(setFindings).catch((e) => setErr(e.message));
@@ -638,6 +822,11 @@ export function FindingsTab({ caseId }: { caseId: string }) {
     }
     setShowRejected(next);
     persist(findingsRejectedKey(caseId), next ? "1" : "0");
+  };
+
+  const applyHideLowAuth = (next: boolean) => {
+    setHideLowAuth(next);
+    persist(findingsLowAuthKey(caseId), next ? "1" : "0");
   };
 
   const onTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
@@ -684,13 +873,51 @@ export function FindingsTab({ caseId }: { caseId: string }) {
   const hiddenRejected = showRejected ? 0 : counts.rejected;
 
   // Reddedilenler kapalıyken "Tümü" = aday ve üzeri.
-  const visible = useMemo(
+  const statusFiltered = useMemo(
     () =>
       findings.filter((f) =>
         filter === "all" ? showRejected || f.status !== "rejected" : f.status === filter
       ),
     [findings, filter, showRejected]
   );
+
+  // T-301: düşük güvenilirlikli hesaplar isteğe bağlı gizlenir (varsayılan kapalı).
+  const visible = useMemo(
+    () => (hideLowAuth ? statusFiltered.filter((f) => !isLowAuthenticity(f)) : statusFiltered),
+    [statusFiltered, hideLowAuth]
+  );
+  const lowAuthCount = findings.filter(isLowAuthenticity).length;
+  const hiddenLowAuth = statusFiltered.length - visible.length;
+
+  // T-318: grafikten gelen entity — filtre state'ini değiştirmeden listeye sabitlenir.
+  const focusFinding = useMemo(() => {
+    if (!focusEntity) return null;
+    return (
+      findings.find(
+        (f) =>
+          f.entity_id === focusEntity ||
+          f.id === focusEntity ||
+          f.id === `finding:${focusEntity}`
+      ) ?? null
+    );
+  }, [findings, focusEntity]);
+
+  const shown = useMemo(
+    () =>
+      focusFinding && !visible.some((f) => f.id === focusFinding.id)
+        ? [focusFinding, ...visible]
+        : visible,
+    [focusFinding, visible]
+  );
+
+  useEffect(() => {
+    if (!focusFinding) return;
+    const el = document.getElementById(`finding-${focusFinding.id}`);
+    if (el) {
+      el.scrollIntoView({ block: "center" });
+      el.focus({ preventScroll: true });
+    }
+  }, [focusFinding]);
 
   if (err) return <p className="text-sm text-red-300">{err}</p>;
 
@@ -699,10 +926,14 @@ export function FindingsTab({ caseId }: { caseId: string }) {
   const emptyMessage =
     findings.length === 0
       ? "Bulgular için önce bir tarama çalıştırın."
-      : filter === "rejected"
-        ? "Reddedilen bulgu yok."
-        : hiddenRejected > 0 && filter === "all"
-          ? `${hiddenRejected} reddedilen bulgu gizlendi — düşük güvenli sonuçlar varsayılan olarak gösterilmez.`
+      : statusFiltered.length === 0
+        ? filter === "rejected"
+          ? "Reddedilen bulgu yok."
+          : hiddenRejected > 0 && filter === "all"
+            ? `${hiddenRejected} reddedilen bulgu gizlendi — düşük güvenli sonuçlar varsayılan olarak gösterilmez.`
+            : "Bu filtreye uyan bulgu yok."
+        : hiddenLowAuth > 0
+          ? `${hiddenLowAuth} düşük güvenilirlikli bulgu gizlendi.`
           : "Bu filtreye uyan bulgu yok.";
 
   return (
@@ -747,6 +978,25 @@ export function FindingsTab({ caseId }: { caseId: string }) {
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <button
             type="button"
+            aria-pressed={hideLowAuth}
+            onClick={() => applyHideLowAuth(!hideLowAuth)}
+            title={
+              hideLowAuth
+                ? "Düşük güvenilirlikli hesapları tekrar göster"
+                : "Güvenilirliği 0.35 altındaki hesapları gizle"
+            }
+            className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 ${
+              hideLowAuth
+                ? "border-red-500/40 bg-red-500/10 text-red-200"
+                : "border-slate-800 bg-slate-900 text-slate-400 hover:border-slate-700 hover:text-slate-200"
+            }`}
+          >
+            <ShieldCheck size={12} />
+            Düşük güvenilirliği gizle
+            <span className="mono text-[10px] opacity-70">{lowAuthCount}</span>
+          </button>
+          <button
+            type="button"
             aria-pressed={showRejected}
             onClick={() => applyShowRejected(!showRejected)}
             title={
@@ -772,6 +1022,49 @@ export function FindingsTab({ caseId }: { caseId: string }) {
           )}
         </div>
       </div>
+
+      {focusEntity && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-blue-500/40 bg-blue-500/5 px-3 py-2 text-xs text-blue-200">
+          <span className="inline-flex items-center gap-1.5">
+            <Eye size={13} className="text-blue-400" />
+            {focusFinding ? (
+              <>
+                Grafikten gelen bulgu vurgulanıyor:{" "}
+                <span className="font-medium">{focusFinding.label}</span>
+                <span className="text-blue-300/70">({focusFinding.platform})</span>
+              </>
+            ) : (
+              <>
+                Grafikten gelen entity için bulgu bulunamadı:{" "}
+                <span className="mono">{focusEntity}</span>
+              </>
+            )}
+          </span>
+          <button type="button" onClick={clearFocus} className="btn-ghost btn-sm">
+            <X size={12} /> Vurguyu kaldır
+          </button>
+        </div>
+      )}
+
+      {hiddenLowAuth > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-xs text-slate-400">
+          <span className="inline-flex items-center gap-1.5">
+            <ShieldCheck size={13} className="text-red-400" />
+            <span className="mono font-medium text-slate-200">{hiddenLowAuth}</span> düşük
+            güvenilirlikli hesap gizlendi
+            <span className="hidden text-slate-500 sm:inline">
+              — güvenilirlik &lt; 0.35 (boş/atıl hesap sinyali)
+            </span>
+          </span>
+          <button
+            type="button"
+            onClick={() => applyHideLowAuth(false)}
+            className="btn-ghost btn-sm"
+          >
+            <Eye size={12} /> Göster
+          </button>
+        </div>
+      )}
 
       {hiddenRejected > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-xs text-slate-400">
@@ -799,9 +1092,18 @@ export function FindingsTab({ caseId }: { caseId: string }) {
         aria-labelledby={`findings-tab-${filter}`}
         className="space-y-4"
       >
-        {visible.length === 0 ? (
+        {shown.length === 0 ? (
           <div className="card p-10 text-center">
             <p className="text-sm text-slate-400">{emptyMessage}</p>
+            {hiddenLowAuth > 0 && (
+              <button
+                type="button"
+                onClick={() => applyHideLowAuth(false)}
+                className="btn-ghost btn-sm mt-3"
+              >
+                <Eye size={12} /> {hiddenLowAuth} düşük güvenilirlikli bulguyu göster
+              </button>
+            )}
             {hiddenRejected > 0 && (
               <button
                 type="button"
@@ -813,12 +1115,13 @@ export function FindingsTab({ caseId }: { caseId: string }) {
             )}
           </div>
         ) : (
-          visible.map((f) => (
+          shown.map((f) => (
             <FindingCard
               key={f.id}
               finding={f}
               evidence={evidence[f.id]}
               expanded={expanded === f.id}
+              highlighted={focusFinding?.id === f.id}
               onToggleEvidence={toggleEvidence}
               onVerify={verify}
             />
@@ -831,10 +1134,452 @@ export function FindingsTab({ caseId }: { caseId: string }) {
 
 /* ---------------- Rapor sekmesi ---------------- */
 
+/** Rapor notları backend'de markdown vurgusu içerebilir (`**...**`) — düz metne indir. */
+function plainNote(value: string | null | undefined): string {
+  return (value ?? "").replace(/\*\*/g, "").trim();
+}
+
+function formatDateTime(value: string | null | undefined): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString("tr-TR");
+}
+
+const REPORT_STATUS_ORDER = ["confirmed", "candidate", "lead", "rejected"];
+
+/**
+ * T-313 rapor bölümleri. Eski raporlarda alanlar yoktur → `null` döner ve
+ * ilgili kart hiç render edilmez (sessiz geriye uyum).
+ */
+function reportSections(data: CaseReportJson | null) {
+  const platforms = data?.platform_distribution ?? data?.platform_breakdown ?? null;
+  return {
+    summary: data?.executive_summary ?? null,
+    platforms: Array.isArray(platforms) && platforms.length > 0 ? platforms : null,
+    identity: data?.identity_links ?? null,
+    timeline: Array.isArray(data?.timeline) && data.timeline.length > 0 ? data.timeline : null,
+    evidence: data?.evidence_summary ?? null,
+  };
+}
+
+function ReportSummary({ data }: { data: CaseReportJson }) {
+  const { summary, platforms, identity, timeline, evidence } = reportSections(data);
+  const sharedGroups = identity?.shared_username_groups ?? [];
+  const identityEdges = identity?.edges ?? [];
+  const topFindings = summary?.top_findings ?? [];
+  const totals = summary?.totals ?? {};
+  const statusCounts = summary?.status_counts ?? {};
+  const statusEntries = REPORT_STATUS_ORDER.map((status) => ({
+    status,
+    count: Number(statusCounts[status] ?? 0),
+  })).filter((row, index, rows) => row.count > 0 || index < rows.length);
+  const otherStatuses = Object.entries(statusCounts).filter(
+    ([status]) => !REPORT_STATUS_ORDER.includes(status)
+  );
+
+  return (
+    <div className="space-y-4">
+      {summary && (
+        <div className="card space-y-4 p-5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-100">
+              <BarChart3 size={15} className="text-blue-400" aria-hidden />
+              Yönetici Özeti
+            </h3>
+            <span className="mono text-[11px] text-slate-500">
+              oluşturuldu {formatDateTime(summary.generated_at)}
+            </span>
+          </div>
+
+          <dl className="grid gap-x-6 gap-y-1.5 text-xs sm:grid-cols-2">
+            <div className="flex gap-2">
+              <dt className="w-16 shrink-0 text-slate-500">Hedef</dt>
+              <dd className="text-slate-200">{summary.target_name || "—"}</dd>
+            </div>
+            <div className="flex gap-2">
+              <dt className="w-16 shrink-0 text-slate-500">Vaka</dt>
+              <dd className="truncate text-slate-200">{summary.case_name || "—"}</dd>
+            </div>
+            <div className="flex gap-2">
+              <dt className="w-16 shrink-0 text-slate-500">Mod</dt>
+              <dd className="mono text-slate-200">{summary.mode || "—"}</dd>
+            </div>
+            <div className="flex gap-2">
+              <dt className="w-16 shrink-0 text-slate-500">Tarama</dt>
+              <dd className="text-slate-300">
+                {formatDateTime(summary.scan_started_at)} → {formatDateTime(summary.scan_finished_at)}
+              </dd>
+            </div>
+          </dl>
+
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {[
+              { label: "entity", value: totals.entities },
+              { label: "platform", value: totals.platforms },
+              { label: "bulgu", value: totals.findings },
+              { label: "kanıt", value: totals.evidence },
+            ].map((item) => (
+              <div
+                key={item.label}
+                className="rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2"
+              >
+                <p className="mono text-lg font-medium text-slate-100">{item.value ?? 0}</p>
+                <p className="text-[10px] uppercase tracking-wider text-slate-500">{item.label}</p>
+              </div>
+            ))}
+          </div>
+
+          {(statusEntries.length > 0 || otherStatuses.length > 0) && (
+            <div>
+              <p className="section-title mb-1.5">Durum dağılımı</p>
+              <div className="flex flex-wrap items-center gap-2">
+                {statusEntries.map((row) => (
+                  <span key={row.status} className="inline-flex items-center gap-1.5">
+                    <Badge value={row.status} />
+                    <span className="mono text-[11px] text-slate-300">{row.count}</span>
+                  </span>
+                ))}
+                {otherStatuses.map(([status, count]) => (
+                  <span key={status} className="inline-flex items-center gap-1.5">
+                    <Badge value={status} />
+                    <span className="mono text-[11px] text-slate-300">{count}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {summary.confidence_note && (
+            <p className="flex items-start gap-2 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-xs leading-relaxed text-slate-400">
+              <Activity size={13} className="mt-0.5 shrink-0 text-blue-400" aria-hidden />
+              {plainNote(summary.confidence_note)}
+            </p>
+          )}
+
+          {topFindings.length > 0 && (
+            <div className="overflow-hidden rounded-lg border border-slate-800">
+              <table className="w-full text-left text-xs">
+                <caption className="section-title bg-slate-900/80 px-3 py-2 text-left">
+                  En yüksek güvenli 5 bulgu
+                </caption>
+                <thead className="bg-slate-900/60 text-[10px] uppercase tracking-wider text-slate-500">
+                  <tr>
+                    <th scope="col" className="px-3 py-2 font-medium">
+                      Etiket
+                    </th>
+                    <th scope="col" className="px-3 py-2 font-medium">
+                      Platform
+                    </th>
+                    <th scope="col" className="px-3 py-2 font-medium">
+                      Durum
+                    </th>
+                    <th scope="col" className="px-3 py-2 text-right font-medium">
+                      Skor
+                    </th>
+                    <th scope="col" className="px-3 py-2 font-medium">
+                      Gerekçe
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {topFindings.slice(0, 5).map((finding, index) => (
+                    <tr key={`${finding.platform}-${finding.label}-${index}`} className="border-t border-slate-800/80">
+                      <th scope="row" className="max-w-[180px] truncate px-3 py-2 font-normal text-slate-200">
+                        {finding.url ? (
+                          <a
+                            href={finding.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="hover:text-blue-300 hover:underline"
+                          >
+                            {finding.label}
+                          </a>
+                        ) : (
+                          finding.label
+                        )}
+                      </th>
+                      <td className="px-3 py-2 text-slate-400">{platformMeta(finding.platform).label}</td>
+                      <td className="px-3 py-2">
+                        <Badge value={finding.status} />
+                      </td>
+                      <td className="mono px-3 py-2 text-right text-slate-300">
+                        {Math.round((finding.score ?? 0) * 100)}%
+                      </td>
+                      <td className="px-3 py-2 text-[11px] text-slate-500">{finding.reason}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        {platforms && (
+          <div className="card overflow-hidden">
+            <p className="section-title border-b border-slate-800 px-4 py-2.5">Platform dağılımı</p>
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-900/60 text-[10px] uppercase tracking-wider text-slate-500">
+                <tr>
+                  <th scope="col" className="px-4 py-2 font-medium">
+                    Platform
+                  </th>
+                  <th scope="col" className="px-4 py-2 text-right font-medium">
+                    Bulgu
+                  </th>
+                  <th scope="col" className="px-4 py-2 text-right font-medium">
+                    En yüksek
+                  </th>
+                  <th scope="col" className="px-4 py-2 text-right font-medium">
+                    Ortalama
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {platforms.slice(0, 12).map((row) => (
+                  <tr key={row.platform} className="border-t border-slate-800/80">
+                    <th scope="row" className="px-4 py-1.5 font-normal text-slate-200">
+                      {platformMeta(row.platform).label}
+                    </th>
+                    <td className="mono px-4 py-1.5 text-right text-slate-300">{row.findings}</td>
+                    <td className="mono px-4 py-1.5 text-right text-slate-300">
+                      {Math.round((row.max_score ?? 0) * 100)}%
+                    </td>
+                    <td className="mono px-4 py-1.5 text-right text-slate-400">
+                      {Math.round((row.avg_score ?? 0) * 100)}%
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {platforms.length > 12 && (
+              <p className="border-t border-slate-800 px-4 py-1.5 text-[10px] text-slate-500">
+                +{platforms.length - 12} platform daha
+              </p>
+            )}
+          </div>
+        )}
+
+        {(identityEdges.length > 0 || sharedGroups.length > 0 || identity?.confidence_note) && (
+          <div className="card space-y-3 p-4">
+            <p className="section-title flex items-center gap-1.5">
+              <Users size={12} className="text-blue-400" aria-hidden /> Kimlik / çapraz bağlantı özeti
+            </p>
+            {identity?.confidence_note && (
+              <p className="text-[11px] leading-relaxed text-slate-400">
+                {plainNote(identity.confidence_note)}
+              </p>
+            )}
+
+            {sharedGroups.length > 0 && (
+              <div>
+                <p className="mb-1 text-[10px] uppercase tracking-wider text-slate-500">
+                  Paylaşılan kullanıcı adları ({sharedGroups.length})
+                </p>
+                <ul className="flex flex-wrap gap-1.5">
+                  {sharedGroups.slice(0, 8).map((group) => (
+                    <li
+                      key={group.username}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-slate-700 bg-slate-800/60 px-2.5 py-0.5 text-[11px] text-slate-200"
+                    >
+                      <span className="mono">{group.username}</span>
+                      <span className="text-slate-500">·</span>
+                      <span className="text-slate-400">{group.platforms.join(", ")}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {identityEdges.length > 0 && (
+              <table className="w-full text-left text-xs">
+                <caption className="sr-only">Çapraz bağlantılar</caption>
+                <thead className="text-[10px] uppercase tracking-wider text-slate-500">
+                  <tr>
+                    <th scope="col" className="py-1 font-medium">
+                      Tip
+                    </th>
+                    <th scope="col" className="py-1 text-right font-medium">
+                      Güven
+                    </th>
+                    <th scope="col" className="py-1 font-medium">
+                      Gerekçe
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {identityEdges.slice(0, 8).map((edge, index) => (
+                    <tr key={`${edge.source}-${edge.target}-${index}`} className="border-t border-slate-800/80">
+                      <th scope="row" className="py-1 font-normal text-slate-300">
+                        {edge.type.replace(/_/g, " ")}
+                      </th>
+                      <td className="mono py-1 text-right text-slate-300">
+                        {Math.round((edge.confidence ?? 0) * 100)}%
+                      </td>
+                      <td className="py-1 text-[11px] text-slate-500">{edge.reason || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
+      </div>
+
+      {timeline && (
+        <div className="card overflow-hidden">
+          <p className="section-title flex items-center gap-1.5 border-b border-slate-800 px-4 py-2.5">
+            <CalendarClock size={12} className="text-blue-400" aria-hidden /> Kronoloji (
+            {timeline.length})
+          </p>
+          <div className="max-h-72 overflow-y-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="sticky top-0 bg-slate-900/95 text-[10px] uppercase tracking-wider text-slate-500">
+                <tr>
+                  <th scope="col" className="px-4 py-2 font-medium">
+                    Tarih
+                  </th>
+                  <th scope="col" className="px-4 py-2 font-medium">
+                    Platform
+                  </th>
+                  <th scope="col" className="px-4 py-2 font-medium">
+                    Kayıt
+                  </th>
+                  <th scope="col" className="px-4 py-2 font-medium">
+                    Olay
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {timeline.slice(0, 30).map((row, index) => (
+                  <tr key={`${row.date}-${row.label}-${index}`} className="border-t border-slate-800/80">
+                    <th scope="row" className="mono whitespace-nowrap px-4 py-1.5 font-normal text-slate-300">
+                      {formatDateTime(row.date)}
+                    </th>
+                    <td className="px-4 py-1.5 text-slate-400">{platformMeta(row.platform).label}</td>
+                    <td className="max-w-[220px] truncate px-4 py-1.5 text-slate-200">{row.label}</td>
+                    <td className="mono px-4 py-1.5 text-[11px] text-slate-500">{row.event}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {timeline.length > 30 && (
+            <p className="border-t border-slate-800 px-4 py-1.5 text-[10px] text-slate-500">
+              +{timeline.length - 30} kayıt daha
+            </p>
+          )}
+        </div>
+      )}
+
+      {evidence && (
+        <div className="card space-y-3 p-4">
+          <p className="section-title flex items-center gap-1.5">
+            <FileText size={12} className="text-blue-400" aria-hidden /> Kanıt özeti
+          </p>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            <div className="rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2">
+              <p className="mono text-lg font-medium text-slate-100">{evidence.total ?? 0}</p>
+              <p className="text-[10px] uppercase tracking-wider text-slate-500">toplam kanıt</p>
+            </div>
+            <div className="rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2">
+              <p className="mono text-lg font-medium text-slate-100">
+                {evidence.linked_to_entities ?? 0}
+              </p>
+              <p className="text-[10px] uppercase tracking-wider text-slate-500">entity&apos;ye bağlı</p>
+            </div>
+            <div className="rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2">
+              <p className="mono text-sm font-medium text-slate-200">
+                {formatDateTime(evidence.retention_until)}
+              </p>
+              <p className="text-[10px] uppercase tracking-wider text-slate-500">saklama bitişi</p>
+            </div>
+          </div>
+          {evidence.by_entity && evidence.by_entity.length > 0 && (
+            <table className="w-full text-left text-xs">
+              <caption className="section-title pb-1 text-left">
+                En çok kanıtı olan entity&apos;ler
+              </caption>
+              <thead className="text-[10px] uppercase tracking-wider text-slate-500">
+                <tr>
+                  <th scope="col" className="py-1 font-medium">
+                    Entity
+                  </th>
+                  <th scope="col" className="py-1 font-medium">
+                    Platform
+                  </th>
+                  <th scope="col" className="py-1 text-right font-medium">
+                    Kanıt
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {evidence.by_entity.slice(0, 10).map((row) => (
+                  <tr key={row.entity_id} className="border-t border-slate-800/80">
+                    <th scope="row" className="max-w-[240px] truncate py-1 font-normal text-slate-200">
+                      {row.label}
+                    </th>
+                    <td className="py-1 text-slate-400">{platformMeta(row.platform).label}</td>
+                    <td className="mono py-1 text-right text-slate-300">{row.evidence}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ReportTab({ caseId }: { caseId: string }) {
   const [reports, setReports] = useState<ReportInfo[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [summary, setSummary] = useState<CaseReportJson | null>(null);
+  const [summaryBusy, setSummaryBusy] = useState(false);
+  const [summaryErr, setSummaryErr] = useState<string | null>(null);
+  const summaryKey = `showis:report:summary:${caseId}`;
+
+  // Yönetici özeti: JSON raporu üretilir, indirme adresinden içerik çekilir.
+  // (Listeleme ucu olmadığı için tek yol rapor üretmek; oturumda bir kez yapılır.)
+  const loadSummary = useCallback(async () => {
+    setSummaryBusy(true);
+    setSummaryErr(null);
+    try {
+      const report = await api.createReport(caseId, "json");
+      setReports((prev) => [report, ...prev.filter((r) => r.id !== report.id)]);
+      const res = await fetch(report.download_url, { headers: { Accept: "application/json" } });
+      if (!res.ok) throw new Error(`Rapor içeriği alınamadı (HTTP ${res.status})`);
+      const data = (await res.json()) as CaseReportJson;
+      setSummary(data);
+      try {
+        window.sessionStorage.setItem(summaryKey, JSON.stringify(data));
+      } catch {
+        /* kota dolu olabilir: önbellek atlanır, işlev görmezden gelir */
+      }
+    } catch (e: any) {
+      setSummaryErr(e?.message ?? "Yönetici özeti yüklenemedi");
+    } finally {
+      setSummaryBusy(false);
+    }
+  }, [caseId, summaryKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const cached = window.sessionStorage.getItem(summaryKey);
+    if (cached) {
+      try {
+        setSummary(JSON.parse(cached) as CaseReportJson);
+        return;
+      } catch {
+        window.sessionStorage.removeItem(summaryKey);
+      }
+    }
+    void loadSummary();
+  }, [loadSummary, summaryKey]);
 
   const generate = async (format: "json" | "pdf") => {
     setBusy(format);
@@ -850,34 +1595,73 @@ export function ReportTab({ caseId }: { caseId: string }) {
     }
   };
 
+  const sections = reportSections(summary);
+  const hasSections = Boolean(
+    sections.summary || sections.platforms || sections.identity || sections.timeline || sections.evidence
+  );
+
   return (
-    <div className="card max-w-xl space-y-4 p-5">
-      <h3 className="text-sm font-semibold text-slate-100">Rapor Oluştur</h3>
-      <p className="text-sm leading-relaxed text-slate-400">
-        Rapor; vaka bilgileri, bulgular, skor kırılımları ve kanıt metaverilerini içerir.
-      </p>
-      <div className="flex gap-2">
-        <button onClick={() => generate("pdf")} disabled={busy !== null} className="btn-primary">
-          {busy === "pdf" ? "Oluşturuluyor…" : "PDF Rapor"}
-        </button>
-        <button onClick={() => generate("json")} disabled={busy !== null} className="btn-ghost">
-          {busy === "json" ? "Oluşturuluyor…" : "JSON Rapor"}
-        </button>
+    <div className="space-y-4">
+      <div className="card max-w-xl space-y-4 p-5">
+        <h3 className="text-sm font-semibold text-slate-100">Rapor Oluştur</h3>
+        <p className="text-sm leading-relaxed text-slate-400">
+          Rapor; vaka bilgileri, bulgular, skor kırılımları ve kanıt metaverilerini içerir.
+        </p>
+        <div className="flex gap-2">
+          <button onClick={() => generate("pdf")} disabled={busy !== null} className="btn-primary">
+            {busy === "pdf" ? "Oluşturuluyor…" : "PDF Rapor"}
+          </button>
+          <button onClick={() => generate("json")} disabled={busy !== null} className="btn-ghost">
+            {busy === "json" ? "Oluşturuluyor…" : "JSON Rapor"}
+          </button>
+          <button
+            type="button"
+            onClick={loadSummary}
+            disabled={summaryBusy}
+            className="btn-ghost"
+            aria-label="Yönetici özetini yenile"
+          >
+            <RefreshCw size={13} className={summaryBusy ? "animate-spin" : ""} />
+            {summaryBusy ? "Özet hazırlanıyor…" : "Özeti yenile"}
+          </button>
+        </div>
+        {err && <p className="text-sm text-red-300">{err}</p>}
+        {reports.length > 0 && (
+          <div className="space-y-1">
+            <p className="section-title">Son oluşturulanlar</p>
+            {reports.map((r) => (
+              <a
+                key={r.id}
+                href={r.download_url}
+                className="block text-sm text-blue-400 hover:underline"
+              >
+                {r.format.toUpperCase()} —{" "}
+                {r.created_at ? new Date(r.created_at).toLocaleString("tr-TR") : r.id}
+              </a>
+            ))}
+          </div>
+        )}
       </div>
-      {err && <p className="text-sm text-red-300">{err}</p>}
-      {reports.length > 0 && (
-        <div className="space-y-1">
-          <p className="section-title">Son oluşturulanlar</p>
-          {reports.map((r) => (
-            <a
-              key={r.id}
-              href={r.download_url}
-              className="block text-sm text-blue-400 hover:underline"
-            >
-              {r.format.toUpperCase()} —{" "}
-              {r.created_at ? new Date(r.created_at).toLocaleString("tr-TR") : r.id}
-            </a>
-          ))}
+
+      {!summary && summaryBusy && (
+        <div className="card flex items-center gap-2 p-5 text-sm text-slate-400">
+          <Loader2 size={14} className="animate-spin" aria-hidden /> Yönetici özeti hazırlanıyor…
+        </div>
+      )}
+
+      {!summary && !summaryBusy && summaryErr && (
+        <p className="text-sm text-amber-300">Yönetici özeti yüklenemedi: {summaryErr}</p>
+      )}
+
+      {summary && hasSections && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="section-title">Yönetici özeti</p>
+            {summaryBusy && (
+              <span className="mono text-[10px] text-slate-500">güncelleniyor…</span>
+            )}
+          </div>
+          <ReportSummary data={summary} />
         </div>
       )}
     </div>

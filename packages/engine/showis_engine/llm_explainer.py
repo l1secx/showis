@@ -89,4 +89,4 @@ class FindingExplainer:
                 f"{finding.platform.capitalize()} profili bulundu. Güven skoru: {finding.score:.2f}"
                 + self._authenticity_note(finding)
             )
-            return finding.explanation
+            return str(finding.explanation)

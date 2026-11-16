@@ -331,3 +331,184 @@ async def test_authenticity_yoksa_aciklama_degismez():
     finding.authenticity_reasons = []
     explanation = await FindingExplainer(llm_client=None).explain(finding, target)
     assert "Düşük güvenilirlik" not in explanation
+
+
+# ---------------------------------------------------------------------------
+# T-326: authenticity DB'ye yazılır (0004 migration kolonları)
+# ---------------------------------------------------------------------------
+
+
+async def _run_scan_with_entity(session_factory, entity: Entity, *, scan_id: str, case_id: str):
+    """Tek entity'lik sahte tarama koşar (skill'i DB'ye yazar)."""
+    from showis.db.models import Case as DbCase
+    from showis.db.models import Scan as DbScan
+    from showis.db.models import Target as DbTarget
+    from showis.services.scanner import ScannerService
+    from showis_contracts import Observation, ObservationKind, RiskTier, TaskSpec
+
+    class _Conn:
+        name = "fake"
+        platform = entity.platform
+        tier = RiskTier.A
+        supported_kinds = {"probe"}
+
+        async def plan(self, ctx):
+            return [
+                TaskSpec(
+                    id=f"{scan_id}-t1",
+                    connector=self.name,
+                    platform=entity.platform,
+                    kind="probe",
+                    params={},
+                )
+            ]
+
+        async def run(self, task, ctx):
+            return [
+                Observation(
+                    id=f"obs-{scan_id}",
+                    connector=self.name,
+                    platform=entity.platform,
+                    kind=ObservationKind.PROFILE,
+                    subject=entity.label,
+                    tier=self.tier,
+                    data={},
+                )
+            ]
+
+        def normalize(self, obs):
+            return [entity], []
+
+    async with session_factory() as session:
+        # Yeniden tarama senaryosunda vaka hedefi zaten var olabilir (idempotent kurulum)
+        if await session.get(DbCase, case_id) is None:
+            session.add(
+                DbCase(
+                    id=case_id,
+                    name="Auth Test",
+                    purpose="test",
+                    legal_basis="self_check",
+                    retention_days=7,
+                )
+            )
+            session.add(
+                DbTarget(
+                    case_id=case_id,
+                    first_name="Kerem",
+                    last_name="Boz",
+                    hints={},
+                    review_required=False,
+                )
+            )
+        session.add(DbScan(id=scan_id, case_id=case_id, mode="O2", status="running", budget={}))
+        await session.commit()
+
+    async with session_factory() as session:
+        await ScannerService(connectors=[_Conn()]).execute_scan(scan_id, session)
+
+
+@pytest.fixture
+async def scan_db(tmp_path, monkeypatch):
+    from showis.db import models as _models  # noqa: F401 - Base.metadata'yi doldurur
+    from showis.db.base import Base
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import StaticPool
+
+    monkeypatch.setenv("SHOWIS_EVIDENCE_DIR", str(tmp_path / "evidence"))
+    # Bellek içi sqlite: tüm oturumlar aynı bağlantıyı paylaşsın (StaticPool).
+    engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        poolclass=StaticPool,
+        connect_args={"check_same_thread": False},
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    yield factory
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_tarama_authenticityyi_db_yazar(scan_db):
+    from showis.db.models import Finding as DbFinding
+    from sqlalchemy import select
+
+    entity = Entity(
+        id="github:kboz",
+        type=EntityType.ACCOUNT,
+        platform=Platform.GITHUB,
+        label="kboz",
+        attributes={
+            "username": "kboz",
+            "name": "Kerem Boz",
+            "bio": "",
+            "avatar_url": "",
+            "created_at": "2026-11-15T00:00:00Z",  # 1 günlük
+            "public_repos": 0,
+        },
+    )
+    await _run_scan_with_entity(scan_db, entity, scan_id="scan-a", case_id="case-a")
+
+    async with scan_db() as session:
+        row = (await session.execute(select(DbFinding))).scalars().one()
+    assert row.authenticity is not None
+    assert 0.0 <= row.authenticity <= 1.0
+    assert row.authenticity < 0.35, "boş/yeni hesap düşük authenticity almalı"
+    assert row.authenticity_reasons, "gerekçeler DB'ye yazılmalı"
+    assert any("sinyaller" in reason for reason in row.authenticity_reasons)
+
+
+@pytest.mark.asyncio
+async def test_veri_yoksa_notr_authenticity_db_yazilir(scan_db):
+    from showis.db.models import Finding as DbFinding
+    from sqlalchemy import select
+
+    entity = Entity(
+        id="github:bos",
+        type=EntityType.ACCOUNT,
+        platform=Platform.GITHUB,
+        label="bos",
+        attributes={"username": "bos"},
+    )
+    await _run_scan_with_entity(scan_db, entity, scan_id="scan-b", case_id="case-b")
+
+    async with scan_db() as session:
+        row = (await session.execute(select(DbFinding))).scalars().one()
+    assert row.authenticity == pytest.approx(0.5)
+    assert row.authenticity_reasons
+
+
+@pytest.mark.asyncio
+async def test_onaylanmis_bulgu_karari_korunur_authenticity_guncellenir(scan_db):
+    """SEC-15: kullanıcı kararı korunur, authenticity (skor gibi) güncellenir."""
+    from datetime import datetime, timezone
+
+    from showis.db.models import Finding as DbFinding
+    from sqlalchemy import select
+
+    entity = Entity(
+        id="github:kboz",
+        type=EntityType.ACCOUNT,
+        platform=Platform.GITHUB,
+        label="kboz",
+        attributes={"username": "kboz", "name": "Kerem Boz"},
+    )
+    await _run_scan_with_entity(scan_db, entity, scan_id="scan-c", case_id="case-c")
+
+    # Kullanıcı bulguyu onayladı
+    async with scan_db() as session:
+        row = (await session.execute(select(DbFinding))).scalars().one()
+        row.status = "confirmed"
+        row.verified_at = datetime.now(timezone.utc)
+        row.authenticity = 0.99  # eski/yanlış değer: yeniden tarama düzeltmeli
+        await session.commit()
+
+    # Yeniden tarama (aynı vaka/bulgu kimliği)
+    await _run_scan_with_entity(scan_db, entity, scan_id="scan-c2", case_id="case-c")
+
+    async with scan_db() as session:
+        row = (await session.execute(select(DbFinding))).scalars().one()
+    assert row.status == "confirmed", "kullanıcı kararı korunmalı (SEC-15)"
+    assert row.verified_at is not None
+    assert row.authenticity != pytest.approx(0.99), "authenticity güncellenmeli"
+    assert row.authenticity_reasons

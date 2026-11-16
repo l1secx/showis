@@ -7,7 +7,9 @@ işlenir; engelleme (checkpoint/429) durumunda asla bypass denenmez —
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import re
 import uuid
 from typing import Any
 
@@ -22,6 +24,7 @@ from showis_contracts import (
     ScanContext,
     Seed,
     TaskSpec,
+    make_entity_id,
 )
 from showis_engine.browser import RENDER_USER_AGENT, BrowserClient
 from showis_engine.htmlutil import og_image, og_title, strip_html
@@ -36,6 +39,11 @@ from showis_engine.links import (
 from .websearch.base import SearchProvider
 
 logger = logging.getLogger("showis.rendered_connector")
+
+#: UUID biçimli kimlikler etiket olarak kullanılmaz (okunamaz)
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
+)
 
 
 class RenderedProfileConnector:
@@ -344,15 +352,30 @@ class RenderedProfileConnector:
 
         if obs.kind == ObservationKind.PROFILE:
             data = obs.data
-            identifier = data.get("username") or data.get("identifier") or obs.subject
+            username = data.get("username")
+            display_name = data.get("display_name")
+            # Kimlik: kullanıcı adı → identifier → subject (T-347 semantiği)
+            identifier = username or data.get("identifier") or obs.subject
             if not identifier:
                 return entities, edges
 
+            # Etiket: kullanıcı adı → görünen ad. UUID asla etiket olmaz
+            # (okunamaz; platform kimliği `attributes.platform_user_id`de).
+            # Okunabilir ad yoksa tekil, deterministik kısa tutamak üretilir —
+            # etiket aynı zamanda kullanıcı adı gruplamasında anahtar olduğu
+            # için (scanner `_entity_username`) **benzersiz** olmak zorunda.
+            candidate = username or display_name
+            if candidate and not _UUID_RE.match(str(candidate)):
+                label = str(candidate)
+            else:
+                digest = hashlib.sha1(str(identifier).encode("utf-8")).hexdigest()[:8]
+                label = f"{self.platform.value}:{digest}"
+
             entity = Entity(
-                id=f"{self.platform.value}:{identifier}",
+                id=make_entity_id(self.platform.value, str(identifier)),
                 type=EntityType.ACCOUNT,
                 platform=self.platform,
-                label=str(identifier),
+                label=label,
                 url=data.get("profile_url") or obs.url,
                 attributes=self._entity_attributes(data),
                 evidence_ids=ev_ids,
@@ -369,7 +392,7 @@ class RenderedProfileConnector:
                 if not ident:
                     continue
                 entity = Entity(
-                    id=f"{self.platform.value}:{ident}",
+                    id=make_entity_id(self.platform.value, str(ident)),
                     type=EntityType.ACCOUNT,
                     platform=self.platform,
                     label=str(ident),

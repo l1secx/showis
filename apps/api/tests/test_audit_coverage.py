@@ -129,9 +129,15 @@ async def test_finding_update_audit_ip_ile_yazilir(client, db_factory):
     assert entry.target == "Finding: finding:github:audit-user"
 
 
-async def test_report_download_audit_yazilir(client, db_factory, tmp_path):
+async def test_report_download_audit_yazilir(client, db_factory, tmp_path, monkeypatch):
+    import showis.services.report_service as report_service
+
+    # T-316: indirme yalnizca REPORT_DIR icindeki dosyalari servis eder
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir()
+    monkeypatch.setattr(report_service, "REPORT_DIR", reports_dir)
     await _seed_case_scan(db_factory)
-    report_path = tmp_path / "report.json"
+    report_path = reports_dir / "report.json"
     report_path.write_text('{"case":"case-audit"}', encoding="utf-8")
     async with db_factory() as session:
         session.add(

@@ -26,6 +26,7 @@ from showis_engine.scan_modes import (
     _COST,
     _IDENTIFIER_TASKS,
     _RENDER_EVENTS,
+    DEFAULT_CALIBRATION_PATH,
     MODE_PROFILES,
     calibration_path,
     estimate_scan,
@@ -144,12 +145,53 @@ def test_kalibre_degerler_kullanilir(monkeypatch, tmp_path):
     assert plain["seconds"] > legacy
 
 
-def test_concurrency_bir_eski_tahmine_esit(monkeypatch):
+def test_concurrency_bir_eski_tahmine_esit(monkeypatch, tmp_path):
+    """Kalibrasyon YOKKEN concurrency=1 eski (heuristic) formülle birebir eşit.
+
+    T-339: repoda `calibration.json` bulunduğu için (T-321'de gerçek DB verisinden
+    üretildi) bu test dosyanın yokluğunu açıkça kurmalı.
+    """
+    missing = tmp_path / "kalibrasyon-yok.json"
+    monkeypatch.setenv("SHOWIS_CALIBRATION_PATH", str(missing))
     monkeypatch.setenv("SHOWIS_SCAN_CONCURRENCY", "1")
     for mode in ("O1", "O2", "O3"):
         est = estimate_scan(_target("ODTÜ"), mode)
+        assert est["confidence"] == "heuristic"
         assert est["seconds"] == _legacy_estimate(_target("ODTÜ"), mode), mode
         assert est["concurrency"] == 1
+
+
+def test_kalibrasyon_acikken_legacy_formulden_farkli(monkeypatch):
+    """Gerçek `calibration.json` varken tahmin legacy'den sapar ve 'calibrated' der."""
+    real = DEFAULT_CALIBRATION_PATH
+    if not real.exists():
+        pytest.skip("calibration.json yok (T-321 kalibrasyonu üretilmemiş)")
+    calibration = load_calibration(real)
+    if not calibration.is_calibrated:
+        pytest.skip("calibration.json boş (heuristic)")
+
+    monkeypatch.setenv("SHOWIS_CALIBRATION_PATH", str(real))
+    monkeypatch.setenv("SHOWIS_SCAN_CONCURRENCY", "1")
+    est = estimate_scan(_target("ODTÜ"), "O2", calibration_path=real)
+    assert est["confidence"] == "calibrated"
+    assert est["calibration"]["source"] in ("db", "live")
+    assert est["calibration"]["sample_count"] >= 0
+    assert est["seconds"] != _legacy_estimate(_target("ODTÜ"), "O2"), (
+        "kalibre maliyetler legacy formülden farklı olmalı"
+    )
+
+
+def test_env_bir_mod_profilini_ezer_tahminde(monkeypatch, tmp_path):
+    """T-339/3: env=1 iken tahmin mod profilinin (O2=6) concurrency'sini kullanmaz."""
+    monkeypatch.setenv("SHOWIS_CALIBRATION_PATH", str(tmp_path / "yok.json"))
+    monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY", raising=False)
+    default_o2 = estimate_scan(_target("ODTÜ"), "O2")
+    assert default_o2["concurrency"] == MODE_PROFILES["O2"]["concurrency"] == 6
+
+    monkeypatch.setenv("SHOWIS_SCAN_CONCURRENCY", "1")
+    sequential = estimate_scan(_target("ODTÜ"), "O2")
+    assert sequential["concurrency"] == 1
+    assert sequential["seconds"] > default_o2["seconds"], "concurrency=1 daha uzun sürmeli"
 
 
 def test_concurrency_dort_tahmini_dusurur_ama_sifirlamaz(monkeypatch):
@@ -489,3 +531,97 @@ def test_dsn_maskesi_sir_sizdirmaz():
     assert cal.asyncpg_dsn(
         "postgresql+asyncpg://u:p@h:5432/d"
     ) == "postgresql://u:p@h:5432/d"
+
+
+# ---------------------------------------------------------------------------
+# T-321: mod bazli es zamanlilik + env override + host limiter ayarlari
+# ---------------------------------------------------------------------------
+
+
+def test_mod_profilleri_es_zamanlilik_degerleri():
+    from showis_engine.scan_modes import profile_concurrency
+
+    assert profile_concurrency("O1") == 2
+    assert profile_concurrency("O2") == 6
+    assert profile_concurrency("O3") == 8
+    # bilinmeyen mod O2'ye iner
+    assert profile_concurrency("standard") == 6
+
+
+def test_env_mod_profilini_ezer(monkeypatch):
+    from showis_engine.scan_modes import resolve_concurrency
+
+    monkeypatch.setenv("SHOWIS_SCAN_CONCURRENCY", "3")
+    assert resolve_concurrency("O3") == 3
+    monkeypatch.setenv("SHOWIS_SCAN_CONCURRENCY", "1")
+    assert resolve_concurrency("O2") == 1
+    monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY")
+    assert resolve_concurrency("O2") == 6
+    assert resolve_concurrency("O3") == 8
+
+
+def test_explicit_deger_env_ve_modu_ezer(monkeypatch):
+    from showis_engine.scan_modes import resolve_concurrency
+
+    monkeypatch.setenv("SHOWIS_SCAN_CONCURRENCY", "3")
+    assert resolve_concurrency("O2", explicit=5) == 5
+
+
+def test_gecersiz_env_mod_profiline_duser(monkeypatch):
+    from showis_engine.scan_modes import resolve_concurrency
+
+    monkeypatch.setenv("SHOWIS_SCAN_CONCURRENCY", "hizli")
+    assert resolve_concurrency("O3") == 8
+
+
+def test_env_yoksa_tahmin_mod_profilini_kullanir(monkeypatch):
+    monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY", raising=False)
+    o1 = estimate_scan(_target("ODTÜ"), "O1")
+    o2 = estimate_scan(_target("ODTÜ"), "O2")
+    assert o1["concurrency"] == 2
+    assert o2["concurrency"] == 6
+    # daha yuksek es zamanlilik -> daha kisa tahmin (gorev sayisi ayni kalmak sart)
+    o3 = estimate_scan(_target("ODTÜ"), "O3")
+    assert o3["concurrency"] == 8
+
+
+def test_env_override_tahmine_yansir(monkeypatch):
+    monkeypatch.setenv("SHOWIS_SCAN_CONCURRENCY", "2")
+    est = estimate_scan(_target("ODTÜ"), "O3")
+    assert est["concurrency"] == 2
+
+
+def test_host_limiter_env_ayarlari(monkeypatch):
+    from showis_engine.ratelimit import (
+        DEFAULT_MAX_PER_HOST,
+        DEFAULT_MIN_INTERVAL,
+        HostLimiter,
+    )
+
+    monkeypatch.delenv("SHOWIS_HOST_MAX_CONCURRENCY", raising=False)
+    monkeypatch.delenv("SHOWIS_HOST_MIN_INTERVAL", raising=False)
+    default = HostLimiter.from_env()
+    assert default.max_per_host == DEFAULT_MAX_PER_HOST == 2
+    assert default.min_interval == pytest.approx(DEFAULT_MIN_INTERVAL) == 0.25
+
+    monkeypatch.setenv("SHOWIS_HOST_MAX_CONCURRENCY", "3")
+    monkeypatch.setenv("SHOWIS_HOST_MIN_INTERVAL", "0.1")
+    tuned = HostLimiter.from_env()
+    assert tuned.max_per_host == 3
+    assert tuned.min_interval == pytest.approx(0.1)
+
+
+def test_host_limiter_env_sinirlari_kirpilir(monkeypatch):
+    from showis_engine.ratelimit import HostLimiter
+
+    monkeypatch.setenv("SHOWIS_HOST_MAX_CONCURRENCY", "99")
+    monkeypatch.setenv("SHOWIS_HOST_MIN_INTERVAL", "60")
+    limiter = HostLimiter.from_env()
+    assert limiter.max_per_host == 8
+    assert limiter.min_interval == pytest.approx(5.0)
+
+    monkeypatch.setenv("SHOWIS_HOST_MAX_CONCURRENCY", "0")
+    monkeypatch.setenv("SHOWIS_HOST_MIN_INTERVAL", "-2")
+    clamped = HostLimiter.from_env()
+    assert clamped.max_per_host == 1
+    assert clamped.min_interval == 0.0

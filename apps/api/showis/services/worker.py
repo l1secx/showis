@@ -23,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 from celery import Celery
 from celery.schedules import crontab
 from celery.signals import worker_process_init
+from showis.core.logging import install_redaction_filter
 from showis.db.models import Scan
 from showis.db.session import reset_inherited_engine, task_session
 from showis.services.retention import run_retention_purge
@@ -30,6 +31,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger("showis.worker")
+
+# T-332: worker loglarinda API anahtari sizmasin (httpx INFO + merkezi redaksiyon)
+install_redaction_filter()
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 

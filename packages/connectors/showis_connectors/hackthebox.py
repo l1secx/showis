@@ -28,6 +28,17 @@ HTB_PROFILE_RE = re.compile(
 
 # HTB profil metninden alan cikarimi
 _RANK_RE = re.compile(r"rank[^\w]{0,15}(captures?|root|pro|user|scriptkiddie)", re.IGNORECASE)
+# T-347: SPA HTML'inde gomulu JSON'da kullanici adi / katilim tarihi / puan
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
+)
+_JSON_USERNAME_RE = re.compile(r'"username"\s*:\s*"([A-Za-z0-9_.-]{1,64})"')
+_JSON_JOINED_RE = re.compile(r'"(?:joinedAt|joinDate|createdAt)"\s*:\s*"([0-9T:\-Z.]+)"')
+_POINTS_RE = re.compile(r"(?:points|puan)[^\d]{0,12}(\d{1,7})", re.IGNORECASE)
+_JOINED_TEXT_RE = re.compile(
+    r"(?:joined|member since|katılım)[^\w]{0,12}([A-Z][a-z]+ \d{1,2},? \d{4}|\d{4}-\d{2}-\d{2})",
+    re.IGNORECASE,
+)
 _MACHINES_RE = re.compile(
     r"machines?\s*(?:completed|owned)?[^\d]{0,15}(\d{1,4})", re.IGNORECASE
 )
@@ -218,7 +229,24 @@ class HackTheBoxConnector(RenderedProfileConnector):
 
         data = super().parse_profile(html, url, identifier)
         data["profile_id"] = identifier
-        data.pop("username", None)
+        # T-347: platform kimligi (uuid) ile kullanici adi AYRILIR. Profilde
+        # okunabilir bir kullanici adi varsa entity kimligi ondan uretilir
+        # (rendered.normalize -> f"{platform}:{username}"); uuid yalnizca
+        # `platform_user_id` alaninda saklanir.
+        username = self._extract_username(html, data, identifier)
+        if username:
+            data["username"] = username
+        else:
+            data.pop("username", None)
+        data["platform_user_id"] = identifier
+
+        joined_m = _JSON_JOINED_RE.search(html) if html else None
+        if joined_m:
+            data["joined_at"] = joined_m.group(1)
+        else:
+            joined_text = _JOINED_TEXT_RE.search(text)
+            data["joined_at"] = joined_text.group(1) if joined_text else None
+        data["points"] = _first_int(_POINTS_RE, text)
 
         rank_m = _RANK_RE.search(text)
         data["rank"] = rank_m.group(1).strip().title() if rank_m else None
@@ -244,9 +272,42 @@ class HackTheBoxConnector(RenderedProfileConnector):
         )
         return data
 
+    @staticmethod
+    def _extract_username(html: str, data: dict[str, Any], identifier: str) -> str | None:
+        """Okunabilir kullanici adini bulur; uuid asla kullanici adi sayilmaz.
+
+        Kaynak sirasi: gomulu JSON `"username"` -> `display_name` (uuid degilse)
+        -> identifier (uuid degilse). Bulunamazsa None (kimlik uuid kalir).
+        """
+        if html:
+            match = _JSON_USERNAME_RE.search(html)
+            if match:
+                candidate = match.group(1).strip()
+                if candidate and not _UUID_RE.match(candidate):
+                    return candidate
+        candidates = (
+            str(data.get("display_name") or "").strip(),
+            str(identifier or "").strip(),
+        )
+        for candidate in candidates:
+            if candidate and not _UUID_RE.match(candidate) and " " not in candidate:
+                return candidate
+        return None
+
     def _entity_attributes(self, data: dict[str, Any]) -> dict[str, Any]:
         attrs = super()._entity_attributes(data)
-        for key in ("profile_id", "country", "machines_completed", "rank"):
+        for key in (
+            "profile_id",
+            "platform_user_id",
+            "username",
+            "country",
+            "machines_completed",
+            "rank",
+            "points",
+            "joined_at",
+            "created_at",
+            "bio",
+        ):
             if data.get(key) is not None:
                 attrs[key] = data[key]
         for key in ("github_link", "twitter_link", "telegram_link", "linkedin"):
@@ -254,4 +315,6 @@ class HackTheBoxConnector(RenderedProfileConnector):
                 attrs[key] = data[key]
         if data.get("display_name"):
             attrs["name"] = data["display_name"]
+        if attrs.get("joined_at") and not attrs.get("created_at"):
+            attrs["created_at"] = attrs["joined_at"]
         return attrs

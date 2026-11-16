@@ -510,7 +510,11 @@ def print_report(measurement: Measurement, payload: dict[str, Any]) -> None:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Tarama suresi kalibrasyonu")
-    parser.add_argument("--dry-run", action="store_true", help="rapor ver, dosya yazma")
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument("--dry-run", action="store_true", help="rapor ver, dosya yazma")
+    mode_group.add_argument(
+        "--apply", action="store_true", help="kalibrasyonu dosyaya yaz (varsayilan davranis)"
+    )
     parser.add_argument("--out", default=str(DEFAULT_OUT), help="cikti JSON yolu")
     parser.add_argument("--database-url", default=None, help="DSN (env'i ezer)")
     parser.add_argument(

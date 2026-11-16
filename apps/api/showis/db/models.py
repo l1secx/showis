@@ -269,6 +269,9 @@ class Finding(Base):
     status: Mapped[str] = mapped_column(String(32), default="candidate")
     score: Mapped[float] = mapped_column(Float, default=0.0)
     breakdown: Mapped[dict[str, Any]] = mapped_column(JSON_TYPE, default=dict)
+    #: Sahte/atil hesap sinyali (0..1). Guven skorundan bagimsizdir (T-301).
+    authenticity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    authenticity_reasons: Mapped[list[str] | None] = mapped_column(JSON_TYPE, nullable=True)
     explanation: Mapped[str | None] = mapped_column(Text, nullable=True)
     evidence_ids: Mapped[list[str]] = mapped_column(JSON_TYPE, default=list)
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

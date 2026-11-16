@@ -15,34 +15,11 @@ import {
   X,
 } from "lucide-react";
 import { api, type GraphData } from "../../../lib/api";
+import { platformMeta } from "./platform-meta";
 
 /* ------------------------------------------------------------------ */
 /* Sabitler                                                            */
 /* ------------------------------------------------------------------ */
-
-const PLATFORM_COLORS: Record<string, string> = {
-  github: "#24292f",
-  gitlab: "#fc6d26",
-  reddit: "#ff4500",
-  keybase: "#33a0ff",
-  steam: "#1b2838",
-  devto: "#0a0a0a",
-  dockerhub: "#2496ed",
-  npm: "#cb3837",
-  pypi: "#3776ab",
-  chess: "#81b64c",
-  hackernews: "#ff6600",
-  gravatar: "#1d4ed8",
-  instagram: "#c13584",
-  tiktok: "#010101",
-  youtube: "#ff0000",
-  medium: "#000000",
-  telegram: "#229ed9",
-  tryhackme: "#e1306c",
-  hackthebox: "#9b59b6",
-  web: "#3498db",
-  unknown: "#7f8c8d",
-};
 
 const EDGE_TYPES: { value: string; label: string; color: string }[] = [
   { value: "same_person", label: "Aynı kişi", color: "#34d399" },
@@ -392,7 +369,7 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
           selector: "node",
           style: {
             "background-color": (ele: cytoscape.NodeSingular) =>
-              PLATFORM_COLORS[String(ele.data("platform"))] ?? "#555",
+              platformMeta(String(ele.data("platform"))).color,
             "border-width": 1.5,
             "border-color": "#8b98ab",
             width: "mapData(score, 0, 1, 20, 44)",
@@ -802,7 +779,7 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
                 key={platform}
                 type="button"
                 aria-pressed={included}
-                aria-label={`${platform} platformunu ${
+                aria-label={`${platformMeta(platform).label} platformunu ${
                   included ? "filtreden çıkar" : "filtreye ekle"
                 }`}
                 onClick={() => togglePlatform(platform)}
@@ -815,11 +792,11 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
                 <span
                   className="h-1.5 w-1.5 rounded-full"
                   style={{
-                    backgroundColor: active ? PLATFORM_COLORS[platform] ?? "#7f8c8d" : "#334155",
+                    backgroundColor: active ? platformMeta(platform).accent : "#334155",
                   }}
                   aria-hidden
                 />
-                {platform}
+                {platformMeta(platform).label}
                 <span className="mono opacity-70">{count}</span>
               </button>
             );
@@ -901,14 +878,14 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                   <span
                     className="chip"
-                    style={{ borderColor: `${PLATFORM_COLORS[selectedNode.platform] ?? "#7f8c8d"}66` }}
+                    style={{ borderColor: `${platformMeta(selectedNode.platform).accent}66` }}
                   >
                     <span
                       className="h-1.5 w-1.5 rounded-full"
-                      style={{ backgroundColor: PLATFORM_COLORS[selectedNode.platform] ?? "#7f8c8d" }}
+                      style={{ backgroundColor: platformMeta(selectedNode.platform).accent }}
                       aria-hidden
                     />
-                    {selectedNode.platform}
+                    {platformMeta(selectedNode.platform).label}
                   </span>
                   <span className="chip">{selectedNode.type}</span>
                   <span className="mono text-sm font-medium text-blue-300">
@@ -930,9 +907,9 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-3">
               <div className="flex flex-wrap gap-2">
                 <Link
-                  href={`/cases/${caseId}/findings`}
+                  href={`/cases/${caseId}/findings?entity=${encodeURIComponent(selectedNode.id)}`}
                   className="btn-ghost btn-sm"
-                  title={`Bulgular sekmesinde ${selectedFindingId ?? ""} kimliğiyle eşleşir`}
+                  title={`Bulgular sekmesinde bu entity'yi vurgular (${selectedFindingId ?? ""})`}
                 >
                   <ExternalLink size={12} /> Bulgular sekmesinde aç
                 </Link>

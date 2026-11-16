@@ -1,4 +1,5 @@
 import logging
+import math
 import os
 import re
 from datetime import datetime, timezone
@@ -14,10 +15,10 @@ from showis.db.models import Target as DbTarget
 from showis.db.session import get_db
 from showis.services.audit import list_audit_logs, record_request_audit
 from showis.services.connectors_factory import build_connectors, build_llm_client
-from showis.services.report_service import create_report
+from showis.services.report_service import create_report, purge_case_reports
 from showis.services.retention import _evidence_file_path
 from showis.services.scanner import ScannerService
-from showis_contracts import Platform, Target
+from showis_contracts import FindingStatus, Platform, Target
 from showis_engine.policy import guard_target
 from showis_engine.scan_modes import budget_for_mode, estimate_scan, norm_mode
 from sqlalchemy import delete, select
@@ -370,6 +371,11 @@ async def _cleanup_report_files(
                 "Rapor dosyasi silinemedi (%s): %s", path, type(exc).__name__
             )
             failed.append(str(path))
+
+    # T112-R3: vaka bazli rapor klasoru (`REPORT_DIR/<case>/`) — dosyalar + klasor
+    dir_failed, dir_removed = purge_case_reports(case_id)
+    failed.extend(dir_failed)
+    removed += dir_removed
     return failed, removed
 
 
@@ -451,7 +457,9 @@ def _clamp_budget(requested: dict[str, Any] | None, mode: str) -> dict[str, Any]
     Yalnız bilinen anahtarlar dikkate alınır; her değer ``min()`` ile profile
     kırpılır. Sonuç her zaman güvenli mod profilidir.
     """
-    profile = budget_for_mode(mode)
+    # Not: `budget_for_mode` dönüşü mypy'de `Any`'ye düşüyor (engine tarafı
+    # import çözümlemesi); yerel anotasyon `no-any-return` uyarısını kapatır.
+    profile: dict[str, Any] = budget_for_mode(mode)
     if not requested:
         return profile
     clamped = dict(profile)
@@ -612,12 +620,70 @@ async def start_scan(
     }
 
 
+#: T-327: bulgu listeleme filtreleri
+_FINDING_STATUSES = {status.value for status in FindingStatus}
+
+
+def _parse_status_filter(raw: str | None) -> list[str]:
+    """`?status=candidate,confirmed` → doğrulanmış liste (geçersizde 422)."""
+    if raw is None:
+        return []
+    values = [part.strip().lower() for part in raw.split(",") if part.strip()]
+    if not values:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="status filtresi boş olamaz",
+        )
+    invalid = sorted({value for value in values if value not in _FINDING_STATUSES})
+    if invalid:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                f"Geçersiz status: {', '.join(invalid)} "
+                f"(izinli: {', '.join(sorted(_FINDING_STATUSES))})"
+            ),
+        )
+    return list(dict.fromkeys(values))
+
+
+def _parse_min_authenticity(raw: float | None) -> float | None:
+    """`?min_authenticity=0.35` → 0..1 aralık doğrulaması (aksi halde 422)."""
+    if raw is None:
+        return None
+    if not math.isfinite(raw) or raw < 0 or raw > 1:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="min_authenticity 0..1 aralığında olmalı",
+        )
+    return raw
+
+
 @router.get("/{case_id}/findings")
-async def get_case_findings(case_id: str, db: AsyncSession = Depends(get_db)):
-    res = await db.execute(
-        select(Finding).where(Finding.case_id == case_id).order_by(Finding.score.desc())
-    )
-    findings = res.scalars().all()
+async def get_case_findings(
+    case_id: str,
+    status: str | None = None,
+    min_authenticity: float | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Vaka bulguları — skora göre azalan.
+
+    Opsiyonel filtreler (T-327):
+    * `status=candidate,confirmed` — virgülle çoklu; her değer
+      `candidate|confirmed|lead|rejected` olmalı (aksi halde 422).
+    * `min_authenticity=0.35` — 0..1 aralığında; authenticity skoru bu değerin
+      altında olan (veya `authenticity` boş olan) bulgular döner **değil**.
+    """
+    statuses = _parse_status_filter(status)
+    min_auth = _parse_min_authenticity(min_authenticity)
+
+    stmt = select(Finding).where(Finding.case_id == case_id)
+    if statuses:
+        stmt = stmt.where(Finding.status.in_(statuses))
+    if min_auth is not None:
+        stmt = stmt.where(Finding.authenticity.is_not(None)).where(
+            Finding.authenticity >= min_auth
+        )
+    findings = (await db.execute(stmt.order_by(Finding.score.desc()))).scalars().all()
     return [
         {
             "id": f.id,
@@ -631,6 +697,9 @@ async def get_case_findings(case_id: str, db: AsyncSession = Depends(get_db)):
             "explanation": f.explanation,
             "evidence_ids": f.evidence_ids,
             "verified_at": f.verified_at.isoformat() if f.verified_at else None,
+            # T-327: sahte/spam (authenticity) sinyali — eski istemciler icin ek alan
+            "authenticity": f.authenticity,
+            "authenticity_reasons": f.authenticity_reasons,
         }
         for f in findings
     ]
@@ -730,6 +799,9 @@ async def export_case(
                 "breakdown": f.breakdown,
                 "explanation": f.explanation,
                 "evidence_ids": f.evidence_ids,
+                # T-327: authenticity alanlari export'ta da yer alir
+                "authenticity": f.authenticity,
+                "authenticity_reasons": f.authenticity_reasons,
             }
             for f in findings
         ],
@@ -810,7 +882,7 @@ async def get_case_audit(case_id: str, db: AsyncSession = Depends(get_db)):
 
 
 class ReportCreateRequest(BaseModel):
-    format: str = "pdf"  # pdf | json
+    format: str = "pdf"  # pdf | json | html
 
 
 @router.post("/{case_id}/report")

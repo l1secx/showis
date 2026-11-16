@@ -28,10 +28,14 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger("showis.ratelimit")
 
-#: Host basina es zamanli istek siniri.
+#: Host basina es zamanli istek siniri (GitHub gibi host'larda guvenli sinir).
 DEFAULT_MAX_PER_HOST = 2
-#: Ayni host'a iki istek arasindaki asgari saniye.
+#: Ayni host'a iki istek arasindaki asgari saniye (nezaket).
 DEFAULT_MIN_INTERVAL = 0.25
+
+#: Env ile verilebilecek guvenli araliklar (T-321).
+MIN_MAX_PER_HOST, MAX_MAX_PER_HOST = 1, 8
+MIN_MIN_INTERVAL, MAX_MIN_INTERVAL = 0.0, 5.0
 
 _DISABLED_VALUES = {"0", "false", "off", "no", "disabled"}
 
@@ -47,26 +51,44 @@ def host_key(url: str) -> str:
     return (parsed.netloc or parsed.path or "-").lower()
 
 
-def _int_env(name: str, default: int) -> int:
+def _int_env(
+    name: str, default: int, minimum: int | None = None, maximum: int | None = None
+) -> int:
     raw = os.getenv(name)
-    if raw is None:
+    if raw is None or not str(raw).strip():
         return default
     try:
-        return int(str(raw).strip())
+        value = int(str(raw).strip())
     except ValueError:
         logger.warning("Gecersiz %s=%r, varsayilan %s kullanilir", name, raw, default)
         return default
+    if minimum is not None and value < minimum:
+        logger.warning("%s=%s cok kucuk, %s kullanilacak", name, value, minimum)
+        return minimum
+    if maximum is not None and value > maximum:
+        logger.warning("%s=%s cok buyuk, %s kullanilacak", name, value, maximum)
+        return maximum
+    return value
 
 
-def _float_env(name: str, default: float) -> float:
+def _float_env(
+    name: str, default: float, minimum: float | None = None, maximum: float | None = None
+) -> float:
     raw = os.getenv(name)
-    if raw is None:
+    if raw is None or not str(raw).strip():
         return default
     try:
-        return float(str(raw).strip())
+        value = float(str(raw).strip())
     except ValueError:
         logger.warning("Gecersiz %s=%r, varsayilan %s kullanilir", name, raw, default)
         return default
+    if minimum is not None and value < minimum:
+        logger.warning("%s=%s cok kucuk, %s kullanilacak", name, value, minimum)
+        return minimum
+    if maximum is not None and value > maximum:
+        logger.warning("%s=%s cok buyuk, %s kullanilacak", name, value, maximum)
+        return maximum
+    return value
 
 
 class HostLimiter:
@@ -92,10 +114,34 @@ class HostLimiter:
 
     @classmethod
     def from_env(cls) -> HostLimiter:
-        return cls(
-            max_per_host=_int_env("SHOWIS_HOST_MAX_CONCURRENCY", DEFAULT_MAX_PER_HOST),
-            min_interval=_float_env("SHOWIS_HOST_MIN_INTERVAL", DEFAULT_MIN_INTERVAL),
+        """Env'den kurar: ``SHOWIS_HOST_MAX_CONCURRENCY`` (1..8) ve
+        ``SHOWIS_HOST_MIN_INTERVAL`` (0..5).
+
+        Varsayilanlar bugunku davranisi korur (2 / 0.25 sn): ayni host'a iki
+        es zamanli istek + 250 ms baslangic araligi. Farkli host'lar birbirinden
+        bagimsizdir, bu yuzden gorev paralelligi (O2=6) hiz kazanci saglar.
+        """
+        limiter = cls(
+            max_per_host=_int_env(
+                "SHOWIS_HOST_MAX_CONCURRENCY",
+                DEFAULT_MAX_PER_HOST,
+                MIN_MAX_PER_HOST,
+                MAX_MAX_PER_HOST,
+            ),
+            min_interval=_float_env(
+                "SHOWIS_HOST_MIN_INTERVAL",
+                DEFAULT_MIN_INTERVAL,
+                MIN_MIN_INTERVAL,
+                MAX_MIN_INTERVAL,
+            ),
         )
+        logger.info(
+            "Host limiter: max_per_host=%s, min_interval=%.2fs, enabled=%s",
+            limiter.max_per_host,
+            limiter.min_interval,
+            limiter_enabled(),
+        )
+        return limiter
 
     # ------------------------------------------------------------------
     # Ic mekanizma

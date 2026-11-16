@@ -7,10 +7,22 @@ from fastapi.responses import FileResponse
 from showis.db.models import Report
 from showis.db.session import get_db
 from showis.services.audit import record_request_audit
+from showis.services.report_service import resolve_report_path, safe_case_token
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/reports", tags=["reports"])
+
+#: Biçim -> (media type, ek başlıklar)
+_MEDIA_TYPES = {
+    "pdf": "application/pdf",
+    "json": "application/json",
+    # HTML tarayıcıda render edilebilir: autoescape'e ek olarak kaynak kısıtı
+    "html": "text/html; charset=utf-8",
+}
+
+#: HTML raporu izole bir belge olarak sunulur (script/iframe/connect yok).
+HTML_CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inline'"
 
 
 @router.get("/{report_id}/download")
@@ -24,11 +36,13 @@ async def download_report(
     if not report.storage_key:
         raise HTTPException(status_code=404, detail="Report file missing")
 
-    path = Path(report.storage_key)
-    if not path.exists():
+    # T112-R3: yeni yerleşim `REPORT_DIR/<case>/<ad>`; eski düz dosyalar
+    # (`REPORT_DIR/<ad>`) da okunur — `storage_key` kayıtlı yol önce denenir.
+    path: Path | None = resolve_report_path(report.storage_key, report.case_id)
+    if path is None:
         raise HTTPException(status_code=404, detail="Report file missing on disk")
 
-    # SEC-13: rapor indirme (tam PII icerir) adli iz birakir — icerik yazilmaz
+    # SEC-13: rapor indirme (tam PII içerir) adli iz bırakır — içerik yazılmaz
     await record_request_audit(
         db=db,
         request=request,
@@ -38,10 +52,18 @@ async def download_report(
         details={"format": report.format},
     )
 
-    media_type = "application/pdf" if report.format == "pdf" else "application/json"
-    filename = f"showis-report-{report.case_id}.{report.format}"
+    # Dosya adı: istemciye giden Content-Disposition başlığında yalnız güvenli
+    # belirteç kullanılır (CRLF/tırnak enjeksiyonu ve path traversal engellenir).
+    safe_case = safe_case_token(report.case_id)
+    media_type = _MEDIA_TYPES.get(report.format, "application/octet-stream")
+    filename = f"showis-report-{safe_case}.{report.format}"
+    headers = {}
+    if report.format == "html":
+        headers["Content-Security-Policy"] = HTML_CONTENT_SECURITY_POLICY
+        headers["X-Content-Type-Options"] = "nosniff"
     return FileResponse(
         path,
         media_type=media_type,
         filename=filename,
+        headers=headers or None,
     )

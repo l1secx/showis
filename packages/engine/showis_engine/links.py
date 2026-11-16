@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass
 
 from PIL import Image
-from showis_contracts import Edge, EdgeType, Entity, Platform
+from showis_contracts import Edge, EdgeType, Entity, Platform, make_entity_id
 
 from .http import DEFAULT_UA, HttpClient
 from .policy import PolicyViolationError, guard_url
@@ -301,7 +301,9 @@ def build_cross_link_edges(entity: Entity, entities: list[Entity]) -> list[Edge]
     for link in links:
         target_id = known.get((link.platform, link.identifier.lower()))
         # Hedef henüz entity olarak yoksa deterministik id ile edge üret
-        target_entity_id = target_id or f"{link.platform.value}:{link.identifier}"
+        target_entity_id = target_id or make_entity_id(
+            link.platform.value, str(link.identifier)
+        )
         edges.append(
             Edge(
                 id=f"edge:cross_link:{entity.id}:{link.platform.value}:{link.identifier}",

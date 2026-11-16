@@ -6,12 +6,13 @@ import hashlib
 import logging
 import os
 import random
+import re
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from urllib.robotparser import RobotFileParser
 
 import httpx
@@ -22,11 +23,69 @@ from .ratelimit import HostLimiter, default_host_limiter, limiter_enabled
 
 logger = logging.getLogger("showis.http")
 
+#: Loglarda URL query'sinde maskelenecek parametreler (T-332)
+_SENSITIVE_QUERY_KEYS = frozenset(
+    {
+        "api_key",
+        "apikey",
+        "api-key",
+        "key",
+        "token",
+        "access_token",
+        "refresh_token",
+        "client_secret",
+        "secret",
+        "password",
+        "cx",
+        "subscription-key",
+        "auth",
+    }
+)
+_URL_MASK = "****"
+
+
+def redact_url(url: str) -> str:
+    """URL'yi loglamak icin guvenli hale getirir (hassas query degerleri maskeli).
+
+    `api_key`, `key`, `token`, `access_token`, `cx` gibi parametrelerin degeri
+    `****` olur; host/yol ve diger parametreler teshis icin korunur.
+    """
+    if not url:
+        return url
+    try:
+        parts = urlparse(url)
+    except ValueError:  # pragma: no cover - bozuk URL
+        return "<gecersiz-url>"
+    if not parts.scheme and not parts.netloc:
+        return url
+    pairs = parse_qsl(parts.query, keep_blank_values=True)
+    safe = [
+        (key, _URL_MASK if key.lower() in _SENSITIVE_QUERY_KEYS else value)
+        for key, value in pairs
+    ]
+    return urlunparse(
+        (
+            parts.scheme,
+            parts.netloc,
+            parts.path,
+            parts.params,
+            urlencode(safe, doseq=True).replace("%2A%2A%2A%2A", _URL_MASK),
+            parts.fragment,
+        )
+    )
+
 DEFAULT_UA = "Showis/0.1 (+https://github.com/showis-osint)"
 MAX_REDIRECTS = 5
 
 #: Surec genelindeki toplam sayac (geriye donuk uyumluluk).
 _requests_made = 0
+#: Butce nedeniyle reddedilen istek sayaci (surec omurlu; /metrics icin — T-329).
+_budget_exceeded = 0
+
+
+def budget_exceeded_count() -> int:
+    """Surec omurlu: butce tukendigi icin reddedilen istek sayisi (T-329)."""
+    return _budget_exceeded
 
 
 def requests_made() -> int:
@@ -134,7 +193,9 @@ class RequestBudget:
 
     def consume(self) -> None:
         """Bir istek hakki tuketir; butce bittiyse `BudgetExceededError`."""
+        global _budget_exceeded
         if self.used >= self.max_requests:
+            _budget_exceeded += 1
             raise BudgetExceededError(
                 f"HTTP istek butcesi tukendi (max_http_requests={self.max_requests})"
             )
@@ -164,6 +225,18 @@ def _consume_request_budget() -> None:
     if guard is not None:
         guard.consume()
 
+
+
+def _redact_error(error: object | None) -> str:
+    """Hata metninden URL query sirlarini ayiklar (log/DB'ye sizmasin)."""
+    text = str(error)
+    for key in _SENSITIVE_QUERY_KEYS:
+        text = re.sub(
+            rf"(?i)([?&]{re.escape(key)}=)([^&\s\"']+)",
+            rf"\1{_URL_MASK}",
+            text,
+        )
+    return text
 
 
 class RobotsCache:
@@ -262,10 +335,14 @@ class HttpClient:
                         if not (follow and resp.is_redirect and location):
                             break
                         current = str(resp.url.join(location))
-                        logger.info("Yonlendirme izleniyor: %s -> %s", url, current)
+                        logger.info(
+                            "Yonlendirme izleniyor: %s -> %s",
+                            redact_url(url),
+                            redact_url(current),
+                        )
                     else:
                         raise RuntimeError(
-                            f"Cok fazla yonlendirme ({MAX_REDIRECTS}): {url}"
+                            f"Cok fazla yonlendirme ({MAX_REDIRECTS}): {redact_url(url)}"
                         )
 
                     # Handle GitHub and generic rate limits (tek denemede retry anlamsiz)
@@ -280,7 +357,9 @@ class HttpClient:
                             else (2**attempt + random.uniform(0.1, 0.5))
                         )
                         logger.warning(
-                            "Hız limiti aşıldı (%s), %s saniye bekleniyor...", url, wait_sec
+                            "Hız limiti aşıldı (%s), %s saniye bekleniyor...",
+                            redact_url(url),
+                            wait_sec,
                         )
                         await asyncio.sleep(min(wait_sec, 60.0))
                         continue
@@ -298,7 +377,11 @@ class HttpClient:
                 last_error = e
                 await asyncio.sleep(1.0)
 
-        raise RuntimeError(f"HTTP isteği başarısız oldu ({max_retries} deneme): {last_error}")
+        # Hata metni URL/anahtar tasiyabilir: redakte edilerek yukseltilir
+        raise RuntimeError(
+            f"HTTP isteği başarısız oldu ({max_retries} deneme): "
+            f"{_redact_error(last_error)}"
+        )
 
     async def get(self, url: str, **kwargs) -> httpx.Response:
         return await self.request("GET", url, **kwargs)

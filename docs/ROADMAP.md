@@ -128,8 +128,12 @@
   - Fallback chain (DDG → Brave → SerpAPI)
 - **Test**: 100 query ile provider karşılaştırması
 
-### 3.3 Concurrency & Rate Limiting (1-2 hafta)
-- **Mevcut**: Basik semaphore
+### 3.3 Concurrency & Rate Limiting (1-2 hafta) [TAMAMLANDI ✅]
+- **Mevcut**: ~~Basik semaphore~~ → **T-101/T-102/T-117 (2026-11-17)**: sınırlı paralel
+  yürütme (`SHOWIS_SCAN_CONCURRENCY`, varsayılan 4 — O2 636 sn → **337 sn**), host bazlı
+  rate limiter (`HostLimiter`: host başına eşzamanlılık + min interval, 429/403
+  nezaketi), bütçe HTTP katmanında **fail-closed** (istek atılmadan `BudgetExceededError`),
+  site-check sonuç önbelleği. Kalan (opsiyonel): dağıtık Redis atomikleri, priority queue.
 - **Hedef**:
   - Domain-bazlı rate limiting (github.com: 60/min, twitter.com: 30/min)
   - Adaptive backoff (exponential jitter)
@@ -142,7 +146,11 @@
 
 ## Faz 4: Veri Kalitesi & Entity Management (4-5 hafta)
 
-### 4.1 Fake/Spam Detection (2-3 hafta)
+### 4.1 Fake/Spam Detection (2-3 hafta) [TAMAMLANDI ✅]
+- **Durum**: **T-301** (`showis_engine/authenticity.py` + resolver entegrasyonu):
+  hesap yaşı (`created_at`), aktivite (`followers_count`, repo/post), boş bio,
+  varsayılan avatar, cross-link tutarlılığı tek "authenticity" skorunda birleşiyor;
+  `breakdown`'da sinyal bazında görünür.
 - **Hedef**: Bot/Sybil hesap filtreleme
   - Creation date check (çok yeni hesaplar düşük confidence)
   - Activity check (0 repository, 0 post = düşük skor)
@@ -162,7 +170,12 @@
   - Evidence preview (thumbnail)
 - **Test**: 10,000 evidence kaydı performans test
 
-### 4.3 Audit Trail & Security (1 hafta)
+### 4.3 Audit Trail & Security (1 hafta) [KISMEN ✅ — 2026-11-17]
+- **Durum**: `finding.update`, `report.download`, `scan.cancel`, `case.delete`,
+  `case.export`, `scan.start/completed`, `settings.provider.*`, `auth.failed` ve
+  `request.rejected(413)` audit'e yazılıyor; `details.actor_ip` =
+  `X-Real-IP` → XFF **son** değeri (D-01). **Kalan:** per-user rate limit,
+  IP allow/block list, anomali uyarıları; `settings.py` audit'lerinde `actor_ip` eksik.
 - **Mevcut**: Audit log var
 - **Hedef**:
   - Kişisel veri mask (GDPR: email, IP redaction)
@@ -176,7 +189,12 @@
 
 ## Faz 5: Kullanıcı Deneyimi & Arayüz (4-6 hafta)
 
-### 5.1 Grafik Geliştirmeleri (2-3 hafta)
+### 5.1 Grafik Geliştirmeleri (2-3 hafta) [TAMAMLANDI ✅]
+- **Durum (T-305/T-306)**: force/circle/grid yerleşim, platform renkleri + açık kenarlık,
+  güven eşiği / platform / edge tipi filtreleri (sessionStorage kalıcı), entity detay
+  side panel (Esc ile kapanır, `javascript:` URL engelli), edge tooltip (güven + gerekçe),
+  PNG / JSON / GEXF dışa aktarma. 500 düğüm/524 kenar: ilk yükleme ~1.5 sn,
+  platform filtresi ~120 ms, PNG ~193 ms.
 - **Mevcut**: Cytoscape.js entity/edge
 - **Hedef**:
   - Layout algoritmaları (force, circular, hierarchical)
@@ -188,8 +206,13 @@
   - Export graph (PNG, SVG, GEXF)
 - **Test**: 500 node/edge performans
 
-### 5.2 Report Geliştirmeleri (1-2 hafta)
-- **Mevcut**: Türkçe PDF + JSON
+### 5.2 Report Geliştirmeleri (1-2 hafta) [KISMEN ✅ — 2026-11-17]
+- **Durum**: **T-313/T-316** — executive summary (1 sayfa), platform dağılımı,
+  cross-link/kimlik tablosu, **timeline** (hesap oluşturma kronolojisi), kanıt özeti,
+  HTML biçimi (CSP'li), vaka bazlı rapor klasörü; Jinja2 `autoescape` ile XSS/SSTI
+  kapalı. **Kalan:** çoklu dil (EN/DE/FR), evidence gallery (thumbnail), word cloud,
+  docx/xlsx.
+- **Mevcut**: Türkçe PDF + JSON + HTML
 - **Hedef**:
   - Çoklu dil (EN, TR, DE, FR)
   - Executive summary (1-page)
@@ -229,7 +252,13 @@
   - Health check endpoint (/healthz)
 - **Test**: 50 simulated failure senaryosu
 
-### 6.3 Backup & Disaster Recovery (1 hafta)
+### 6.3 Backup & Disaster Recovery (1 hafta) [TAMAMLANDI ✅]
+- **Durum (T-304)**: `infra/scripts/backup.sh` (pg_dump + evidence tar, sha256, retention
+  gunluk/haftalik, `data/backups` **700/600**), `backup-verify.sh` (dump bütünlüğü),
+  `restore.sh` (varsayılan `--to-test`, canlı için `--force-live` + onay,
+  `--exit-on-error --single-transaction`), systemd timer ile günlük koşu.
+  **Restore tatbikatı yapıldı**: `showis_restore_test`'e yüklendi, 7 tablonun satır
+  sayıları canlı DB ile birebir.
 - **Hedef**:
   - Automated DB backups (hourly snapshot, 7-day retention)
   - Evidence backup (S3 lifecycle)

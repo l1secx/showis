@@ -50,6 +50,12 @@ testpaths = [
 ]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+# T-312: asilan bir test CI isini surestiz bloke etmesin. `faulthandler` pytest
+# cekirdeginde gelir (ek bagimlilik YOK): esik asilirsa tum thread'lerin stack
+# dokumu basilir ve surec sonlanir -> is "sonsuz kosuyor" yerine FAIL olur.
+# En yavas test ~3 sn oldugu icin 120 sn genis bir guvenlik agi.
+faulthandler_timeout = 120
+faulthandler_exit_on_timeout = true
 
 [tool.mypy]
 python_version = "3.12"

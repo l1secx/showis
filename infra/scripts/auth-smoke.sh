@@ -99,6 +99,61 @@ if [ -n "$CADDY_PASS" ]; then
   fi
 fi
 
+# --- T-319: guvenlik basliklari ------------------------------------------
+check_header() { # <ad> <url> <baslik> <beklenen-deger|-> <auth?>
+  local name="$1" url="$2" hdr="$3" want="$4" auth="${5:-yes}"
+  local out val
+  if [ "$auth" = "yes" ]; then out="$(curl -sI --max-time 10 -u "$CADDY_USER:$CADDY_PASS" "$url")"
+  else out="$(curl -sI --max-time 10 "$url")"; fi
+  if [ "$want" = "-" ]; then
+    if printf '%s' "$out" | grep -qi "^${hdr}:"; then
+      printf '  [FAIL] %-52s %s basligi OLMAMALI\n' "$name" "$hdr"; fail=$((fail + 1))
+    else
+      printf '  [OK]   %-52s %s yok\n' "$name" "$hdr"
+    fi
+    return
+  fi
+  val="$(printf '%s' "$out" | grep -i "^${hdr}:" | head -1 | cut -d: -f2- | sed 's/^ //; s/\r$//')"
+  case "$val" in
+    *"$want"*) printf '  [OK]   %-52s %s: %s\n' "$name" "$hdr" "$val" ;;
+    *) printf '  [FAIL] %-52s %s beklenen "%s", gelen "%s"\n' "$name" "$hdr" "$want" "$val"; fail=$((fail + 1)) ;;
+  esac
+}
+
+if [ -n "$CADDY_PASS" ]; then
+  echo
+  echo "-- guvenlik basliklari (T-319)"
+  check_header "UI: X-Content-Type-Options" "$BASE/" "X-Content-Type-Options" "nosniff"
+  check_header "UI: X-Frame-Options" "$BASE/" "X-Frame-Options" "DENY"
+  check_header "UI: Referrer-Policy" "$BASE/" "Referrer-Policy" "no-referrer"
+  check_header "UI: Permissions-Policy" "$BASE/" "Permissions-Policy" "geolocation=()"
+  check_header "UI: Content-Security-Policy" "$BASE/" "Content-Security-Policy" "default-src 'self'"
+  check_header "UI: Server gizli" "$BASE/" "Server" "-"
+  check_header "API: X-Content-Type-Options" "$BASE/api/v1/cases" "X-Content-Type-Options" "nosniff"
+  check_header "API: X-Frame-Options" "$BASE/api/v1/cases" "X-Frame-Options" "DENY"
+  check_header "API: CSP yok (JSON)" "$BASE/api/v1/cases" "Content-Security-Policy" "-"
+  check_header "API: Server gizli" "$BASE/api/v1/cases" "Server" "-"
+
+  # --- govde siniri (T-319): 11MB > 10MB -> 413 ---------------------------
+  big="$(mktemp)"; head -c 11500000 /dev/zero | tr '\0' 'a' > "$big"
+  report "POST /api/v1/cases 11MB govde -> 413" 413 \
+    "$(code_auth -X POST -H 'Content-Type: application/json' --data-binary @"$big" "$BASE/api/v1/cases")"
+  rm -f "$big"
+fi
+
+# --- Host dogrulamasi (T-319, env-gated) ---------------------------------
+ALLOWED_HOSTS="${SHOWIS_ALLOWED_HOSTS:-}"
+if [ -z "$ALLOWED_HOSTS" ] && command -v docker >/dev/null 2>&1; then
+  ALLOWED_HOSTS="$(docker inspect showis-caddy --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+    | grep '^SHOWIS_ALLOWED_HOSTS=' | cut -d= -f2- || true)"
+fi
+if [ -n "$ALLOWED_HOSTS" ] && [ -n "$CADDY_PASS" ]; then
+  report "Host: evil.example -> 421" 421 \
+    "$(code_auth -H 'Host: evil.example' "$BASE/")"
+else
+  echo "  [SKIP] Host allowlist devre disi (SHOWIS_ALLOWED_HOSTS bos) — 421 kontrolu atlandi"
+fi
+
 # --- API token katmani (konteyner ici, proxy'yi atlar) --------------------
 if command -v docker >/dev/null 2>&1; then
   report "API dogrudan (container ici), tokensiz" 401 \

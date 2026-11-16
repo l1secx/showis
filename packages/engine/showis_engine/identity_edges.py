@@ -61,7 +61,7 @@ EMAIL_OR_PGP_CONFIDENCE = 0.85
 
 MAX_EDGES_PER_ENTITY = 20
 #: DB şeması: `edges.id` VARCHAR(36)
-EDGE_ID_MAX_LENGTH = 36
+EDGE_ID_MAX_LENGTH = 96  # migration 0005: edges.id VARCHAR(96)
 
 _GENERIC_DHASHES = {"0000000000000000", "ffffffffffffffff"}
 
@@ -72,7 +72,7 @@ _GENERIC_DHASHES = {"0000000000000000", "ffffffffffffffff"}
 
 
 def short_edge_id(prefix: str, *parts: str) -> str:
-    """Deterministik ve DB'ye sığan edge id'si (≤ 36 karakter)."""
+    """Deterministik ve DB'ye sığan edge id'si (prefix + 24 hex ≤ 27 karakter)."""
     digest = hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:24]
     return f"{prefix}:{digest}"
 
@@ -207,6 +207,10 @@ def build_identity_edges(
 
     candidates: list[Edge] = []
     seen: set[tuple[str, str, str]] = set()
+    #: Ortak kullanıcı adı yıldızı birincil kanıt zinciridir; per-entity sınırdan muaf
+    #: (24 platformluk gerçek örüntü 23 kenar üretmeli). Sınır zayıf sinyalleri
+    #: (avatar dHash çiftleri, e-posta grupları) budar.
+    uncapped: set[str] = set()
 
     def add(edge: Edge) -> None:
         key = _pair_key(edge.source_entity_id, edge.target_entity_id, edge.type)
@@ -229,22 +233,23 @@ def build_identity_edges(
     for username, platform_map in sorted(by_username.items()):
         if len(platform_map) < 2:
             continue
-        group = list(platform_map.values())
+        members = list(platform_map.values())
         confidence = min(
             USERNAME_MAX_CONFIDENCE,
-            round(USERNAME_BASE_CONFIDENCE + USERNAME_CONFIDENCE_STEP * (len(group) - 1), 2),
+            round(USERNAME_BASE_CONFIDENCE + USERNAME_CONFIDENCE_STEP * (len(members) - 1), 2),
         )
 
-        def _reason(hub: Entity, member: Entity, _u: str = username, _n: int = len(group)) -> str:
+        def _reason(hub: Entity, member: Entity, _u: str = username, _n: int = len(members)) -> str:
             return f"ortak kullanıcı adı '{_u}' ({_n} platform)"
 
         for edge in _star_edges(
-            group,
+            members,
             edge_type=EdgeType.SAME_PERSON,
             confidence=confidence,
             reason_builder=_reason,
             prefix="e:u",
         ):
+            uncapped.add(edge.id)
             add(edge)
 
     # 2) Aynı avatar SHA-256 (birebir dosya)
@@ -253,15 +258,15 @@ def build_identity_edges(
         sha = str((entity.attributes or {}).get("avatar_sha256") or "").strip()
         if sha:
             by_sha.setdefault(sha, []).append(entity)
-    for sha, group in sorted(by_sha.items()):
-        if len({e.platform.value for e in group}) < 2:
+    for sha, sha_group in sorted(by_sha.items()):
+        if len({e.platform.value for e in sha_group}) < 2:
             continue
 
         def _sha_reason(hub: Entity, member: Entity, _sha: str = sha) -> str:
             return f"avatar SHA-256 eşleşmesi: {_sha[:16]}…"
 
         for edge in _star_edges(
-            group,
+            sha_group,
             edge_type=EdgeType.SAME_PERSON,
             confidence=AVATAR_SHA_CONFIDENCE,
             reason_builder=_sha_reason,
@@ -270,31 +275,43 @@ def build_identity_edges(
             add(edge)
 
     # 3) Algısal avatar benzerliği (dHash Hamming <= 6)
-    dhash_entities = [
-        entity
-        for entity in entities
-        if (entity.attributes or {}).get("avatar_dhash")
-        and str((entity.attributes or {}).get("avatar_dhash")) not in _GENERIC_DHASHES
-    ]
-    for i, first in enumerate(dhash_entities):
-        for second in dhash_entities[i + 1 :]:
-            if first.platform == second.platform:
+    dhash_entities = sorted(
+        (
+            entity
+            for entity in entities
+            if (entity.attributes or {}).get("avatar_dhash")
+            and str((entity.attributes or {}).get("avatar_dhash")) not in _GENERIC_DHASHES
+        ),
+        key=_hub_sort_key,
+    )
+    # Çift-karşılaştırma O(n²) kenar üretir; bunun yerine ayrık yıldızlar kur:
+    # her hub kendisine ≤ eşik mesafedeki (kullanılmamış) üyeleri bağlar.
+    assigned: set[str] = set()
+    for hub in dhash_entities:
+        if hub.id in assigned:
+            continue
+        assigned.add(hub.id)
+        for member in dhash_entities:
+            if member.id == hub.id or member.id in assigned:
+                continue
+            if member.platform == hub.platform:
                 continue
             distance = hamming_distance(
-                str(first.attributes.get("avatar_dhash")),
-                str(second.attributes.get("avatar_dhash")),
+                str(hub.attributes.get("avatar_dhash")),
+                str(member.attributes.get("avatar_dhash")),
             )
             if distance > max_dhash_distance:
                 continue
+            assigned.add(member.id)
             add(
                 Edge(
-                    id=short_edge_id("e:d", EdgeType.SAME_PERSON.value, first.id, second.id),
+                    id=short_edge_id("e:d", EdgeType.SAME_PERSON.value, hub.id, member.id),
                     type=EdgeType.SAME_PERSON,
-                    source_entity_id=first.id,
-                    target_entity_id=second.id,
+                    source_entity_id=hub.id,
+                    target_entity_id=member.id,
                     confidence=AVATAR_DHASH_CONFIDENCE,
                     reason=f"avatar görsel benzerliği (dHash mesafe={distance})",
-                    evidence_ids=_merge_evidence(first, second),
+                    evidence_ids=_merge_evidence(hub, member),
                 )
             )
 
@@ -307,8 +324,8 @@ def build_identity_edges(
         for entity in entities:
             for value in extractor(entity):
                 by_value.setdefault(value, []).append(entity)
-        for value, group in sorted(by_value.items()):
-            if len({e.platform.value for e in group}) < 2:
+        for value, value_group in sorted(by_value.items()):
+            if len({e.platform.value for e in value_group}) < 2:
                 continue
 
             def _mail_reason(hub: Entity, member: Entity, _v: str = value, _l: str = label) -> str:
@@ -320,7 +337,7 @@ def build_identity_edges(
                 return f"aynı {_l}: {_v[:16]}…"
 
             for edge in _star_edges(
-                group,
+                value_group,
                 edge_type=EdgeType.SAME_PERSON,
                 confidence=EMAIL_OR_PGP_CONFIDENCE,
                 reason_builder=_mail_reason,
@@ -340,7 +357,9 @@ def build_identity_edges(
     selected: list[Edge] = []
     for edge in candidates:
         endpoints = (edge.source_entity_id, edge.target_entity_id)
-        if any(per_entity.get(endpoint, 0) >= max_edges_per_entity for endpoint in endpoints):
+        if edge.id not in uncapped and any(
+            per_entity.get(endpoint, 0) >= max_edges_per_entity for endpoint in endpoints
+        ):
             continue
         for endpoint in endpoints:
             per_entity[endpoint] = per_entity.get(endpoint, 0) + 1
@@ -351,15 +370,16 @@ def build_identity_edges(
 
 
 def edges_by_type(edges: list[Edge]) -> dict[str, int]:
-    """Kenarları türe göre sayar (scan.stats için)."""
+    """Kenarları türe göre sayar (``scan.stats.edges_by_type``, BÜYÜK harf)."""
     counts: dict[str, int] = {}
     for edge in edges:
-        counts[edge.type.value] = counts.get(edge.type.value, 0) + 1
+        key = edge.type.value.upper()
+        counts[key] = counts.get(key, 0) + 1
     return counts
 
 
 def db_safe_edge_id(edge_id: str) -> str:
-    """`edges.id` VARCHAR(36) sınırına sığdırır (uzun id hash'lenir)."""
+    """`edges.id` sınırına (96) sığdırır; aşarsa hash'ler (deterministik)."""
     text = str(edge_id)
     if len(text) <= EDGE_ID_MAX_LENGTH:
         return text

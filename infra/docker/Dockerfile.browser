@@ -1,15 +1,35 @@
-FROM mcr.microsoft.com/playwright/python:v1.55.0-noble
+# syntax=docker/dockerfile:1
+# Base imaj DIGEST ile pinli (T-337): Playwright Python v1.55.0-noble.
+# Chromium/Firefox/WebKit ikilileri bu imajdan gelir (T-341: /ms-playwright/chromium-1187).
+# Python `playwright` paketi BURADA, lock'tan kurulur ve base imajin ikili surumuyle
+# ESLESIR (1.55.0 <-> chromium-1187); farkli bir surum yazmak tarayicilari bozar.
+# Digest guncellemesi: docker pull mcr.microsoft.com/playwright/python:v1.55.0-noble && \
+#   docker image inspect mcr.microsoft.com/playwright/python:v1.55.0-noble \
+#   --format '{{index .RepoDigests 0}}'
+FROM mcr.microsoft.com/playwright/python:v1.55.0-noble@sha256:640d578aae63cfb632461d1b0aecb01414e4e020864ac3dd45a868dc0eff3078
 
 WORKDIR /app
 
-ENV PYTHONUNBUFFERED=1
+# PIP_*: PyPI dalgalanmasinda build dusmesin (ReadTimeoutError).
+# PLAYWRIGHT_BROWSERS_PATH: base imajda zaten tanimli; niyeti belgelemek icin acikca yazildi.
+# (Tarayici ikilileri /ms-playwright altinda hazir — `playwright install` CALISTIRILMAZ.)
+ENV PYTHONUNBUFFERED=1 \
+    PIP_RETRIES=10 \
+    PIP_DEFAULT_TIMEOUT=120 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
-# Bağımlılıklar: web framework + HTTP istemcisi + proje paketleri
-RUN pip install --no-cache-dir fastapi uvicorn pydantic httpx
+# Bagimliliklar TAM PINLI **browser** lock'undan kurulur (ana lock'un alt kumesi;
+# celery/sqlalchemy/... tarayici servisinde gereksiz).
+COPY infra/requirements-browser.lock /app/infra/requirements-browser.lock
+RUN pip install --no-cache-dir --retries 10 --timeout 120 \
+    -r /app/infra/requirements-browser.lock
 
+# Yerel paketler: bagimliliklari lock saglar, bu yuzden --no-deps.
 COPY packages/contracts /app/packages/contracts
 COPY packages/engine /app/packages/engine
-RUN pip install --no-cache-dir /app/packages/contracts /app/packages/engine
+RUN pip install --no-cache-dir --no-deps --retries 10 --timeout 120 \
+    /app/packages/contracts /app/packages/engine
 
 ENV PYTHONPATH=/app/packages/engine:/app/packages/contracts
 

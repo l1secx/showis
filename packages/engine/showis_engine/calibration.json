@@ -1,7 +1,19 @@
 {
   "version": 1,
-  "source": "heuristic",
-  "sample_count": 0,
-  "generated_at": null,
-  "costs": {}
+  "source": "db",
+  "sample_count": 151,
+  "generated_at": "2026-11-16T21:14:36+00:00",
+  "costs": {
+    "site_username": 30.99,
+    "slow_task": 14.67,
+    "api_task": 0.62,
+    "setup": 91.7
+  },
+  "concurrency_observed": 4,
+  "details": {
+    "task_rows": 140,
+    "scans": 11,
+    "live_sampled": false,
+    "db_min_samples": 10
+  }
 }

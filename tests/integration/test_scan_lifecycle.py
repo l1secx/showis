@@ -435,8 +435,9 @@ async def test_iptal_cancelled_kalir_ve_completed_audit_yazilmaz(api: ApiHarness
         assert cancel.status_code == 200, cancel.text
         assert cancel.json()["status"] == "cancelled"
 
-        # Tarama 30 sn icinde durmali (T-108 / SEC-06 kabul kriteri)
-        response = await asyncio.wait_for(scan_request, timeout=30.0)
+        # Tarama 10 sn icinde durmali (T-108/SEC-06 kabul kriteri; T-312: sinirli
+        # bekleme — uretimde deadlock olursa test asilmaz, FAIL eder).
+        response = await asyncio.wait_for(scan_request, timeout=10.0)
         assert response.status_code == 200, response.text
         elapsed = time.monotonic() - started
     finally:
@@ -444,7 +445,7 @@ async def test_iptal_cancelled_kalir_ve_completed_audit_yazilmaz(api: ApiHarness
             scan_request.cancel()
         await asyncio.gather(scan_request, return_exceptions=True)
 
-    assert elapsed < 30.0, f"iptal {elapsed:.1f}s surdu"
+    assert elapsed < 10.0, f"iptal {elapsed:.1f}s surdu (gorevler kesilmedi)"
 
     # Durum iptal edilen olarak KALIR: `completed` onu ezmez
     row = await api.scan_row(scan_id)

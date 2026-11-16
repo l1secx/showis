@@ -87,6 +87,17 @@ async def _make_scan(
     return case_id, scan_id
 
 
+#: `execute_scan` icin ust sinir: uretimde deadlock olursa test ASILMAZ, FAIL eder.
+SCAN_TIMEOUT_S = 20.0
+
+
+async def _execute_scan(scanner: ScannerService, scan_id: str, session: AsyncSession):
+    """`execute_scan`'i sinirli sure bekler (T-312: CI'da asili kalmayi onler)."""
+    return await asyncio.wait_for(
+        scanner.execute_scan(scan_id, session), timeout=SCAN_TIMEOUT_S
+    )
+
+
 async def _load_scan(session_factory: async_sessionmaker[AsyncSession], scan_id: str) -> DbScan:
     async with session_factory() as session:
         row = (await session.execute(select(DbScan).where(DbScan.id == scan_id))).scalar_one()
@@ -120,6 +131,7 @@ class SlowConnector:
         tasks: int = 8,
         delay: float = 0.2,
         fail_on: set[str] | None = None,
+        target_active: int = 1,
     ):
         self.name = name
         self.task_count = tasks
@@ -127,6 +139,12 @@ class SlowConnector:
         self.fail_on = fail_on or set()
         self.active = 0
         self.max_active = 0
+        #: `active` bu sayiya ulasinca set edilir: testler `sleep` yerine bunu
+        #: bekler (T-312 — deterministik "gorevler ucusta" kosulu).
+        self.target_active = target_active
+        self.started = asyncio.Event()
+        #: `CancelledError` ile kesilen gorev sayisi (iptal gercekten isledi mi).
+        self.interrupted = 0
 
     async def plan(self, ctx: ScanContext) -> list[TaskSpec]:
         return [
@@ -143,6 +161,8 @@ class SlowConnector:
     async def run(self, task: TaskSpec, ctx: ScanContext) -> list[Observation]:
         self.active += 1
         self.max_active = max(self.max_active, self.active)
+        if self.active >= self.target_active:
+            self.started.set()
         try:
             await asyncio.sleep(self.delay)
             if task.id in self.fail_on:
@@ -159,6 +179,10 @@ class SlowConnector:
                     data={"login": subject},
                 )
             ]
+        except asyncio.CancelledError:
+            # Iptal kanali gercekten calisti: gorev uykusunda kesildi.
+            self.interrupted += 1
+            raise
         finally:
             self.active -= 1
 
@@ -246,7 +270,7 @@ async def test_iki_yavas_connector_paralel_calisir(session_factory, monkeypatch)
         async with session_factory() as session:
             scanner = ScannerService(connectors=[connector])
             started = time.perf_counter()
-            await scanner.execute_scan(scan_id, session)
+            await _execute_scan(scanner, scan_id, session)
             elapsed = time.perf_counter() - started
 
         events = []
@@ -284,7 +308,7 @@ async def test_concurrency_bir_sirali_davranis(session_factory, monkeypatch):
     async with session_factory() as session:
         scanner = ScannerService(connectors=[connector])
         started = time.perf_counter()
-        await scanner.execute_scan(scan_id, session)
+        await _execute_scan(scanner, scan_id, session)
         elapsed = time.perf_counter() - started
 
     scan = await _load_scan(session_factory, scan_id)
@@ -317,7 +341,7 @@ async def test_butce_asiminda_kalan_gorevler_skipped(session_factory, monkeypatc
 
     async with session_factory() as session:
         scanner = ScannerService(connectors=[connector])
-        await scanner.execute_scan(scan_id, session)
+        await _execute_scan(scanner, scan_id, session)
 
     scan = await _load_scan(session_factory, scan_id)
     assert scan.status == "completed"
@@ -373,7 +397,7 @@ async def test_paralel_http_istekleri_gorev_basina_sayilir(session_factory, monk
         _register_http_routes(router, hosts=connector.task_count)
         async with session_factory() as session:
             scanner = ScannerService(connectors=[connector])
-            await scanner.execute_scan(scan_id, session)
+            await _execute_scan(scanner, scan_id, session)
 
     scan = await _load_scan(session_factory, scan_id)
     assert scan.status == "completed"
@@ -395,7 +419,7 @@ async def test_gorev_hatasi_digerlerini_durdurmaz(session_factory, monkeypatch):
 
     async with session_factory() as session:
         scanner = ScannerService(connectors=[connector])
-        await scanner.execute_scan(scan_id, session)
+        await _execute_scan(scanner, scan_id, session)
 
     scan = await _load_scan(session_factory, scan_id)
     assert scan.status == "completed"
@@ -423,20 +447,20 @@ async def test_iptalde_yeni_gorev_dispatch_edilmez(tmp_path, monkeypatch):
     factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     try:
         _, scan_id = await _make_scan(factory)
-        connector = SlowConnector(tasks=8, delay=0.15)
+        connector = SlowConnector(tasks=8, delay=0.15, target_active=2)
 
         async with factory() as session:
             scanner = ScannerService(connectors=[connector])
             scan_task = asyncio.create_task(scanner.execute_scan(scan_id, session))
-            # Ilk 2 gorev uctayken iptal gelir
-            await asyncio.sleep(0.05)
+            # Ilk 2 gorev gercekten uctayken iptal gelir (sabit sleep yok — T-312)
+            await asyncio.wait_for(connector.started.wait(), timeout=SCAN_TIMEOUT_S)
             async with factory() as cancel_session:
                 row = (
                     await cancel_session.execute(select(DbScan).where(DbScan.id == scan_id))
                 ).scalar_one()
                 row.status = "cancelled"
                 await cancel_session.commit()
-            await scan_task
+            await asyncio.wait_for(scan_task, timeout=SCAN_TIMEOUT_S)
 
         scan = await _load_scan(factory, scan_id)
         assert scan.status == "cancelled"
@@ -457,21 +481,43 @@ async def test_iptalde_yeni_gorev_dispatch_edilmez(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_iptal_kanali_ucustaki_gorevleri_keser(session_factory, monkeypatch):
-    """`ScannerService.cancel()` uzun gorevler bitmeden donguyu uyandirir."""
+    """`ScannerService.cancel()` uzun gorevler bitmeden donguyu uyandirir.
+
+    T-312 (asilma teshisi): eski surum `await asyncio.sleep(0.05)` ile "gorevler
+    uctadir" varsayiyordu; iptal sinyali dongunun fazina gore bazen
+    `asyncio.wait`'e varmadan geliyor ve test 0.5 sn'lik gorev suresini bekliyordu
+    (olculen: ~0.516 sn, 10 kosuda 6 kez). Artik:
+
+    * bekleme **kosula** bagli: `connector.started` event'i iki gorev de
+      `run()` icine girince set edilir; bu fazda scanner dongusu `asyncio.wait`
+      icinde park etmis olur (bkz. `_dispatch` sonrasi), yani iptal sinyali
+      her zaman "bekleyen" kanala duser,
+    * her await `asyncio.wait_for` ile sinirli: uretimde deadlock olsa bile test
+      asilmaz, 10 sn'de FAIL eder (CI'yi kilitlemez),
+    * iptalin gercekten **kesme** oldugu `connector.interrupted` ile kanitlanir
+      (gorevler uykuda iptal edildiyse 2; normal biterse 0).
+    """
     monkeypatch.setenv("SHOWIS_SCAN_CONCURRENCY", "2")
     case_id, scan_id = await _make_scan(session_factory)
-    connector = SlowConnector(tasks=8, delay=0.5)
+    connector = SlowConnector(tasks=8, delay=0.5, target_active=2)
 
     try:
         async with session_factory() as session:
             scanner = ScannerService(connectors=[connector])
             scan_task = asyncio.create_task(scanner.execute_scan(scan_id, session))
-            await asyncio.sleep(0.05)
+            # 2 gorev ucusta + scanner dongusu beklemede
+            await asyncio.wait_for(connector.started.wait(), timeout=10.0)
             started = time.perf_counter()
             ScannerService.cancel(scan_id)
-            await scan_task
-            # Iptal, gorevin 0.5 s'lik uykusunu beklemeden etkili oldu
-            assert time.perf_counter() - started < 0.4
+            await asyncio.wait_for(scan_task, timeout=10.0)
+            elapsed = time.perf_counter() - started
+
+        # Iptal, 0.5 sn'lik uykulari beklemeden etkili oldu:
+        # dogal bitis 8 gorev / 2 es zamanli * 0.5 sn = 2.0 sn olurdu.
+        assert elapsed < 1.0, f"iptal {elapsed:.2f}s surdu (gorevler kesilmedi)"
+        assert connector.interrupted == 2, (
+            f"ucustaki 2 gorev uykuda kesilmeliydi (interrupted={connector.interrupted})"
+        )
 
         scan = await _load_scan(session_factory, scan_id)
         assert scan.status == "cancelled"
@@ -525,7 +571,7 @@ async def test_butce_guard_istek_atmadan_keser(session_factory, monkeypatch):
             )
         async with session_factory() as session:
             scanner = ScannerService(connectors=[connector])
-            await scanner.execute_scan(scan_id, session)
+            await _execute_scan(scanner, scan_id, session)
 
         sent = sum(route.call_count for route in routes)
 
