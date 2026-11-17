@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 import uuid
 from collections import deque
 from contextlib import suppress
@@ -47,6 +48,7 @@ from showis_contracts import (
     EntityType,
     Observation,
     Platform,
+    QueryPlan,
     ScanContext,
     Seed,
     Target,
@@ -72,10 +74,11 @@ from showis_engine.links import (
     hamming_distance,
 )
 from showis_engine.llm_explainer import FindingExplainer
-from showis_engine.planner import QueryPlanner
+from showis_engine.planner import QueryPlanner, finalize_query
 from showis_engine.policy import PolicyViolationError, enforce_tier
 from showis_engine.resolver import Resolver
 from showis_engine.scan_modes import (
+    planner_cap,
     resolve_concurrency,
     skipped_connectors,
     task_allowed,
@@ -90,6 +93,17 @@ logger = logging.getLogger("showis.scanner")
 
 #: Tek taramada LLM ile aciklanacak azami bulgu (her cagri ~6 sn)
 _MAX_LLM_EXPLANATIONS = 12
+
+#: Planner sorgusundan uretilen arama gorevi basina sonuc limiti.
+PLANNER_SEARCH_LIMIT = 20
+
+#: Planner sorgusundaki arama operatorleri (degerleriyle birlikte). Bos sorgu
+#: tespitinde metinden cikarilir: `'"" site:x.com'` arama terimi tasimaz.
+_QUERY_OPERATOR_RE = re.compile(
+    r"\b(?:site|filetype|inurl|intitle|intext|allinurl|allintitle|cache|related|link"
+    r"|in|repo|language|user|org|topic)\s*:\s*\S+",
+    re.IGNORECASE,
+)
 
 #: OLAY BEKLEME DILIMI (T-322): `asyncio.wait` en fazla bu kadar bekler, sonra
 #: dongu basi iptal/butce durumunu yeniden degerlendirir. Asili gorev taramayi
@@ -161,6 +175,17 @@ def _merge_entity(dst: Entity, src: Entity) -> None:
         dst.url = src.url
 
 
+def _planner_query_key(text: str) -> str:
+    """Tekillestirme anahtari: bosluklar tekillesir, buyuk/kucuk harf katlanir."""
+    return " ".join(str(text or "").split()).casefold()
+
+
+def _has_search_term(text: str) -> bool:
+    """Sorgu gercek bir arama terimi tasiyor mu (yalniz tirnak/operator degil)?"""
+    stripped = _QUERY_OPERATOR_RE.sub(" ", text).replace('"', " ")
+    return bool(stripped.split())
+
+
 class ScannerService:
     #: Surec ici iptal kanali: scan_id -> asyncio.Event.
     #: `POST /scans/{id}/cancel` bunu tetikler; calisan dongu event'i gorunce
@@ -219,6 +244,58 @@ class ScannerService:
             await db.execute(select(Scan.status).where(Scan.id == scan_id))
         ).scalar_one_or_none()
         return status == "cancelled"
+
+    def _planner_task_specs(
+        self,
+        query_plan: QueryPlan,
+        mode: str | None,
+        existing_queries: list[str],
+    ) -> list[TaskSpec]:
+        """QueryPlan'i gercek arama gorevlerine cevirir (tavanli + tekillestirilmis).
+
+        * Plana **sirayla** bakilir, en fazla ``planner_cap(mode)`` sorgu alinir
+          (O1=0 -> hic gorev uretilmez).
+        * Her sorgu :func:`finalize_query` kapisindan gecer; bos/cok kisa
+          (``ValueError``) veya yasak desen (``PolicyViolationError``) iceren
+          sorgu atlanir, kalanlar yasar.
+        * Tekillestirme anahtari ``" ".join(text.split()).casefold()``: ayni
+          arama ne plan icinde ne de ``existing_queries`` (connector'larin kendi
+          aramalari) icinde ikinci kez gorev olmaz.
+        * Arama terimi tasimayan sorgu (``'"" site:x.com'``) hic gorev olmaz.
+        """
+        cap = planner_cap(mode)
+        if cap <= 0:
+            return []
+        seen = {_planner_query_key(text) for text in existing_queries}
+        specs: list[TaskSpec] = []
+        for q in query_plan.queries[:cap]:
+            try:
+                query = finalize_query(q.query)
+            except (ValueError, PolicyViolationError):
+                logger.debug("Planner sorgusu elendi: %r", q.query)
+                continue
+            if not _has_search_term(query):
+                logger.debug("Planner sorgusu bos, atlandi: %r", q.query)
+                continue
+            key = _planner_query_key(query)
+            if key in seen:
+                continue
+            seen.add(key)
+            specs.append(
+                TaskSpec(
+                    id=str(uuid.uuid4()),
+                    connector="websearch",
+                    platform=q.platform,
+                    kind="search",
+                    params={
+                        "query": query,
+                        "limit": PLANNER_SEARCH_LIMIT,
+                        "source": "planner",
+                    },
+                    priority=min(max(int(q.priority), 1), 5),
+                )
+            )
+        return specs
 
     async def execute_scan(self, scan_id: str, db: AsyncSession) -> None:
         """Scan sürecini baştan sona yönetir."""
