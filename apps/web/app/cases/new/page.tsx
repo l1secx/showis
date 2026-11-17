@@ -11,7 +11,7 @@ import {
   Sparkles,
   UserRound,
 } from "lucide-react";
-import { api } from "../../../lib/api";
+import { api, type TargetKind } from "../../../lib/api";
 
 interface SeedRow {
   platform: string;
@@ -27,12 +27,11 @@ const PLATFORMS = [
 ];
 
 const DRAFT_KEY = "showis:new-case-draft";
-
-/** Hedef kimliği modu — `name`: ad/soyad, `handle`: kullanıcı adı (nickname). */
-type TargetMode = "name" | "handle";
+/** Handle modunda `Ad`/`Soyad` alanlarını açıklayan ipucu metninin kimliği. */
+const NAME_HINT_ID = "target-name-hint";
 
 const EMPTY = {
-  mode: "name" as TargetMode,
+  mode: "name" as TargetKind,
   name: "",
   purpose: "",
   legal_basis: "self_check",
@@ -65,8 +64,8 @@ export default function NewCasePage() {
   const [scanMode, setScanMode] = useState("O2");
 
   // Hedef modu form durumunda tutulur; taslaktan gelen deger dogrulanir.
-  const mode: TargetMode = form.mode === "handle" ? "handle" : "name";
-  const setMode = (next: TargetMode) => setForm((f) => ({ ...f, mode: next }));
+  const mode: TargetKind = form.mode === "handle" ? "handle" : "name";
+  const setMode = (next: TargetKind) => setForm((f) => ({ ...f, mode: next }));
 
   const firstNameRef = useRef<HTMLInputElement>(null);
   const nicknameRef = useRef<HTMLInputElement>(null);
@@ -96,7 +95,7 @@ export default function NewCasePage() {
       if (form.company) hints.company = form.company.trim();
       if (form.school) hints.school = form.school.trim();
 
-      const nickname = form.nickname.replace(/^@/, "").trim();
+      const nickname = form.nickname.trim().replace(/^@/, "").trim();
       const fullname = `${form.first_name} ${form.last_name}`.trim();
       const label = mode === "handle" ? `@${nickname || "hedef"}` : fullname || "Hedef";
       const res = await api.createCase({
@@ -151,7 +150,7 @@ export default function NewCasePage() {
             </div>
 
             <div
-              role="group"
+              role="radiogroup"
               aria-label="Hedef türü"
               className="mt-4 inline-flex rounded-lg border border-slate-800 bg-slate-950 p-0.5"
             >
@@ -165,7 +164,8 @@ export default function NewCasePage() {
                   <button
                     key={m.value}
                     type="button"
-                    aria-pressed={active}
+                    role="radio"
+                    aria-checked={active}
                     onClick={() => setMode(m.value)}
                     className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-colors ${
                       active
@@ -184,11 +184,14 @@ export default function NewCasePage() {
               {mode === "handle" && (
                 <label className="block sm:col-span-2">
                   <span className="label">
-                    Kullanıcı adı <span className="text-blue-400">*</span>
+                    Kullanıcı adı <span aria-hidden="true" className="text-blue-400">*</span>
                   </span>
                   <div className="relative">
                     {!form.nickname.startsWith("@") && (
-                      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 font-mono text-sm text-slate-500">
+                      <span
+                        aria-hidden="true"
+                        className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 font-mono text-sm text-slate-500"
+                      >
                         @
                       </span>
                     )}
@@ -207,7 +210,7 @@ export default function NewCasePage() {
                 <span className="label">
                   Ad{" "}
                   {mode === "name" ? (
-                    <span className="text-blue-400">*</span>
+                    <span aria-hidden="true" className="text-blue-400">*</span>
                   ) : (
                     <span className="font-normal tracking-normal text-slate-600">(ops.)</span>
                   )}
@@ -215,6 +218,7 @@ export default function NewCasePage() {
                 <input
                   ref={firstNameRef}
                   required={mode === "name"}
+                  aria-describedby={mode === "handle" ? NAME_HINT_ID : undefined}
                   className="input"
                   placeholder="Kerem"
                   value={form.first_name}
@@ -226,6 +230,7 @@ export default function NewCasePage() {
                   Soyad <span className="font-normal tracking-normal text-slate-600">(ops.)</span>
                 </span>
                 <input
+                  aria-describedby={mode === "handle" ? NAME_HINT_ID : undefined}
                   className="input"
                   placeholder="Boz"
                   value={form.last_name}
@@ -239,7 +244,10 @@ export default function NewCasePage() {
                   </span>
                   <div className="relative">
                     {!form.nickname.startsWith("@") && (
-                      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 font-mono text-sm text-slate-500">
+                      <span
+                        aria-hidden="true"
+                        className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 font-mono text-sm text-slate-500"
+                      >
                         @
                       </span>
                     )}
@@ -255,7 +263,7 @@ export default function NewCasePage() {
               )}
             </div>
             {mode === "handle" && (
-              <p className="mt-3 text-[11px] text-slate-500">
+              <p id={NAME_HINT_ID} className="mt-3 text-[11px] text-slate-500">
                 Ad ve soyad opsiyonel — bulunan hesapların size ait olduğunu doğrulamak için kullanılır.
               </p>
             )}
@@ -312,7 +320,9 @@ export default function NewCasePage() {
                 />
               </label>
               <label className="block">
-                <span className="label">Hukuki dayanak *</span>
+                <span className="label">
+                  Hukuki dayanak <span aria-hidden="true">*</span>
+                </span>
                 <select
                   className="input"
                   value={form.legal_basis}
