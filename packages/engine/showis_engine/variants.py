@@ -42,36 +42,38 @@ def generate_variants(
     first_name: str,
     last_name: str,
     hints: dict[str, Any] | None = None,
+    nickname: str = "",
     max_variants: int = 60,
 ) -> VariantSet:
+    """İsim ve/veya nick'ten kullanıcı adı varyantları üretir.
+
+    ``nickname`` birinci sınıf argümandır; ``hints`` içinden nick **okunmaz**
+    (tek kaynak hedefin kendi alanı). ``hints`` yalnızca yıl/şehir gibi sinyaller
+    için kullanılır.
+    """
     hints = hints or {}
     ad = normalize_turkish(first_name)
     soyad = normalize_turkish(last_name)
     a = ad[0] if ad else ""
 
-    nickname = normalize_turkish(hints.get("nickname") or hints.get("username") or "")
+    nick = normalize_turkish(nickname.lstrip("@"))
     year = str(hints.get("year") or hints.get("birth_year") or "")
 
     variants: list[UsernameVariant] = []
     seen: set[str] = set()
 
-    def add_variant(u: str, pattern: str, confidence: float):
+    def add_variant(u: str, pattern: str, confidence: float, min_len: int = 3):
         clean_u = u.strip("._-")
-        if clean_u and clean_u not in seen and len(clean_u) >= 3:
+        if clean_u and clean_u not in seen and len(clean_u) >= min_len:
             seen.add(clean_u)
             variants.append(
                 UsernameVariant(username=clean_u, pattern=pattern, confidence=confidence)
             )
 
-    # 1. Manual / Known Nickname
-    if nickname:
-        add_variant(nickname, "manual", 1.0)
-        if year:
-            add_variant(f"{nickname}{year}", "nick+year", 0.95)
-        add_variant(f"{nickname}99", "nick+digits", 0.85)
-        add_variant(f"{nickname}01", "nick+digits", 0.85)
-        add_variant(f"{nickname}_dev", "nick_dev", 0.85)
-        add_variant(f"{nickname}.dev", "nick_dev", 0.85)
+    # 1. Known handle (exact). Kullanıcının verdiği nick tahmin değil kanıttır:
+    #    kısa olsa da (ör. 2 karakter) korunur, bu yüzden min_len=1.
+    if nick:
+        add_variant(nick, "manual", 1.0, min_len=1)
 
     # 2. Primary name-surname patterns (High confidence)
     if ad and soyad:
@@ -109,14 +111,28 @@ def generate_variants(
         if year:
             add_variant(f"{soyad}{year}", "last+year", 0.65)
 
-    name_forms = [
-        f"{first_name} {last_name}".strip(),
-        f"{ad} {soyad}".strip(),
-        f"{ad}.{soyad}",
-        f"{a}. {last_name}".strip(),
-    ]
+    # 4. Handle tahminleri. Kanıt (exact handle) ve isim desenleri listeye zaten
+    #    girdikten sonra eklenir; böylece nick varken bile ilk sıralar
+    #    "bilinen handle → isim desenleri" olur.
+    if nick:
+        if year:
+            add_variant(f"{nick}{year}", "nick+year", 0.95)
+        add_variant(f"{nick}99", "nick+digits", 0.85)
+        add_variant(f"{nick}01", "nick+digits", 0.85)
+        add_variant(f"{nick}_dev", "nick_dev", 0.85)
+        add_variant(f"{nick}.dev", "nick_dev", 0.85)
+
+    # İsim formları yalnız ad/soyad varsa üretilir; handle-only hedefte boş kalır.
+    name_forms: list[str] = []
+    if ad or soyad:
+        name_forms.append(f"{first_name} {last_name}".strip())
+        name_forms.append(f"{ad} {soyad}".strip())
+        if ad and soyad:
+            name_forms.append(f"{ad}.{soyad}")
+            name_forms.append(f"{a}. {last_name}".strip())
+        name_forms = [nf for nf in name_forms if nf]
 
     return VariantSet(
         variants=variants[:max_variants],
-        name_forms=[nf for nf in name_forms if nf],
+        name_forms=name_forms,
     )
