@@ -234,6 +234,25 @@ MAX_CASE_OFFSET = 10_000
 #: `legacy=1` tam dökümü: dizi sözleşmesi bozulmadan en fazla bu kadar vaka
 LEGACY_MAX_ROWS = 500
 
+#: T-376: kontrol karakterleri (C0 + DEL) — DB/encoding katmanına ulaşmadan reddedilir.
+#: `q=a%00b` asyncpg'de `invalid byte sequence for encoding "UTF8": 0x00` → 500/502 idi.
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def reject_control_chars(value: str | None, *, param: str) -> str | None:
+    """Metin parametrelerinde C0/DEL karakterlerini reddeder (422).
+
+    `%00` gibi percent-encoded girdiler decode edildikten sonra buraya düşer.
+    """
+    if value is None:
+        return None
+    if _CONTROL_CHARS_RE.search(value):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Geçersiz girdi: '{param}' kontrol karakteri içeriyor",
+        )
+    return value
+
 
 def _escape_like(value: str) -> str:
     r"""`ILIKE` deseni için `%`, `_` ve `\` kaçışlanır (kullanıcı joker üretemez)."""
@@ -304,6 +323,11 @@ async def list_cases(
     N+1 yok: son tarama bilgisi korelasyonlu alt sorgularla tek sorguda gelir,
     hedef/seed ilişkileri `selectinload` ile toplu yüklenir.
     """
+    # T-376: kontrol karakterleri (NUL vb.) DB katmanına ulaşmadan 422
+    q = reject_control_chars(q, param="q")
+    status_filter = reject_control_chars(status_filter, param="status")
+    reject_control_chars(mode, param="mode")
+
     if mode is not None and mode.strip():
         normalized_mode = norm_mode(mode)
         if mode.strip().upper() not in CASE_MODES:

@@ -69,8 +69,12 @@ class WebSearchConnector:
         hints = target.hints or {}
         queries = [f'"{fullname}"']
         # Okul/sehir ipucu ayni isimli kisileri ayiklar.
+        # T-377 (SEC-10): ipucu metni guvenilmez — operatorler notralize edilir,
+        # uzunluk kirpilir, kontrol karakteri iceren deger atlanir.
+        from showis_engine.planner import sanitize_hint
+
         for key in ("school", "city", "company"):
-            value = str(hints.get(key) or "").strip()
+            value = sanitize_hint(hints.get(key))
             if value:
                 queries.append(f'"{fullname}" {value}')
         return queries

@@ -83,12 +83,18 @@ class GitHubConnector:
                 )
 
         # 2. Name query search
+        # T-377 (SEC-10): ipucu metni guvenilmez; tirnak/operator enjeksiyonu
+        # `sanitize_hint` ile notralize edilir (tek kaynak: showis_engine.planner).
+        from showis_engine.planner import sanitize_hint
+
         fullname = f"{target.first_name} {target.last_name}".strip()
         q_parts = [f'"{fullname}" in:name']
-        if target.hints.get("city"):
-            q_parts.append(f'location:"{target.hints["city"]}"')
-        if target.hints.get("company"):
-            q_parts.append(f'company:"{target.hints["company"]}"')
+        city = sanitize_hint(target.hints.get("city"))
+        if city:
+            q_parts.append(f'location:"{city}"')
+        company = sanitize_hint(target.hints.get("company"))
+        if company:
+            q_parts.append(f'company:"{company}"')
 
         query_str = " ".join(q_parts)
         tasks.append(

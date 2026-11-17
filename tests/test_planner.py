@@ -104,3 +104,125 @@ async def test_planner_rejects_forbidden_llm_query():
         plan = await planner.plan(target, variants)
     assert all("breach" not in q.query for q in plan.queries)
     assert any("site:github.com" in q.query for q in plan.queries)
+
+
+# ---------------------------------------------------------------------------
+# T-377 (SEC-10): ipucu/sorgu enjeksiyonu — tek kaynak sanitizasyon
+# ---------------------------------------------------------------------------
+
+
+def test_normal_turkce_ipucu_bozulmaz():
+    from showis_engine.planner import sanitize_hint
+
+    assert sanitize_hint("ODTÜ") == "ODTÜ"
+    assert sanitize_hint("İstanbul") == "İstanbul"
+    assert sanitize_hint("  Orta Doğu Teknik Üniversitesi ") == "Orta Doğu Teknik Üniversitesi"
+
+
+def test_operator_enjeksiyonu_notralize_edilir():
+    from showis_engine.planner import sanitize_hint
+
+    dirty = 'x site:evil.tld filetype:pdf inurl:admin intitle:"index of"'
+    cleaned = sanitize_hint(dirty)
+    assert "site:" not in cleaned
+    assert "filetype:" not in cleaned
+    assert "inurl:" not in cleaned
+    assert "intitle:" not in cleaned
+    assert cleaned.startswith("x site_evil.tld")
+
+
+def test_boolean_ve_negasyon_notralize_edilir():
+    from showis_engine.planner import sanitize_hint
+
+    cleaned = sanitize_hint('Ahmet OR -Veli NOT "Yılmaz"')
+    assert " OR " not in cleaned
+    assert " NOT " not in cleaned
+    assert not cleaned.split()[1].startswith("-")
+    assert '"' not in cleaned
+
+
+def test_uzunluk_kirpilir():
+    from showis_engine.planner import (
+        MAX_HINT_LENGTH,
+        MAX_QUERY_LENGTH,
+        sanitize_hint,
+        sanitize_query,
+    )
+
+    long_hint = "a" * 500
+    assert len(sanitize_hint(long_hint)) == MAX_HINT_LENGTH
+    assert len(sanitize_query('"' + "a" * 500 + '"')) == MAX_QUERY_LENGTH
+
+
+def test_kontrol_karakteri_reddedilir():
+    from showis_engine.planner import sanitize_hint, sanitize_query
+
+    assert sanitize_hint("ok\x00bad") == ""
+    assert sanitize_hint("satir\nsonu") == ""
+    assert sanitize_query("a\x1fb") == ""
+
+
+def test_bos_hint_bos_doner():
+    from showis_engine.planner import sanitize_hint
+
+    assert sanitize_hint(None) == ""
+    assert sanitize_hint("") == ""
+    assert sanitize_hint("   ") == ""
+
+
+def test_finalize_query_yasak_deseni_reddeder():
+    from showis_engine.planner import finalize_query
+    from showis_engine.policy import PolicyViolationError
+
+    with pytest.raises(PolicyViolationError):
+        finalize_query("site:pastebin.com sızıntı")
+    with pytest.raises(ValueError):
+        finalize_query("")
+    # Mesru site: operatoru korunur (sistem sorgusu)
+    assert finalize_query('"Ahmet Yılmaz" site:github.com') == '"Ahmet Yılmaz" site:github.com'
+
+
+@pytest.mark.asyncio
+async def test_websearch_connector_ipucunu_sanitize_eder():
+    from showis_connectors.websearch.connector import WebSearchConnector
+    from showis_contracts import ScanContext, Target
+
+    connector = WebSearchConnector(search_provider=None)
+    ctx = ScanContext(
+        case_id="c",
+        scan_id="s",
+        target=Target(
+            first_name="Ahmet",
+            last_name="Yılmaz",
+            hints={"city": "İstanbul site:evil.tld", "company": 'ACME "OR" 1=1'},
+        ),
+    )
+    queries = connector._queries(ctx)
+    joined = " | ".join(queries)
+    assert "site:" not in joined
+    assert '"OR"' not in joined
+    assert "İstanbul" in joined  # okunur kısım korunur
+
+
+@pytest.mark.asyncio
+async def test_github_connector_ipucunu_sanitize_eder():
+    from showis_connectors.github import GitHubConnector
+    from showis_contracts import Platform, ScanContext, Target
+
+    connector = GitHubConnector(token=None)
+    ctx = ScanContext(
+        case_id="c",
+        scan_id="s",
+        target=Target(
+            first_name="Ahmet",
+            last_name="Yılmaz",
+            hints={"city": 'İzmir" in:readme site:evil.tld', "company": "ACME"},
+        ),
+    )
+    tasks = await connector.plan(ctx)
+    name_task = next(t for t in tasks if t.params.get("query", "").find("in:name") >= 0)
+    query = str(name_task.params["query"])
+    assert 'in:readme' not in query
+    assert "site:" not in query
+    assert "location:\"İzmir" in query
+    assert isinstance(name_task.platform, Platform)

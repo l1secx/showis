@@ -6,6 +6,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import HTMLResponse, JSONResponse
+from sqlalchemy.exc import DataError, DBAPIError
 
 import showis.db.session as db_session_module
 from showis.api.v1.cases import router as cases_router
@@ -234,6 +235,44 @@ app.add_middleware(BodySizeLimitMiddleware)
 auth_required = [Depends(require_token)]
 #: Dokumantasyon: once "kapali mi" (404), sonra token (401).
 docs_guarded = [Depends(_require_docs), Depends(require_token)]
+
+# ---------------------------------------------------------------------------
+# T-376: DB katmanından gelen "girdi kaynaklı" hatalar 500/502 yerine 422
+# ---------------------------------------------------------------------------
+
+#: SQLSTATE class 22 = data exception (geçersiz metin kodlaması, NUL baytı, aralık vb.)
+_DATA_ERROR_SQLSTATES = ("22",)
+
+
+@app.exception_handler(DBAPIError)
+async def dbapi_error_handler(request: Request, exc: DBAPIError) -> JSONResponse:
+    """`DBAPIError` → girdi hatasıysa **422**, gerçek arıza ise 500.
+
+    Örnek: `q=a%00b` asyncpg'de `invalid byte sequence for encoding "UTF8": 0x00`
+    üretiyordu → 500 (ve keep-alive bağlantısında 502). Kullanıcı hatası sınıfı
+    (SQLSTATE 22) artık sızsız `422 {"detail": "Geçersiz girdi"}` döner.
+    Bağlantı havuzu/DB arızası (class 08/57 vb.) 422'ye **çevrilmez**; 500 + log.
+
+    Log: traceback yok, yalnız sınıf adı/SQLSTATE — sır/PII sızmaz.
+    """
+    sqlstate = str(getattr(getattr(exc, "orig", None), "sqlstate", "") or "")
+    is_input_error = isinstance(exc, DataError) or sqlstate.startswith(_DATA_ERROR_SQLSTATES)
+    if is_input_error:
+        logger.warning(
+            "Gecersiz girdi (DB): %s %s sqlstate=%s",
+            request.method,
+            request.url.path,
+            sqlstate or "n/a",
+        )
+        return JSONResponse({"detail": "Geçersiz girdi"}, status_code=422)
+
+    logger.error(
+        "Veritabani hatasi: %s %s (%s)",
+        request.method,
+        request.url.path,
+        type(exc).__name__,
+    )
+    return JSONResponse({"detail": "Sunucu hatası"}, status_code=500)
 
 #: Kimlik dogrulama basarisizliginda audit yazilan yollar (healthcheck haric)
 _AUTH_AUDITED_STATUSES = {status.HTTP_401_UNAUTHORIZED, status.HTTP_503_SERVICE_UNAVAILABLE}

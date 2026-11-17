@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re
 
 from showis_contracts import Platform, QueryPlan, SearchQuery, Target, VariantSet
 from showis_llm import LLMClient, render_prompt
@@ -533,6 +534,82 @@ def build_template_fallback_queries(
     return QueryPlan(queries=queries[:50])
 
 
+# ---------------------------------------------------------------------------
+# T-377 (SEC-10): sorgu metni tek kaynaktan doğrulanır
+# ---------------------------------------------------------------------------
+
+#: İpucu alanı için azami uzunluk (aşırı uzun metin = token bombası)
+MAX_HINT_LENGTH = 80
+#: Toplam sorgu uzunluğu sınırı
+MAX_QUERY_LENGTH = 200
+
+#: Arama motoru operatörleri: `site:`, `filetype:`, `inurl:` …
+_OPERATOR_RE = re.compile(
+    r"\b(site|filetype|inurl|intitle|intext|allinurl|allintitle|cache|related|link"
+    r"|in|repo|language|user|org|topic)\s*:",
+    re.IGNORECASE,
+)
+#: Boolean anahtar sözcükleri (tırnak dışında operatör gibi davranır)
+_BOOLEAN_RE = re.compile(r"\b(OR|AND|NOT|NEAR)\b", re.IGNORECASE)
+#: Kontrol karakterleri (satır sonu, null, escape…)
+_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+#: Tırnak/yıldız/ters bölü: sorgu sözdizimini kırar
+_QUERY_SPECIALS_RE = re.compile(r'["\*\\`]')
+
+
+def sanitize_hint(value: object, *, max_length: int = MAX_HINT_LENGTH) -> str:
+    """İpucu değerini sorguya güvenle konabilecek biçime getirir.
+
+    * kontrol karakterleri atılır (varsa tüm alan reddedilir),
+    * `site:`/`filetype:`/`inurl:` gibi operatörler `site_` biçimine nötralize edilir,
+    * `OR`/`AND`/`NOT`/`NEAR` küçük harfe indirilir (operatör olmaktan çıkar),
+    * tırnak, `*`, ters bölü, backtick boşluğa çevrilir,
+    * satır başındaki `-` (negasyon) atılır,
+    * boşluklar tekilleştirilir ve uzunluk `max_length` ile kırpılır.
+
+    Boş sonuç → "" (çağıran ipucu eklemez).
+    """
+    text = str(value or "")
+    if not text:
+        return ""
+    if _CONTROL_RE.search(text):
+        logger.debug("Sorgu ipucu reddedildi: kontrol karakteri")
+        return ""
+    text = _OPERATOR_RE.sub(lambda m: f"{m.group(1)}_", text)
+    text = _BOOLEAN_RE.sub(lambda m: m.group(1).lower(), text)
+    text = _QUERY_SPECIALS_RE.sub(" ", text)
+    text = re.sub(r"(^|\s)-(\S)", r"\1\2", text)  # negasyon operatorunu kaldir
+    text = " ".join(text.split())
+    return text[:max_length].strip()
+
+
+def sanitize_query(text: object, *, max_length: int = MAX_QUERY_LENGTH) -> str:
+    """Sistem/LLM tarafından yazılmış sorguyu normalize eder.
+
+    Burada arama operatörleri **korunur** (``site:github.com`` meşru ve gerekli);
+    yalnız kontrol karakterleri, aşırı uzunluk ve boşluklar düzeltilir.
+    Kullanıcı ipuçları için :func:`sanitize_hint` (operatörleri nötralize eder).
+    """
+    text = str(text or "")
+    if _CONTROL_RE.search(text):
+        logger.debug("Sorgu reddedildi: kontrol karakteri")
+        return ""
+    text = " ".join(text.split())
+    return text[:max_length].strip()
+
+
+def finalize_query(text: object, *, max_length: int = MAX_QUERY_LENGTH) -> str:
+    """Hem LLM hem şablon yolu için **tek** son kapı (T-377/SEC-10).
+
+    Sanitize eder, boşsa ``ValueError``, yasak desen içeriyorsa
+    ``PolicyViolationError`` fırlatır (çağıran o sorguyu atlar).
+    """
+    cleaned = sanitize_query(text, max_length=max_length)
+    if not cleaned or len(cleaned) < 2:
+        raise ValueError("boş sorgu")
+    return guard_query(cleaned)
+
+
 #: T-333: planlama için LLM'e ayrılan üst süre (sn). Aşılırsa şablon planı.
 PLANNER_TIMEOUT_ENV = "SHOWIS_LLM_PLANNER_TIMEOUT"
 DEFAULT_PLANNER_TIMEOUT = 10.0
@@ -594,7 +671,7 @@ class QueryPlanner:
             if isinstance(plan, QueryPlan) and plan.queries:
                 # LLM ciktisi da yasak desen kontrolunden gecer (hints enjeksiyonu)
                 guarded = [
-                    q.model_copy(update={"query": guard_query(q.query)})
+                    q.model_copy(update={"query": finalize_query(q.query)})
                     for q in plan.queries[:max_queries]
                 ]
                 return QueryPlan(queries=guarded)

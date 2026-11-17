@@ -436,3 +436,79 @@ async def test_offset_siniri_legacy_modda_da_gecerli(client, db_factory):
     await _seed(db_factory)
     res = await client.get("/api/v1/cases?legacy=1&offset=10001")
     assert res.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# T-376: kontrol karakterleri (NUL vb.) 500/502 değil 422
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "a\x00b",  # NUL — asyncpg'de 500/502'ye yol açıyordu
+        "a\x01b",  # C0 kontrol karakteri
+        "a\x1fb",
+        "a\x7fb",  # DEL
+        "\x00",
+    ],
+)
+async def test_q_kontrol_karakterleri_422(client, db_factory, raw):
+    await _seed(db_factory)
+    res = await client.get("/api/v1/cases", params={"q": raw})
+    assert res.status_code == 422, res.text
+    assert "kontrol karakteri" in res.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"status": "act\x00ive"},
+        {"mode": "O2\x00"},
+        {"q": "ok", "status": "active\x01"},
+    ],
+)
+async def test_diger_parametrelerde_kontrol_karakteri_422(client, db_factory, params):
+    await _seed(db_factory)
+    res = await client.get("/api/v1/cases", params=params)
+    assert res.status_code == 422, res.text
+
+
+@pytest.mark.parametrize("raw", ["İnceleme", "Ayşe", "emoji🔍", "a b", "50%"])
+async def test_normal_unicode_kabul_edilir(client, db_factory, raw):
+    await _seed(db_factory)
+    res = await client.get("/api/v1/cases", params={"q": raw})
+    assert res.status_code == 200, res.text
+    assert set(res.json()) == {"items", "total", "limit", "offset"}
+
+
+async def test_dbapi_error_handler_girdi_hatasini_422_yapar():
+    """Girdi kaynaklı DB hataları sızsız 422; gerçek arıza 500 kalır (maskelenmez)."""
+    from showis.main import dbapi_error_handler
+    from sqlalchemy.exc import DataError, OperationalError
+    from starlette.requests import Request
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/v1/cases",
+            "headers": [],
+            "query_string": b"",
+        }
+    )
+
+    input_exc = DataError(
+        "SELECT 1", {}, Exception('invalid byte sequence for encoding "UTF8": 0x00')
+    )
+    response = await dbapi_error_handler(request, input_exc)
+    assert response.status_code == 422
+    body = response.body.decode()
+    assert body == '{"detail":"Geçersiz girdi"}'
+    # İç detay/sır sızmaz
+    assert "UTF8" not in body and "0x00" not in body and "SELECT" not in body
+
+    outage = OperationalError("SELECT 1", {}, Exception("connection refused"))
+    response = await dbapi_error_handler(request, outage)
+    assert response.status_code == 500
+    assert "connection refused" not in response.body.decode()
