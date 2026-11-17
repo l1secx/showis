@@ -68,6 +68,12 @@ export default function CaseLayout({ children }: { children: React.ReactNode }) 
 
   const base = `/cases/${id}`;
   const hints = caseData?.target?.hints || {};
+  // §6.6: ad varsa "Ad Soyad", kullanıcı adı varsa "· @nick" (ikisi birlikte olabilir).
+  const firstName = caseData?.target?.first_name?.trim() ?? "";
+  const lastName = caseData?.target?.last_name?.trim() ?? "";
+  const fullName = `${firstName} ${lastName}`.trim();
+  const nick = (caseData?.target?.nickname ?? "").trim().replace(/^@/, "");
+  const targetLabel = [fullName, nick ? `@${nick}` : ""].filter(Boolean).join(" · ");
 
   return (
     <ScanSessionProvider caseId={id}>
@@ -85,9 +91,9 @@ export default function CaseLayout({ children }: { children: React.ReactNode }) 
               {caseData?.name ?? "Vaka"}
             </h1>
             <div className="mt-2 flex flex-wrap items-center gap-2">
-              {caseData?.target && (
+              {targetLabel && (
                 <span className="chip border-blue-500/30 bg-blue-500/10 text-blue-200">
-                  {caseData.target.first_name} {caseData.target.last_name}
+                  {targetLabel}
                 </span>
               )}
               {hints.school && <span className="chip">🎓 {hints.school}</span>}

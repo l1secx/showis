@@ -12,9 +12,17 @@ export interface CaseSummary {
   created_at: string;
 }
 
+/** Hedef kimliği — handle-only vakalarda `first_name`/`last_name` boş olabilir. */
+export type TargetKind = "name" | "handle";
+
 /** T-358 zarfındaki liste satırı (hedef + son tarama özeti ile). */
 export interface CaseListItem extends CaseSummary {
-  target?: { first_name?: string | null; last_name?: string | null } | null;
+  target?: {
+    kind?: TargetKind | null;
+    first_name?: string | null;
+    last_name?: string | null;
+    nickname?: string | null;
+  } | null;
   seeds_count?: number;
   last_scan?: {
     mode?: string | null;
@@ -43,8 +51,10 @@ export interface CaseListPage {
 export interface CaseDetail extends CaseSummary {
   notes?: string | null;
   target?: {
+    kind?: TargetKind | null;
     first_name: string;
     last_name: string;
+    nickname?: string | null;
     name_forms?: string[];
     hints?: Record<string, any>;
     review_required?: boolean;
@@ -186,7 +196,7 @@ async function listCases(params: CaseListParams = {}): Promise<CaseListPage> {
     if (text) {
       const needle = text.toLocaleLowerCase("tr");
       rows = rows.filter((row) =>
-        [row.name, row.purpose, row.target?.first_name, row.target?.last_name]
+        [row.name, row.purpose, row.target?.first_name, row.target?.last_name, row.target?.nickname]
           .filter(Boolean)
           .some((value) => String(value).toLocaleLowerCase("tr").includes(needle))
       );

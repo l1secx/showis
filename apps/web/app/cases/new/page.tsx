@@ -1,8 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { GraduationCap, MapPin, Radar, ShieldCheck, Sparkles, UserRound } from "lucide-react";
+import {
+  AtSign,
+  GraduationCap,
+  MapPin,
+  Radar,
+  ShieldCheck,
+  Sparkles,
+  UserRound,
+} from "lucide-react";
 import { api } from "../../../lib/api";
 
 interface SeedRow {
@@ -20,7 +28,11 @@ const PLATFORMS = [
 
 const DRAFT_KEY = "showis:new-case-draft";
 
+/** Hedef kimliği modu — `name`: ad/soyad, `handle`: kullanıcı adı (nickname). */
+type TargetMode = "name" | "handle";
+
 const EMPTY = {
+  mode: "name" as TargetMode,
   name: "",
   purpose: "",
   legal_basis: "self_check",
@@ -28,6 +40,7 @@ const EMPTY = {
   retention_days: 30,
   first_name: "",
   last_name: "",
+  nickname: "",
   city: "",
   company: "",
   school: "",
@@ -49,7 +62,19 @@ export default function NewCasePage() {
   });
   const [seeds, setSeeds] = useState<SeedRow[]>([{ platform: "github", username: "", url: "" }]);
   const [autoScan, setAutoScan] = useState(true);
-  const [mode, setMode] = useState("O2");
+  const [scanMode, setScanMode] = useState("O2");
+
+  // Hedef modu form durumunda tutulur; taslaktan gelen deger dogrulanir.
+  const mode: TargetMode = form.mode === "handle" ? "handle" : "name";
+  const setMode = (next: TargetMode) => setForm((f) => ({ ...f, mode: next }));
+
+  const firstNameRef = useRef<HTMLInputElement>(null);
+  const nicknameRef = useRef<HTMLInputElement>(null);
+
+  // Mod degisince ilgili zorunlu alan odaklanir (alan sirasi moda gore degisir).
+  useEffect(() => {
+    (mode === "handle" ? nicknameRef : firstNameRef).current?.focus();
+  }, [mode]);
 
   // Yazilanlar sekmeler arasinda kaybolmasin.
   useEffect(() => {
@@ -71,16 +96,20 @@ export default function NewCasePage() {
       if (form.company) hints.company = form.company.trim();
       if (form.school) hints.school = form.school.trim();
 
+      const nickname = form.nickname.replace(/^@/, "").trim();
       const fullname = `${form.first_name} ${form.last_name}`.trim();
+      const label = mode === "handle" ? `@${nickname || "hedef"}` : fullname || "Hedef";
       const res = await api.createCase({
-        name: form.name || `${fullname || "Hedef"} — ${new Date().toLocaleDateString("tr-TR")}`,
-        purpose: form.purpose || `${fullname} için kamuya açık kaynak taraması`,
+        name: form.name || `${label} — ${new Date().toLocaleDateString("tr-TR")}`,
+        purpose: form.purpose || `${label} için kamuya açık kaynak taraması`,
         legal_basis: form.legal_basis,
         notes: form.notes || null,
         retention_days: Number(form.retention_days),
         target: {
+          kind: mode,
           first_name: form.first_name,
           last_name: form.last_name,
+          nickname,
           hints,
         },
         seeds: seeds
@@ -91,7 +120,7 @@ export default function NewCasePage() {
       window.sessionStorage.removeItem(DRAFT_KEY);
       router.push(
         autoScan
-          ? `/cases/${res.id}/scan?start=1&mode=${mode}`
+          ? `/cases/${res.id}/scan?start=1&mode=${scanMode}`
           : `/cases/${res.id}/scan`
       );
     } catch (err: any) {
@@ -115,15 +144,77 @@ export default function NewCasePage() {
               <UserRound size={15} className="text-blue-400" />
               <h2 className="text-sm font-semibold text-slate-100">Hedef</h2>
               <span className="ml-auto text-[11px] text-slate-500">
-                sadece isim yeterli — ipuçları eşleşmeyi daraltır
+                {mode === "handle"
+                  ? "kullanıcı adı tek başına yeterli"
+                  : "sadece isim yeterli — ipuçları eşleşmeyi daraltır"}
               </span>
             </div>
+
+            <div
+              role="group"
+              aria-label="Hedef türü"
+              className="mt-4 inline-flex rounded-lg border border-slate-800 bg-slate-950 p-0.5"
+            >
+              {[
+                { value: "name" as const, label: "İsimle ara", icon: UserRound },
+                { value: "handle" as const, label: "Kullanıcı adıyla ara", icon: AtSign },
+              ].map((m) => {
+                const Icon = m.icon;
+                const active = mode === m.value;
+                return (
+                  <button
+                    key={m.value}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => setMode(m.value)}
+                    className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-colors ${
+                      active
+                        ? "bg-blue-500/15 text-blue-200"
+                        : "text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    <Icon size={13} className={active ? "text-blue-400" : ""} />
+                    {m.label}
+                  </button>
+                );
+              })}
+            </div>
+
             <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              {mode === "handle" && (
+                <label className="block sm:col-span-2">
+                  <span className="label">
+                    Kullanıcı adı <span className="text-blue-400">*</span>
+                  </span>
+                  <div className="relative">
+                    {!form.nickname.startsWith("@") && (
+                      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 font-mono text-sm text-slate-500">
+                        @
+                      </span>
+                    )}
+                    <input
+                      ref={nicknameRef}
+                      required
+                      className="input pl-7 font-mono"
+                      placeholder="abdulkeremdemir"
+                      value={form.nickname}
+                      onChange={(e) => set("nickname", e.target.value)}
+                    />
+                  </div>
+                </label>
+              )}
               <label className="block">
-                <span className="label">Ad *</span>
+                <span className="label">
+                  Ad{" "}
+                  {mode === "name" ? (
+                    <span className="text-blue-400">*</span>
+                  ) : (
+                    <span className="font-normal tracking-normal text-slate-600">(ops.)</span>
+                  )}
+                </span>
                 <input
-                  required
-                  autoFocus
+                  ref={firstNameRef}
+                  required={mode === "name"}
                   className="input"
                   placeholder="Kerem"
                   value={form.first_name}
@@ -131,16 +222,43 @@ export default function NewCasePage() {
                 />
               </label>
               <label className="block">
-                <span className="label">Soyad *</span>
+                <span className="label">
+                  Soyad <span className="font-normal tracking-normal text-slate-600">(ops.)</span>
+                </span>
                 <input
-                  required
                   className="input"
                   placeholder="Boz"
                   value={form.last_name}
                   onChange={(e) => set("last_name", e.target.value)}
                 />
               </label>
+              {mode === "name" && (
+                <label className="block sm:col-span-2">
+                  <span className="label">
+                    Nick <span className="font-normal tracking-normal text-slate-600">(ops.)</span>
+                  </span>
+                  <div className="relative">
+                    {!form.nickname.startsWith("@") && (
+                      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 font-mono text-sm text-slate-500">
+                        @
+                      </span>
+                    )}
+                    <input
+                      ref={nicknameRef}
+                      className="input pl-7 font-mono"
+                      placeholder="kerem"
+                      value={form.nickname}
+                      onChange={(e) => set("nickname", e.target.value)}
+                    />
+                  </div>
+                </label>
+              )}
             </div>
+            {mode === "handle" && (
+              <p className="mt-3 text-[11px] text-slate-500">
+                Ad ve soyad opsiyonel — bulunan hesapların size ait olduğunu doğrulamak için kullanılır.
+              </p>
+            )}
             <div className="mt-4 grid gap-4 sm:grid-cols-3">
               <label className="block">
                 <span className="label">
@@ -303,14 +421,14 @@ export default function NewCasePage() {
                 <button
                   key={m.value}
                   type="button"
-                  onClick={() => setMode(m.value)}
+                  onClick={() => setScanMode(m.value)}
                   className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-left transition-colors ${
-                    mode === m.value
+                    scanMode === m.value
                       ? "border-blue-500/50 bg-blue-500/10"
                       : "border-slate-800 bg-slate-950 hover:border-slate-700"
                   }`}
                 >
-                  <span className={mode === m.value ? "text-sm text-blue-200" : "text-sm text-slate-300"}>
+                  <span className={scanMode === m.value ? "text-sm text-blue-200" : "text-sm text-slate-300"}>
                     {m.label}
                   </span>
                   <span className="font-mono text-[10px] text-slate-500">{m.hint}</span>
@@ -350,8 +468,8 @@ export default function NewCasePage() {
           <div className="card p-5 text-xs leading-relaxed text-slate-400">
             <p className="section-title mb-2">Nasıl çalışır</p>
             <ol className="space-y-1.5">
-              <li>1. İsim + okul/şehir ile arama motoru sorguları üretilir.</li>
-              <li>2. Her sonuç isim benzerliği ve ipuçlarıyla skorlanır.</li>
+              <li>1. Hedef kimliği (isim veya kullanıcı adı) ve ipuçlarıyla arama motoru sorguları üretilir.</li>
+              <li>2. Her sonuç isim/kullanıcı adı benzerliği ve ipuçlarıyla skorlanır.</li>
               <li>3. Bulunan kullanıcı adları 48 sitede doğrulanır.</li>
               <li>4. Sonuçlar onaylı / aday / ipucu olarak Bulgular&apos;a düşer.</li>
             </ol>
