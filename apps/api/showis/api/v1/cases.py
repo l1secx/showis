@@ -516,8 +516,10 @@ async def list_cases(
                 "created_at": c.created_at.isoformat() if c.created_at else None,
                 "target": (
                     {
+                        "kind": target.kind or "name",
                         "first_name": target.first_name,
                         "last_name": target.last_name,
+                        "nickname": target.nickname or "",
                     }
                     if target
                     else None
@@ -753,11 +755,7 @@ async def estimate_case_scan(
     ).scalar_one_or_none()
     if not target:
         raise HTTPException(status_code=404, detail="Case target not found")
-    contract_target = Target(
-        first_name=target.first_name,
-        last_name=target.last_name,
-        hints=target.hints or {},
-    )
+    contract_target = _db_target_to_contract(target)
     return estimate_scan(contract_target, mode)
 
 
@@ -801,18 +799,30 @@ async def _find_active_scan(db: AsyncSession, case_id: str) -> Scan | None:
     ).scalars().first()
 
 
+def _db_target_to_contract(row: Any) -> Target:
+    """DB hedef satırını kontrat `Target`ına çevirir.
+
+    Şema geçişinde (`0007`) ad/soyad/nick/kind NULL olabilir; kontrat bu
+    alanlarda `str` bekler. Tek dönüşüm noktası: `None → ""`, `kind → "name"`.
+    Böylece defense-in-depth `guard_target` nick'i de görür.
+    """
+    return Target(
+        kind=row.kind or "name",
+        first_name=row.first_name or "",
+        last_name=row.last_name or "",
+        nickname=row.nickname or "",
+        hints=row.hints or {},
+        review_required=bool(row.review_required),
+    )
+
+
 async def _load_contract_target(db: AsyncSession, case_id: str) -> Target | None:
     db_target = (
         await db.execute(select(DbTarget).where(DbTarget.case_id == case_id))
     ).scalar_one_or_none()
     if not db_target:
         return None
-    return Target(
-        first_name=db_target.first_name,
-        last_name=db_target.last_name,
-        hints=db_target.hints or {},
-        review_required=bool(db_target.review_required),
-    )
+    return _db_target_to_contract(db_target)
 
 
 @router.post("/{case_id}/scan")
@@ -1056,8 +1066,10 @@ async def export_case(
             "created_at": case.created_at.isoformat(),
         },
         "target": {
+            "kind": target.kind or "name",
             "first_name": target.first_name,
             "last_name": target.last_name,
+            "nickname": target.nickname or "",
             "name_forms": target.name_forms,
             "hints": target.hints,
             "review_required": target.review_required,

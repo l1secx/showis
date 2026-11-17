@@ -263,12 +263,15 @@ class ScannerService:
         if not db_target:
             return
 
-        # Prepare contracts
+        # Prepare contracts (DB NULL'ları kontratta "" olur — handle hedefinde
+        # ad/soyad yoktur; `kind` varsayılanı "name").
         target = Target(
-            first_name=db_target.first_name,
-            last_name=db_target.last_name,
+            kind=db_target.kind or "name",
+            first_name=db_target.first_name or "",
+            last_name=db_target.last_name or "",
+            nickname=db_target.nickname or "",
             hints=db_target.hints or {},
-            review_required=db_target.review_required,
+            review_required=bool(db_target.review_required),
         )
         seeds_res = await db.execute(select(DbSeed).where(DbSeed.case_id == case.id))
         db_seeds = seeds_res.scalars().all()
@@ -321,7 +324,11 @@ class ScannerService:
         await event_broadcaster.broadcast(scan.id, "scan.status", {"status": "running"})
 
         # Step 1: Variants & Planning
-        variants = generate_variants(target.first_name, target.last_name, target.hints)
+        # R2: nick birinci sınıf kaynaktır; handle-only hedefte tek varyant
+        # kaynağı odur (ad/soyad boş).
+        variants = generate_variants(
+            target.first_name, target.last_name, target.hints, nickname=target.nickname
+        )
         await event_broadcaster.broadcast(
             scan.id,
             "log",

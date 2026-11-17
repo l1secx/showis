@@ -130,7 +130,12 @@ async def test_zarf_ve_total(client, db_factory):
     assert body["limit"] == 50 and body["offset"] == 0
     assert len(body["items"]) == 3
     item = next(c for c in body["items"] if c["id"] == "case-ayse")
-    assert item["target"] == {"first_name": "Ayşe", "last_name": "Yılmaz"}
+    assert item["target"] == {
+        "kind": "name",
+        "first_name": "Ayşe",
+        "last_name": "Yılmaz",
+        "nickname": "",
+    }
     assert item["last_scan"]["mode"] == "O3"  # en yeni tarama
     assert item["last_scan"]["status"] == "completed"
 
