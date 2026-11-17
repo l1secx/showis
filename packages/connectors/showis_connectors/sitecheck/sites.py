@@ -48,6 +48,9 @@ class SiteSpec:
     #: Bu siteye istek atilirken robots.txt kontrolunu atla
     #: (yalnizca herkese acik, oturumsuz API uçlari icin)
     skip_robots: bool = False
+    #: T-365: kullanici adi icin opsiyonel regex (varsayilan: [A-Za-z0-9][A-Za-z0-9._-]{0,63}).
+    #: Yalniz platform gercekten farkli bir karakter kumesi kabul ediyorsa doldurulur.
+    username_pattern: str | None = None
     notes: str = ""
 
 
@@ -433,6 +436,9 @@ SITES: list[SiteSpec] = [
         Platform.BANDCAMP,
         "https://{u}.bandcamp.com",
         absent_statuses=(404, 410),
+        # T-357 canlı doğrulama: olmayan alt alan adı 200 + "Signup | Bandcamp"
+        # sayfası döndürüyor (yanlış pozitif) → absent sinyali eklendi.
+        absent_regex=r"<title>\s*Signup\s*\|\s*Bandcamp",
     ),
     SiteSpec(
         "dailymotion",
@@ -446,6 +452,110 @@ SITES: list[SiteSpec] = [
         "Scratch",
         Platform.SCRATCH,
         "https://scratch.mit.edu/users/{u}",
+        absent_statuses=(404, 410),
+    ),
+
+    # ------------------------------------------------------------------
+    # T-357/357b: genisletilmis kapsam — canli dogrulanmis herkese acik profiller
+    # Kural: login duvari/CAPTCHA arkasindaki platformlar EKLENMEZ; kirilgan
+    # present_regex yazilmaz. Yalniz durum-kodu (absent_statuses), dogal "bos"
+    # API yaniti (json_path) veya kanitlanmis metin isareti (absent_regex).
+    #
+    # Canli dogrulamada ELENENLER (spec yazilmadi):
+    #   twitch, trello, trakt, anilist, glitch, 500px -> SPA: her kullanici icin 200 kabuk
+    #   backloggd -> Cloudflare "not a bot" duvari
+    #   etsy, ebay, producthunt, artstation, fandom, fiverr, codesandbox -> 403 bot duvari
+    #   beacons -> self-signed TLS; mixcloud, ao3 -> bu agdan baglanti kurulamadi
+    # ------------------------------------------------------------------
+    SiteSpec(
+        "kick",
+        "Kick",
+        Platform.KICK,
+        "https://kick.com/{u}",
+        absent_statuses=(404, 410),
+        notes="Kanal yoksa 404 (Cloudflare 403 -> unknown)",
+    ),
+    SiteSpec(
+        "kofi",
+        "Ko-fi",
+        Platform.KOFI,
+        "https://ko-fi.com/{u}",
+        absent_statuses=(404, 410),
+    ),
+    SiteSpec(
+        "buymeacoffee",
+        "Buy Me a Coffee",
+        Platform.BUYMEACOFFEE,
+        "https://www.buymeacoffee.com/{u}",
+        absent_statuses=(404, 410),
+    ),
+    SiteSpec(
+        "gumroad",
+        "Gumroad",
+        Platform.GUMROAD,
+        "https://{u}.gumroad.com",
+        absent_statuses=(404, 410),
+        notes="Alt alan adi; DNS yoksa unknown",
+    ),
+    SiteSpec(
+        "slideshare",
+        "SlideShare",
+        Platform.SLIDESHARE,
+        "https://www.slideshare.net/{u}",
+        absent_statuses=(404, 410),
+        # T-357b canli dogrulama: olmayan kullanici 200 + "Page no longer exists"
+        absent_regex=r"Page no longer exists",
+    ),
+    SiteSpec(
+        "scribd",
+        "Scribd",
+        Platform.SCRIBD,
+        "https://www.scribd.com/{u}",
+        absent_statuses=(404, 410),
+        notes="Bot korumasi 403 -> unknown",
+    ),
+    SiteSpec(
+        "sourcehut",
+        "SourceHut",
+        Platform.SOURCEHUT,
+        "https://sr.ht/~{u}",
+        absent_statuses=(404, 410),
+    ),
+    SiteSpec(
+        "velog",
+        "Velog",
+        Platform.VELOG,
+        "https://velog.io/@{u}",
+        absent_statuses=(404, 410),
+    ),
+    SiteSpec(
+        "hackerone",
+        "HackerOne",
+        Platform.HACKERONE,
+        "https://hackerone.com/{u}",
+        absent_statuses=(404, 410),
+        notes="OSINT: guvenlik arastirmacisi kimligi",
+    ),
+    SiteSpec(
+        "bugcrowd",
+        "Bugcrowd",
+        Platform.BUGCROWD,
+        "https://bugcrowd.com/{u}",
+        absent_statuses=(404, 410),
+    ),
+    SiteSpec(
+        "carrd",
+        "Carrd",
+        Platform.CARDD,
+        "https://{u}.carrd.co",
+        absent_statuses=(404, 410),
+        notes="Alt alan adi",
+    ),
+    SiteSpec(
+        "stackblitz",
+        "StackBlitz",
+        Platform.STACKBLITZ,
+        "https://stackblitz.com/@{u}",
         absent_statuses=(404, 410),
     ),
 ]

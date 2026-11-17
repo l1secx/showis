@@ -14,7 +14,7 @@ export function SiteNav() {
   const pathname = usePathname();
 
   return (
-    <nav className="mx-auto flex h-16 w-full max-w-7xl items-center gap-8 px-5 lg:px-8">
+    <nav className="mx-auto flex h-16 w-full max-w-7xl items-center gap-3 px-4 sm:gap-8 sm:px-5 lg:px-8">
       <Link href="/" className="group flex items-center gap-2.5">
         <span className="flex h-8 w-8 items-center justify-center rounded-lg border border-blue-500/30 bg-blue-500/10 text-blue-400">
           <Crosshair size={17} strokeWidth={2.2} />
@@ -37,14 +37,17 @@ export function SiteNav() {
             <Link
               key={l.href}
               href={l.href}
-              className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm transition-colors ${
+              aria-label={l.label}
+              title={l.label}
+              className={`flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm transition-colors sm:px-3 ${
                 active
                   ? "bg-slate-800/80 text-slate-100"
                   : "text-slate-400 hover:bg-slate-900 hover:text-slate-200"
               }`}
             >
               <Icon size={15} className={active ? "text-blue-400" : ""} />
-              {l.label}
+              {/* 375px'te baslik tasmasin: mobilde yalniz ikon + aria-label */}
+              <span className="hidden sm:inline">{l.label}</span>
             </Link>
           );
         })}

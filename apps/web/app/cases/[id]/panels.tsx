@@ -13,6 +13,7 @@ import {
   ExternalLink,
   Eye,
   EyeOff,
+  FileCode2,
   FileText,
   Fingerprint,
   Gauge,
@@ -1581,13 +1582,26 @@ export function ReportTab({ caseId }: { caseId: string }) {
     void loadSummary();
   }, [loadSummary, summaryKey]);
 
-  const generate = async (format: "json" | "pdf") => {
+  const generate = async (format: "json" | "pdf" | "html") => {
     setBusy(format);
     setErr(null);
     try {
       const r = await api.createReport(caseId, format);
       setReports((prev) => [r, ...prev]);
-      window.open(r.download_url, "_blank");
+      if (format === "html") {
+        // HTML raporu sayfa içinde RENDER ETME (XSS yüzeyi açmamak için):
+        // yalnız indir. API `Content-Disposition: attachment` + sıkı CSP gönderir;
+        // ayrıca `download` özniteliğiyle yeni sekme hiç açılmaz.
+        const anchor = document.createElement("a");
+        anchor.href = r.download_url;
+        anchor.download = "";
+        anchor.rel = "noopener";
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+      } else {
+        window.open(r.download_url, "_blank");
+      }
     } catch (e: any) {
       setErr(e.message);
     } finally {
@@ -1613,6 +1627,22 @@ export function ReportTab({ caseId }: { caseId: string }) {
           </button>
           <button onClick={() => generate("json")} disabled={busy !== null} className="btn-ghost">
             {busy === "json" ? "Oluşturuluyor…" : "JSON Rapor"}
+          </button>
+          <button
+            type="button"
+            onClick={() => generate("html")}
+            disabled={busy !== null}
+            className="btn-ghost"
+            aria-label="HTML raporu indir (sayfada açılmaz)"
+            title="HTML raporu indirir; tarayıcıda açmaz"
+          >
+            {busy === "html" ? (
+              "Oluşturuluyor…"
+            ) : (
+              <>
+                <FileCode2 size={13} /> HTML indir
+              </>
+            )}
           </button>
           <button
             type="button"

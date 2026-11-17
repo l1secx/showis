@@ -13,6 +13,7 @@ import logging
 import re
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from showis_engine.http import HttpClient
@@ -29,11 +30,68 @@ UNKNOWN = "unknown"
 ERROR = "error"
 SKIPPED = "skipped"
 
+#: T-365: URL'e konabilecek kullanici adi bicimi. Arama sonuclarindan gelen
+#: degerler guvenilmezdir: `../`, `%2f`, `?x=1`, `#`, `a@host` gibi girdiler
+#: yol/sorgu degistirebiliyordu. Yalniz bu sinif URL'e konur.
+USERNAME_URL_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,63})$")
+#: Platform istisnasi gerekirse (orn. `~user` gibi sabit onek kullanan siteler onu
+#: kendi sablonunda tasir; kullanici adi yine bu siniftan gecer).
+_SPEC_USERNAME_PATTERN: dict[str, re.Pattern[str]] = {}
+
 _SAMPLE_LIMIT = 8192  # evidence icin saklanan govde ornegi (byte)
 #: absent/present regex'lerin tarayacagi maksimum govde boyutu.
 #: Buyuk SPA sayfalarinda "not found" isareti 8KB ornegini asabilir
 #: (orn. Pinterest ~1.2MB); siniflandirma daha genis pencerede yapilir.
 _SCAN_LIMIT = 1_048_576
+
+
+def is_safe_username(value: str) -> bool:
+    """Kullanıcı adı URL'e güvenle konabilir mi?"""
+    return bool(USERNAME_URL_PATTERN.match(str(value or "")))
+
+
+def normalize_username_for_url(
+    value: str, spec: SiteSpec | None = None
+) -> str | None:
+    """Kullanıcı adını URL için normalize eder; güvensizse ``None``.
+
+    * boşluklar kırpılır, baştaki ``@`` atılır,
+    * spec'te ``username_pattern`` varsa o uygulanır (yoksa varsayılan sınıf),
+    * geçerli değer ``quote(value, safe="")`` ile kaçırılır (``_.-`` korunur,
+      ``,`` ve ``~`` dâhil her şey yüzde-kodlanır).
+
+    Güvenlik: dönen değer her zaman tek bir yol/sorgu bileşeni olarak kalır;
+    ``?``, ``#``, ``/``, ``@``, ``..`` gibi girdiler reddedilir.
+    """
+    text = str(value or "").strip().lstrip("@")
+    if not text:
+        return None
+    pattern = None
+    if spec is not None:
+        if spec.username_pattern:
+            pattern = _SPEC_USERNAME_PATTERN.get(spec.username_pattern)
+            if pattern is None:
+                try:
+                    pattern = re.compile(spec.username_pattern)
+                except re.error:  # kirilgan desen: varsayilana don
+                    pattern = None
+                else:
+                    _SPEC_USERNAME_PATTERN[spec.username_pattern] = pattern
+        else:
+            pattern = USERNAME_URL_PATTERN
+    else:
+        pattern = USERNAME_URL_PATTERN
+    if pattern is not None and not pattern.match(text):
+        return None
+    return quote(text, safe="")
+
+
+def build_site_url(spec: SiteSpec, username: str) -> str | None:
+    """``{u}`` yerleştirmesini güvenli yapar; güvensiz ad için ``None``."""
+    safe = normalize_username_for_url(username, spec)
+    if safe is None:
+        return None
+    return spec.url_template.format(u=safe)
 
 
 @dataclass
@@ -121,7 +179,17 @@ class UsernameCheckEngine:
         return result
 
     async def _fetch_and_classify(self, username: str, spec: SiteSpec) -> CheckResult:
-        url = spec.url_template.format(u=username)
+        url = build_site_url(spec, username)
+        if url is None:
+            # Guvenilmez kullanici adi: hic istek atilmaz.
+            logger.debug("Site-check: gecersiz kullanici adi atlandi (%s)", spec.key)
+            return CheckResult(
+                site=spec,
+                username=username,
+                status=SKIPPED,
+                url=spec.url_template,
+                detail="güvenli olmayan kullanıcı adı",
+            )
         async with self._sem:
             try:
                 resp = await self.http.get(

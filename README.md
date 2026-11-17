@@ -15,9 +15,9 @@ raporlayan kişisel OSINT web uygulaması.
   Codeberg**, DockerHub, Dev.to, HackerNews, NPM, PyPI, Chess, Steam, Gravatar, Bluesky,
   HuggingFace, Kitsu, SoundCloud, WordPress, TryHackMe, HackTheBox. Toplam connector
   sayısı (site-check + web arama + render dahil) **29**.
-- **52 Platform Site-Check:** Kullanıcı adı varlık doğrulaması (Kaggle, HackerRank,
-  Root-Me, Duolingo, Replit, vb.) — 52 site, sonuç önbelleği (`SHOWIS_SITECHECK_CACHE_TTL`).
-- **Kimlik Grafiği:** `SAME_PERSON` (avatar/e-posta kanıtı) ve `CROSS_LINK` (bio'daki
+- **64 Platform Site-Check:** Kullanıcı adı varlık doğrulaması (Kaggle, HackerRank,
+  Root-Me, Duolingo, Replit, HackerOne, Bugcrowd, Kick, Ko-fi, SourceHut, Velog, vb.) — 64 site, sonuç önbelleği (`SHOWIS_SITECHECK_CACHE_TTL`).
+- **Kimlik Grafiği:** `SAME_PERSON` (ortak kullanıcı adı / avatar / e-posta kanıtı) ve `CROSS_LINK` (bio'daki
   platform bağlantıları) edge'leri; `GET /cases/{id}/graph` + Cytoscape.js paneli
   (güven eşiği / platform / edge tipi filtreleri, PNG·JSON·GEXF dışa aktarma).
 - **Authenticity (sahte/spam hesap) sinyalleri:** hesap yaşı (`created_at`), aktivite

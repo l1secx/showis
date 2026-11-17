@@ -7,7 +7,15 @@ from pathlib import Path
 from typing import Any, Literal
 
 import showis.db.session as db_session_module
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    HTTPException,
+    Query,
+    Request,
+    status,
+)
 from pydantic import BaseModel, Field, field_validator
 from showis.db.models import Case, Edge, Entity, Evidence, Finding, Report, Scan
 from showis.db.models import Seed as DbSeed
@@ -21,7 +29,7 @@ from showis.services.scanner import ScannerService
 from showis_contracts import FindingStatus, Platform, Target
 from showis_engine.policy import guard_target
 from showis_engine.scan_modes import budget_for_mode, estimate_scan, norm_mode
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -212,22 +220,229 @@ async def create_case(
     }
 
 
-@router.get("")
-async def list_cases(db: AsyncSession = Depends(get_db)):
-    res = await db.execute(select(Case).order_by(Case.created_at.desc()))
-    cases = res.scalars().all()
-    return [
-        {
-            "id": c.id,
-            "name": c.name,
-            "purpose": c.purpose,
-            "legal_basis": c.legal_basis,
-            "status": c.status,
-            "retention_days": c.retention_days,
-            "created_at": c.created_at.isoformat(),
-        }
-        for c in cases
-    ]
+#: T-358: vaka listesi filtre/sıralama sözleşmesi
+CASE_STATUSES: frozenset[str] = frozenset({"active", "review_pending", "deleted"})
+CASE_MODES: frozenset[str] = frozenset({"O1", "O2", "O3"})
+CASE_SORTS: frozenset[str] = frozenset(
+    {"created_desc", "created_asc", "name_asc", "updated_desc"}
+)
+DEFAULT_CASE_LIMIT = 50
+MAX_CASE_LIMIT = 200
+#: T-366: arama metni ve derin offset sınırları (kötüye kullanım/derin sayfalama)
+MAX_CASE_Q_LENGTH = 128
+MAX_CASE_OFFSET = 10_000
+#: `legacy=1` tam dökümü: dizi sözleşmesi bozulmadan en fazla bu kadar vaka
+LEGACY_MAX_ROWS = 500
+
+
+def _escape_like(value: str) -> str:
+    r"""`ILIKE` deseni için `%`, `_` ve `\` kaçışlanır (kullanıcı joker üretemez)."""
+    escaped = str(value).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def _case_filters(q: str | None, case_status: str | None) -> list[Any]:
+    """Arama + durum filtrelerini SQL koşullarına çevirir (geçersiz değer → 422)."""
+    conditions: list[Any] = []
+
+    text = (q or "").strip()
+    if text:
+        pattern = _escape_like(text)
+        # Hedef ad/soyad için alt sorgu: join ile satır çoğaltmadan arama
+        target_hit = select(DbTarget.case_id).where(
+            or_(
+                DbTarget.first_name.ilike(pattern, escape="\\"),
+                DbTarget.last_name.ilike(pattern, escape="\\"),
+            )
+        )
+        conditions.append(
+            or_(
+                Case.name.ilike(pattern, escape="\\"),
+                Case.purpose.ilike(pattern, escape="\\"),
+                Case.id.in_(target_hit),
+            )
+        )
+
+    if case_status is not None and case_status.strip():
+        value = case_status.strip().lower()
+        if value not in CASE_STATUSES:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    "Geçersiz status: "
+                    f"{value} (izinli: {', '.join(sorted(CASE_STATUSES))})"
+                ),
+            )
+        conditions.append(Case.status == value)
+
+    return conditions
+
+
+@router.get("", response_model=None)
+async def list_cases(
+    q: str | None = Query(None, max_length=MAX_CASE_Q_LENGTH),
+    status_filter: str | None = Query(None, alias="status"),
+    mode: str | None = None,
+    limit: int = Query(DEFAULT_CASE_LIMIT, ge=1, le=MAX_CASE_LIMIT),
+    offset: int = Query(0, ge=0, le=MAX_CASE_OFFSET),
+    sort: Literal["created_desc", "created_asc", "name_asc", "updated_desc"] = "created_desc",
+    legacy: bool = False,
+    db: AsyncSession = Depends(get_db),
+):
+    """Vaka listesi — arama, filtre, sıralama ve sayfalama (T-358).
+
+    Parametreler:
+    * `q` — vaka adı, amaç ve hedef ad/soyad içinde büyük/küçük harf duyarsız arama
+      (`%`/`_` kaçışlanır).
+    * `status` — vaka durumu (`active|review_pending|deleted`); başka değer → 422.
+    * `mode` — **son taramanın** modu (`O1|O2|O3`); başka değer → 422.
+    * `limit` (varsayılan 50, 1..200), `offset` (>=0), `sort`
+      (`created_desc|created_asc|name_asc|updated_desc`).
+    * `legacy=1` — eski düz liste yanıtı (web uyumu); sayfalama uygulanmaz, ancak
+      döküm **en fazla `LEGACY_MAX_ROWS` (500)** vaka ile sınırlıdır (aşılırsa log uyarısı).
+
+    N+1 yok: son tarama bilgisi korelasyonlu alt sorgularla tek sorguda gelir,
+    hedef/seed ilişkileri `selectinload` ile toplu yüklenir.
+    """
+    if mode is not None and mode.strip():
+        normalized_mode = norm_mode(mode)
+        if mode.strip().upper() not in CASE_MODES:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    f"Geçersiz mode: {mode} (izinli: {', '.join(sorted(CASE_MODES))})"
+                ),
+            )
+    else:
+        normalized_mode = None
+
+    conditions = _case_filters(q, status_filter)
+
+    # Son tarama: mod / durum / zaman (korelasyonlu alt sorgular → N+1 yok)
+    def _latest(column: Any) -> Any:
+        return (
+            select(column)
+            .where(Scan.case_id == Case.id)
+            .order_by(Scan.created_at.desc(), Scan.id.desc())
+            .limit(1)
+            .correlate(Case)
+            .scalar_subquery()
+        )
+
+    last_scan_mode = _latest(Scan.mode)
+    last_scan_at = _latest(Scan.created_at)
+    updated_at = func.coalesce(last_scan_at, Case.created_at)
+
+    if normalized_mode is not None:
+        conditions.append(last_scan_mode == normalized_mode)
+
+    base = select(Case).where(*conditions)
+
+    if sort == "name_asc":
+        ordered = base.order_by(Case.name.asc(), Case.id.asc())
+    elif sort == "created_asc":
+        ordered = base.order_by(Case.created_at.asc(), Case.id.asc())
+    elif sort == "updated_desc":
+        ordered = base.order_by(updated_at.desc(), Case.id.asc())
+    else:  # created_desc (varsayılan)
+        ordered = base.order_by(Case.created_at.desc(), Case.id.asc())
+
+    if legacy:
+        # Geriye uyum: eski düz liste — web hâlâ bunu bekliyor. Dizi sözleşmesi korunur,
+        # ancak tam döküm sınırsız büyümesin (T-366): ilk `LEGACY_MAX_ROWS` vaka.
+        legacy_total = (
+            await db.execute(select(func.count(Case.id)).where(*conditions))
+        ).scalar_one()
+        if legacy_total > LEGACY_MAX_ROWS:
+            logger.warning(
+                "legacy dump truncated: total=%d limit=%d", legacy_total, LEGACY_MAX_ROWS
+            )
+        rows = (
+            await db.execute(ordered.limit(LEGACY_MAX_ROWS))
+        ).scalars().all()
+        return [
+            {
+                "id": c.id,
+                "name": c.name,
+                "purpose": c.purpose,
+                "legal_basis": c.legal_basis,
+                "status": c.status,
+                "retention_days": c.retention_days,
+                "created_at": c.created_at.isoformat(),
+            }
+            for c in rows
+        ]
+
+    total = (
+        await db.execute(select(func.count(Case.id)).where(*conditions))
+    ).scalar_one()
+
+    page = (
+        await db.execute(
+            ordered.options(selectinload(Case.targets), selectinload(Case.seeds))
+            .limit(limit)
+            .offset(offset)
+        )
+    ).scalars().all()
+
+    # Son tarama bilgisi sayfa için tek sorguda (id listesiyle)
+    scan_info: dict[str, dict[str, Any]] = {}
+    if page:
+        page_ids = [c.id for c in page]
+        scan_rows = (
+            await db.execute(
+                select(Scan.case_id, Scan.mode, Scan.status, Scan.created_at).where(
+                    Scan.case_id.in_(page_ids)
+                )
+            )
+        ).all()
+        for case_id, scan_mode, scan_status, scan_created in scan_rows:
+            current = scan_info.get(case_id)
+            if current is None or (
+                scan_created is not None
+                and (current.get("_at") is None or scan_created > current["_at"])
+            ):
+                scan_info[case_id] = {
+                    "mode": scan_mode,
+                    "status": scan_status,
+                    "_at": scan_created,
+                }
+
+    items = []
+    for c in page:
+        target = c.targets[0] if c.targets else None
+        scan = scan_info.get(c.id) or {}
+        items.append(
+            {
+                "id": c.id,
+                "name": c.name,
+                "purpose": c.purpose,
+                "legal_basis": c.legal_basis,
+                "status": c.status,
+                "retention_days": c.retention_days,
+                "created_at": c.created_at.isoformat() if c.created_at else None,
+                "target": (
+                    {
+                        "first_name": target.first_name,
+                        "last_name": target.last_name,
+                    }
+                    if target
+                    else None
+                ),
+                "seeds_count": len(c.seeds),
+                "last_scan": (
+                    {
+                        "mode": scan.get("mode"),
+                        "status": scan.get("status"),
+                        "created_at": scan["_at"].isoformat() if scan.get("_at") else None,
+                    }
+                    if scan
+                    else None
+                ),
+            }
+        )
+
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
 @router.get("/{case_id}")

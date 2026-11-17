@@ -74,7 +74,10 @@ _COST = {
     "entity": 1.0,  # entity/finding yazimi + skorlama
     "rendered_task": 8.0,  # playwright render
 }
-_SITE_COUNT = 48
+#: Site-check kapsamı: gerçek `SITES` listesinden türetilir (T-357).
+#: Engine, connector paketine bağımlı olmadığı için tembel (çağrı anında) import
+#: yapılır; connector yoksa tahmin için son bilinen sayı kullanılır.
+_SITE_COUNT_FALLBACK = 52
 _API_CONNECTORS = 18
 _IDENTIFIER_TASKS = 10
 _RENDER_EVENTS = 6
@@ -262,6 +265,16 @@ def scan_concurrency(mode: str | None = None) -> int:
     return resolve_concurrency(mode)
 
 
+def site_count() -> int:
+    """Aktif site-check kapsamı (``SITES`` uzunluğu; yoksa son bilinen sayı)."""
+    try:
+        from showis_connectors.sitecheck.sites import SITES  # tembel: dongusel import yok
+
+        return len(SITES)
+    except Exception:  # pragma: no cover - connector paketi yoksa
+        return _SITE_COUNT_FALLBACK
+
+
 def norm_mode(mode: str | None) -> str:
     """Eski/bilinmeyen mod degerlerini O1/O2/O3'e indirger."""
     value = (mode or "O2").strip().upper()
@@ -351,7 +364,7 @@ def estimate_scan(
     if site_usernames:
         seconds += add_step(
             "sitecheck",
-            f"Site-check ({site_usernames} kullanıcı adı × {_SITE_COUNT} site)",
+            f"Site-check ({site_usernames} kullanıcı adı × {site_count()} site)",
             site_usernames,
             "site_username",
         )
@@ -374,7 +387,7 @@ def estimate_scan(
         "mode": norm_mode(mode),
         "seconds": int(seconds + 0.999),
         "tasks": min(tasks, profile["max_tasks"]),
-        "requests": tasks + site_usernames * _SITE_COUNT,
+        "requests": tasks + site_usernames * site_count(),
         "steps": steps,
         "budget": budget_for_mode(mode),
         # Ek alanlar (sozlesme bozulmaz, UI kullanmak zorunda degil).

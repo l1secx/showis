@@ -36,8 +36,14 @@ async def test_case_crud_and_export(client):
     assert body["target"]["first_name"] == "Test"
     assert body["seeds"][0]["platform"] == "github"
 
-    # Liste
+    # Liste — T-358: varsayılan zarf; eski düz liste `legacy=1` ile
     res = await client.get("/api/v1/cases")
+    assert res.status_code == 200
+    envelope = res.json()
+    assert set(envelope) == {"items", "total", "limit", "offset"}
+    assert any(c["id"] == case_id for c in envelope["items"])
+
+    res = await client.get("/api/v1/cases?legacy=1")
     assert any(c["id"] == case_id for c in res.json())
 
     # Export

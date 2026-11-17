@@ -12,6 +12,34 @@ export interface CaseSummary {
   created_at: string;
 }
 
+/** T-358 zarfındaki liste satırı (hedef + son tarama özeti ile). */
+export interface CaseListItem extends CaseSummary {
+  target?: { first_name?: string | null; last_name?: string | null } | null;
+  seeds_count?: number;
+  last_scan?: {
+    mode?: string | null;
+    status?: string | null;
+    created_at?: string | null;
+  } | null;
+}
+
+export type CaseSort = "created_desc" | "created_asc" | "name_asc" | "updated_desc";
+
+export interface CaseListParams {
+  q?: string;
+  status?: string;
+  limit?: number;
+  offset?: number;
+  sort?: CaseSort;
+}
+
+export interface CaseListPage {
+  items: CaseListItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export interface CaseDetail extends CaseSummary {
   notes?: string | null;
   target?: {
@@ -112,6 +140,72 @@ export interface ReportInfo {
   download_url: string;
 }
 
+const collator = new Intl.Collator("tr", { sensitivity: "base" });
+
+function legacySort(rows: CaseListItem[], sort?: CaseSort): CaseListItem[] {
+  const sorted = [...rows];
+  switch (sort) {
+    case "created_asc":
+      return sorted.sort((a, b) => a.created_at.localeCompare(b.created_at));
+    case "name_asc":
+      return sorted.sort((a, b) => collator.compare(a.name, b.name));
+    case "updated_desc":
+      return sorted.sort(
+        (a, b) =>
+          (b.last_scan?.created_at ?? b.created_at).localeCompare(
+            a.last_scan?.created_at ?? a.created_at
+          )
+      );
+    default:
+      return sorted.sort((a, b) => b.created_at.localeCompare(a.created_at));
+  }
+}
+
+/**
+ * Vaka listesi — T-358 zarfı (`{items,total,limit,offset}`) veya eski düz dizi.
+ *
+ * Eski imaj düz liste döndürür ve filtre/sıralama parametrelerini yok sayar; deploy
+ * sırası fark etmesin diye dizi geldiğinde arama/filtre/sıralama/sayfalama **istemcide**
+ * uygulanır. Zarf geldiğinde sunucu tarafı sonuç aynen kullanılır.
+ */
+async function listCases(params: CaseListParams = {}): Promise<CaseListPage> {
+  const search = new URLSearchParams();
+  const text = (params.q ?? "").trim();
+  if (text) search.set("q", text);
+  if (params.status) search.set("status", params.status);
+  if (params.sort) search.set("sort", params.sort);
+  if (params.limit != null) search.set("limit", String(params.limit));
+  if (params.offset != null) search.set("offset", String(params.offset));
+  const qs = search.toString();
+
+  const data = await req<CaseListPage | CaseListItem[]>(`/cases${qs ? `?${qs}` : ""}`);
+
+  if (Array.isArray(data)) {
+    // --- Geriye uyum: eski düz liste (T-358 öncesi imaj) ---
+    let rows = data;
+    if (text) {
+      const needle = text.toLocaleLowerCase("tr");
+      rows = rows.filter((row) =>
+        [row.name, row.purpose, row.target?.first_name, row.target?.last_name]
+          .filter(Boolean)
+          .some((value) => String(value).toLocaleLowerCase("tr").includes(needle))
+      );
+    }
+    if (params.status) rows = rows.filter((row) => row.status === params.status);
+    rows = legacySort(rows, params.sort);
+    const offset = params.offset ?? 0;
+    const limit = params.limit ?? 50;
+    return { items: rows.slice(offset, offset + limit), total: rows.length, limit, offset };
+  }
+
+  return {
+    items: Array.isArray(data?.items) ? data.items : [],
+    total: Number(data?.total ?? data?.items?.length ?? 0),
+    limit: Number(data?.limit ?? params.limit ?? 50),
+    offset: Number(data?.offset ?? params.offset ?? 0),
+  };
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api/v1${path}`, {
     headers: { "Content-Type": "application/json" },
@@ -130,7 +224,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  listCases: () => req<CaseSummary[]>("/cases"),
+  listCases: (params: CaseListParams = {}) => listCases(params),
   getCase: (id: string) => req<CaseDetail>(`/cases/${id}`),
   createCase: (body: any) => req<{ id: string }>("/cases", { method: "POST", body: JSON.stringify(body) }),
   deleteCase: (id: string) => req<null>(`/cases/${id}`, { method: "DELETE" }),
@@ -147,6 +241,6 @@ export const api = {
   getGraph: (caseId: string) => req<GraphData>(`/cases/${caseId}/graph`),
   getAudit: (caseId: string) => req<AuditEntry[]>(`/cases/${caseId}/audit`),
   exportCase: (caseId: string) => req<any>(`/cases/${caseId}/export`),
-  createReport: (caseId: string, format: "json" | "pdf") =>
+  createReport: (caseId: string, format: "json" | "pdf" | "html") =>
     req<ReportInfo>(`/cases/${caseId}/report`, { method: "POST", body: JSON.stringify({ format }) }),
 };

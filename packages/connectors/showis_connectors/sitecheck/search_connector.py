@@ -18,6 +18,7 @@ from showis_contracts import ScanContext, TaskSpec
 from showis_connectors.websearch import SearchProvider, extract_platform_from_url
 
 from .connector import SiteCheckConnector
+from .engine import normalize_username_for_url
 
 logger = logging.getLogger("showis.sitecheck.search")
 
@@ -64,6 +65,11 @@ class SiteCheckSearchConnector(SiteCheckConnector):
 
         for hit in hits:
             _, ident = extract_platform_from_url(hit.url)
+            # T-365: arama sonucu kimligi guvenilmez — URL'e konamayacak adlar
+            # gorev uretmeden elenir (tek yerden: normalize_username_for_url).
+            if ident and normalize_username_for_url(ident) is None:
+                logger.debug("Site-check: gecersiz kimlik atlandi (%r)", ident)
+                continue
             if ident and ident not in seen:
                 seen.add(ident)
                 if not self.plan_registry.claim(ctx.scan_id, ident, self.name):

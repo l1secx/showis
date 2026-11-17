@@ -15,9 +15,11 @@
 #   bash scripts/e2e_acceptance.sh --strict        # BEKLENIYOR'lar da FAIL sayilsin
 #
 # Adimlar (T-330 ile genisletildi):
-#   1 health · 2 kimlik katmani · 3 vaka · 4 tahmin · 5 tarama · 6 idempotans
+#   1 health · 2 kimlik katmani · 3 vaka · 4 tahmin (+4b/4c O2 tutarlilik &
+#   sitecheck kapsami) · 5 tarama · 6 idempotans
 #   7 bulgular (+7b authenticity) · 8 bulgu dogrulama · 9 rapor (+9b disk/izin)
-#   10 export · 11 grafik (+11b kenar bilgisi) · 12 JSON rapor bolumleri
+#   10 export (+10b-10f vaka listesi: zarf, arama, siralama, limit, legacy)
+#   11 grafik (+11b kenar bilgisi) · 12 JSON rapor bolumleri
 #   13 HTML rapor + CSP · 14 min_authenticity filtresi · 15 status filtresi
 #   16 /healthz · 17 /metrics · 18 guvenlik basliklari · 19 edge backfill (dry-run)
 #   20 vaka silme + kalinti kontrolu
@@ -371,7 +373,8 @@ else
 fi
 
 if [[ -z "$CASE_ID" ]]; then
-  for n in 4 5 6a 6b 7 7b 7c 8 9 9b 10 11 11b 12 13 14 14b 14c 15 15b 19; do
+  for n in 4 4b 4c 5 6a 6b 7 7b 7c 8 9 9b 10 10b 10c 10d 10e 10f 10g 10h 10i \
+           11 11b 12 13 14 14b 14c 15 15b 19; do
     step_skip "$n" "(vaka yok)" "3. adim basarisiz"
   done
   for n in 16 17 17b 18 18b; do step_skip "$n" "(vaka yok)" "vaka olusturulamadi — genel kontroller kosulmadi"; done
@@ -390,6 +393,40 @@ if http_request auth GET "/api/v1/cases/${CASE_ID}/scan/estimate?mode=O1"; then
   fi
 else
   step_fail 4 "O1 tahmini" "baglanti hatasi"
+fi
+
+# ------------------------------- 4b/4c) O2 tahmin tutarliligi + sitecheck
+# T-361/6: kesin site sayisi beklenmez; iki sey dogrulanir:
+#   (a) tutarlilik: `requests >= tasks` (site-check istekleri tahmine girer),
+#   (b) T-357 kapsami: sitecheck adimindaki site sayisi 48'in uzerinde mi.
+if http_request auth GET "/api/v1/cases/${CASE_ID}/scan/estimate?mode=O2"; then
+  if [[ "$HTTP_CODE" != "200" ]]; then
+    step_fail 4b "O2 tahmin tutarliligi" "HTTP $HTTP_CODE"
+    step_skip 4c "sitecheck kapsami (T-357)" "tahmin okunamadi"
+  else
+    o2_tasks="$(json_field '.tasks')"
+    o2_requests="$(json_field '.requests')"
+    if [[ "$o2_tasks" =~ ^[0-9]+$ && "$o2_requests" =~ ^[0-9]+$ ]] \
+       && (( o2_tasks > 0 )) && (( o2_requests >= o2_tasks )); then
+      step_pass 4b "O2 tahmin tutarliligi (requests>=tasks)" \
+        "requests=${o2_requests} >= tasks=${o2_tasks}"
+    else
+      step_fail 4b "O2 tahmin tutarliligi (requests>=tasks)" \
+        "requests=${o2_requests:-?} tasks=${o2_tasks:-?}"
+    fi
+    site_count="$(printf '%s' "$HTTP_BODY" | jq -r '
+      [ .steps[]? | select(.key == "sitecheck")
+        | (.label | try capture("× (?<n>[0-9]+) site").n catch empty) ] | .[0] // empty' 2>/dev/null || true)"
+    if [[ "$site_count" =~ ^[0-9]+$ ]] && (( site_count > 48 )); then
+      capability 4c "sitecheck kapsami (T-357)" 1 "${site_count} site (>48)" ""
+    else
+      capability 4c "sitecheck kapsami (T-357)" 0 "" \
+        "site sayisi ${site_count:-bulunamadi} (T-357 oncesi 48)"
+    fi
+  fi
+else
+  step_fail 4b "O2 tahmin tutarliligi (requests>=tasks)" "baglanti hatasi"
+  step_skip 4c "sitecheck kapsami (T-357)" "tahmin okunamadi"
 fi
 
 # --------------------------------------------------- 5) tarama + 6) idempotans
@@ -604,6 +641,128 @@ if http_request auth GET "/api/v1/cases/${CASE_ID}/export"; then
   fi
 else
   step_fail 10 "export (JSON)" "baglanti hatasi"
+fi
+
+# --------------------------------- 10b-10f) vaka listesi (T-358 sozlesmesi)
+# Zarf: {items,total,limit,offset}; ?legacy=1 eski duz dizi. Tum alt adimlar
+# "kabiliyet" olarak siniflandirilir: deploy oncesi BEKLENIYOR, sonrasi FAIL/PASS.
+cases_envelope=""
+if http_request auth GET "/api/v1/cases?limit=5"; then
+  cases_envelope="$(printf '%s' "$HTTP_BODY" | jq 'type == "object" and has("items") and has("total") and has("limit")' 2>/dev/null || echo false)"
+  if [[ "$HTTP_CODE" == "200" && "$cases_envelope" == "true" ]]; then
+    n_items="$(printf '%s' "$HTTP_BODY" | jq '.items | length')"
+    c_total="$(printf '%s' "$HTTP_BODY" | jq '.total')"
+    c_limit="$(printf '%s' "$HTTP_BODY" | jq '.limit')"
+    if [[ "$n_items" =~ ^[0-9]+$ ]] && (( n_items <= 5 )) \
+       && [[ "$c_total" =~ ^[0-9]+$ ]] && (( c_total >= n_items )); then
+      step_pass 10b "cases?limit=5 zarfi" "items=${n_items}, total=${c_total}, limit=${c_limit}"
+    else
+      step_fail 10b "cases?limit=5 zarfi" "items=${n_items} total=${c_total} limit=${c_limit}"
+    fi
+
+    # --- arama: kendi vakasini buluyor
+    if http_request auth GET "/api/v1/cases?q=E2E%20kabul&limit=200"; then
+      found_self="$(printf '%s' "$HTTP_BODY" | jq -r --arg id "$CASE_ID" '[.items[]?.id] | index($id) != null' 2>/dev/null || echo false)"
+      if [[ "$HTTP_CODE" == "200" && "$found_self" == "true" ]]; then
+        step_pass 10c "cases?q=… kendi vakasini buluyor" "q='E2E kabul' → vaka listede"
+      else
+        capability 10c "cases?q=… kendi vakasini buluyor" 0 "" "HTTP $HTTP_CODE, eşleşme=${found_self}"
+      fi
+    else
+      step_fail 10c "cases?q=… kendi vakasini buluyor" "baglanti hatasi"
+    fi
+    # --- ozel karakter: cokme yok (200 veya 422; 5xx yasak)
+    if http_request auth GET "/api/v1/cases?q=%25&limit=5"; then
+      if [[ "$HTTP_CODE" == "200" || "$HTTP_CODE" == "422" ]]; then
+        step_pass 10d "cases?q=%25 ozel karakter" "HTTP $HTTP_CODE (5xx yok)"
+      else
+        step_fail 10d "cases?q=%25 ozel karakter" "HTTP $HTTP_CODE: $(printf '%s' "$HTTP_BODY" | head -c 100)"
+      fi
+    else
+      step_fail 10d "cases?q=%25 ozel karakter" "baglanti hatasi"
+    fi
+
+    # --- siralama
+    if http_request auth GET "/api/v1/cases?sort=name_asc&limit=50"; then
+      if [[ "$HTTP_CODE" == "200" ]]; then
+        sorted_ok="$(printf '%s' "$HTTP_BODY" | jq '[.items[]?.name] as $n | ($n == ($n | sort))' 2>/dev/null || echo false)"
+        first_names="$(printf '%s' "$HTTP_BODY" | jq -r '[.items[]?.name][0:3] | join(" | ")' 2>/dev/null || echo "?")"
+        if [[ "$sorted_ok" == "true" ]]; then
+          step_pass 10e "cases?sort=name_asc artan" "ilk: ${first_names}"
+        else
+          step_fail 10e "cases?sort=name_asc artan" "siralama artan degil: ${first_names}"
+        fi
+      else
+        capability 10e "cases?sort=name_asc artan" 0 "" "HTTP $HTTP_CODE"
+      fi
+    else
+      step_fail 10e "cases?sort=name_asc artan" "baglanti hatasi"
+    fi
+    if http_request auth GET "/api/v1/cases?sort=bozuk"; then
+      if [[ "$HTTP_CODE" == "422" ]]; then
+        step_pass 10f "cases?sort=bozuk -> 422" "422"
+      else
+        capability 10f "cases?sort=bozuk -> 422" 0 "" "HTTP $HTTP_CODE (beklenen 422)"
+      fi
+    else
+      step_fail 10f "cases?sort=bozuk -> 422" "baglanti hatasi"
+    fi
+
+    # --- limit sinirlari: 0 -> 422 ; 999 -> kirpilmis (<=200) veya 422
+    if http_request auth GET "/api/v1/cases?limit=0"; then
+      if [[ "$HTTP_CODE" == "422" ]]; then
+        step_pass 10g "cases?limit=0 -> 422" "422"
+      else
+        capability 10g "cases?limit=0 -> 422" 0 "" "HTTP $HTTP_CODE (beklenen 422)"
+      fi
+    else
+      step_fail 10g "cases?limit=0 -> 422" "baglanti hatasi"
+    fi
+    # Sozlesme (Atlas T-361 karari): limit <= 200; asimi 422 ile ACIKCA reddedilir.
+    if http_request auth GET "/api/v1/cases?limit=999"; then
+      if [[ "$HTTP_CODE" == "422" ]]; then
+        step_pass 10h "cases?limit=999 -> 422" "422 (sozlesme: limit <= 200, asimi 422)"
+      elif [[ "$HTTP_CODE" == "200" ]]; then
+        big_items="$(printf '%s' "$HTTP_BODY" | jq '.items | length')"
+        big_limit="$(printf '%s' "$HTTP_BODY" | jq '.limit')"
+        if [[ "$big_items" =~ ^[0-9]+$ ]] && (( big_items <= 200 )); then
+          step_pass 10h "cases?limit=999 kirpildi (<=200)" \
+            "donen=${big_items}, limit=${big_limit} (sozlesme: limit <= 200, asimi 422)"
+        else
+          step_fail 10h "cases?limit=999 kirpildi (<=200)" "donen=${big_items} (>200)"
+        fi
+      else
+        step_fail 10h "cases?limit=999 -> 422" \
+          "HTTP $HTTP_CODE (beklenen 422 veya kirpilmis 200)"
+      fi
+    else
+      step_fail 10h "cases?limit=999 -> 422" "baglanti hatasi"
+    fi
+
+    # --- legacy: duz dizi
+    if http_request auth GET "/api/v1/cases?legacy=1"; then
+      legacy_type="$(printf '%s' "$HTTP_BODY" | jq -r 'type' 2>/dev/null || echo "?")"
+      if [[ "$HTTP_CODE" == "200" && "$legacy_type" == "array" ]]; then
+        step_pass 10i "cases?legacy=1 duz dizi" "dizi, $(printf '%s' "$HTTP_BODY" | jq 'length') kayit"
+      else
+        capability 10i "cases?legacy=1 duz dizi" 0 "" "HTTP $HTTP_CODE, govde tipi=${legacy_type}"
+      fi
+    else
+      step_fail 10i "cases?legacy=1 duz dizi" "baglanti hatasi"
+    fi
+  else
+    # Zarf yok: T-358 oncesi imaj → yeni adimlarin tamami BEKLENIYOR/FAIL
+    reason="HTTP $HTTP_CODE, zarf=${cases_envelope}"
+    capability 10b "cases?limit=5 zarfi" 0 "" "$reason"
+    for n in 10c 10d 10e 10f 10g 10h 10i; do
+      capability "$n" "vaka listesi (T-358)" 0 "" "$reason"
+    done
+  fi
+else
+  step_fail 10b "cases?limit=5 zarfi" "baglanti hatasi"
+  for n in 10c 10d 10e 10f 10g 10h 10i; do
+    step_skip "$n" "vaka listesi (T-358)" "baglanti hatasi"
+  done
 fi
 
 # ------------------------------------------------------- 11) kimlik grafigi

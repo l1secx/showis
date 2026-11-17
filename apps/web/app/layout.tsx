@@ -16,14 +16,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="tr">
-      <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link
-          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
-          rel="stylesheet"
-        />
-      </head>
+      {/* Google Fonts baglantisi kaldirildi: CSP (`style-src 'self'`) her sayfada
+          blokluyordu ve konsola hata yaziyordu. Fontlar `font-sans` yiginiyla sistemden
+          geliyor; ileride self-host veya CSP allowlist ile geri eklenebilir (T-352). */}
       <body className="min-h-screen bg-slate-950 font-sans text-slate-200 antialiased">
         <header className="sticky top-0 z-20 border-b border-slate-800 bg-slate-950/85 backdrop-blur">
           <SiteNav />

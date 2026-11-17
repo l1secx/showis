@@ -67,12 +67,20 @@ read -rs SHOWIS_BASIC_AUTH_PASSWORD && export SHOWIS_BASIC_AUTH_PASSWORD
 bash scripts/e2e_acceptance.sh               # ~2 dk: vaka → O1 tarama → bulgular → rapor → grafik → export → silme
 ```
 
-20+ kontrolü sırayla koşar: health, 401/200 kimlik katmanı, vaka, tahmin, tarama, 409 idempotans,
-bulgular (+`authenticity`/`authenticity_reasons`, `min_authenticity` ve `status` filtreleri),
-bulgu `confirmed`, JSON rapor bölümleri (5), HTML rapor + CSP, rapor dosyası/izin, export,
-kimlik grafiği (`edges`), `/healthz`, `/metrics`, güvenlik başlıkları, `backfill_edges --dry-run`,
-silme + rapor kalıntısı. Her adım `PASS/FAIL/BEKLENIYOR/UYARI/ATLANDI` basar; sonunda
-`SONUÇ: GEÇTİ/KALDI` + `exit 0/1` (`UYARI` çıkış kodunu etkilemez).
+30+ kontrolü sırayla koşar: health, 401/200 kimlik katmanı, vaka, tahmin
+(+`O2 requests>=tasks` tutarlılığı ve sitecheck kapsamı), tarama, 409 idempotans, bulgular
+(+`authenticity`/`authenticity_reasons`, `min_authenticity` ve `status` filtreleri), bulgu
+`confirmed`, JSON rapor bölümleri (5), HTML rapor + CSP, rapor dosyası/izin, export, vaka
+listesi sözleşmesi (zarf/`q`/`sort`/`limit`/`legacy`), kimlik grafiği (`edges`), `/healthz`,
+metrik ucu, güvenlik başlıkları, `backfill_edges --dry-run`, silme + rapor kalıntısı.
+
+Vaka listesi adımları (`10b`–`10i`): `?limit=5` zarfı (`items/total/limit`), `?q=` arama
+(kendi vakasını bulur, `%` gibi özel karakterde 5xx yok), `?sort=name_asc` artan sıralama
++ geçersizde 422, `?limit=0` → 422, `?limit=999` → **422** (sözleşme: `limit ≤ 200`,
+aşımı açık hata; 200 + ≤200 kayıt da kabul), `?legacy=1` → düz dizi.
+
+Her adım `PASS/FAIL/BEKLENIYOR/UYARI/ATLANDI` basar; sonunda `SONUÇ: GEÇTİ/KALDI`
++ `exit 0/1` (`UYARI` çıkış kodunu etkilemez).
 
 Deploy öncesi / sonrası:
 
@@ -174,6 +182,17 @@ işaretli olmayanlar = üretime çıkmadan kapatılmalı.
 | 9 | **Zorunlu env'ler dolu** | `POSTGRES_PASSWORD`, `MINIO_ACCESS_KEY/SECRET`, `MASTER_KEY`, `SHOWIS_API_TOKEN` boşsa compose fail-fast eder | `cd infra && docker compose config -q` (hata yoksa tamam) |
 | 10 | **Bağımlılık/sır kapıları** | Pinli lock + CVE/sır taraması CI'da | `bash infra/scripts/check-secrets.sh` · `pip-audit -r infra/requirements.lock` |
 | 11 | **Uzak yedek kopya** | Yedekler aynı diskte (`data/backups`); disk arızası ikisini de götürür | `rclone sync data/backups remote:showis-backups` (veya harici disk) |
+
+## Vaka listesi API'si (T-358)
+
+`GET /api/v1/cases` artık **zarf** döner: `{"items": [...], "total": N, "limit": L, "offset": O}`.
+Parametreler: `q` (vaka adı/amaç/hedef ad-soyad, `%`/`_` kaçışlı), `status`
+(`active|review_pending|deleted`), `mode` (son taramanın modu: `O1|O2|O3`), `limit`
+(1..200, varsayılan 50), `offset`, `sort` (`created_desc|created_asc|name_asc|updated_desc`).
+Eski düz liste gerekiyorsa `?legacy=1`. Örnek: `curl -s -u showis:*** -H "X-API-Token: $TOKEN"
+'http://127.0.0.1:8083/api/v1/cases?q=ayşe&status=active&limit=5'`.
+Bilinen sınır: Türkçe büyük `İ` ile küçük harf arama eşleşmez (SQL katlaması) — normalize
+kolon/indeks migration'ı önerildi.
 
 ## Sorun giderme
 
