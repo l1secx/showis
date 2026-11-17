@@ -26,8 +26,10 @@ KURALLAR:
 6. Öncelik dağılımı: Derin connector'lar (github, gitlab, reddit vb.) priority=1,
    site-specific aramalar priority=2, genel web aramaları priority=3,
    kullanıcı adı varyantları priority=4.
-7. Her platform için en az bir site: sorgusu üret; isim için de "site:platform.com \"Ad Soyad\""
-   ve username için de "site:platform.com \"kullanici_adi\"" sorgusu üret.
+7. **İsim modunda** (kind "name") her platform için en az bir site: sorgusu üret; isim
+   için de "site:platform.com \"Ad Soyad\"" ve username için de
+   "site:platform.com \"kullanici_adi\"" sorgusu üret. Handle modunda bu kural geçersizdir
+   (bkz. kural 8).
 8. Hedef türü (kind) "handle" ise **yalnızca** nick ve platform sorguları üret
    (ör. "site:github.com \"nick\"" ve platform-bağımsız "\"nick\""). Ad/soyad
    uydurma; verilen ad/soyad alanları boşsa tam isim tahmin etme. Nick boşsa nick

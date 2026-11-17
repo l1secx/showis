@@ -2,7 +2,7 @@ import json
 
 import pytest
 import respx
-from showis_contracts import Platform, QueryPlan, Target
+from showis_contracts import Platform, QueryPlan, SearchQuery, Target
 from showis_engine.planner import QueryPlanner, build_template_fallback_queries
 from showis_engine.variants import generate_variants
 from showis_llm import LLMClient
@@ -115,6 +115,60 @@ def test_yasak_desene_takilan_sablon_sorgulari_atlanir():
     assert build_template_fallback_queries(handle_target("leak"), None).queries == []
 
 
+# --- Handle garantisi kod düzeyinde: nick dışı sorgu plana giremez ---
+
+
+def test_handle_mode_gerekcesinde_tam_isim_gecmez():
+    """Nick gerekçesi "tam isim" → "nick" değişiminden üretilir; bağ pinlenir."""
+    plan = build_template_fallback_queries(handle_target("kerem"), None)
+    assert plan.queries
+    assert not any("tam isim" in q.rationale for q in plan.queries)
+
+
+def test_handle_kind_isim_alanlari_dolu_olsa_da_nick_sorgusu_uretir():
+    target = Target(kind="handle", first_name="Kerem", last_name="Boz", nickname="kb")
+    queries = [q.query for q in build_template_fallback_queries(target, None).queries]
+    assert queries and all("kb" in q for q in queries)
+    assert not any("Kerem Boz" in q for q in queries)
+
+
+def test_isim_kind_ama_ad_soyad_bos_nick_sorgusu_uretir():
+    target = Target(kind="name", nickname="kb")
+    queries = [q.query for q in build_template_fallback_queries(target, None).queries]
+    assert queries and all("kb" in q for q in queries)
+    assert not any('""' in q for q in queries)
+
+
+def test_handle_filtresi_nick_disi_sorgulari_eler():
+    from showis_engine.planner import _enforce_handle_queries
+
+    queries = [
+        SearchQuery(query='"Kerem Boz" site:github.com', platform=Platform.GITHUB),
+        SearchQuery(query='"kb" site:github.com', platform=Platform.GITHUB),
+        SearchQuery(query='"KB" github', platform=Platform.WEB),
+    ]
+    kept = [q.query for q in _enforce_handle_queries(handle_target("kb"), queries)]
+    # büyük/küçük harf duyarsız, alt dize eşleşmesi
+    assert kept == ['"kb" site:github.com', '"KB" github']
+
+
+def test_handle_filtresi_bos_nickte_plani_bosaltir():
+    from showis_engine.planner import _enforce_handle_queries
+
+    queries = [SearchQuery(query='"kb" site:github.com', platform=Platform.GITHUB)]
+    assert _enforce_handle_queries(handle_target("   "), queries) == []
+
+
+def test_isim_modunda_filtre_dokunmaz():
+    from showis_engine.planner import _enforce_handle_queries
+
+    plan = build_template_fallback_queries(name_target("Kerem", "Boz"), None)
+    kept = _enforce_handle_queries(name_target("Kerem", "Boz"), plan.queries)
+    assert [q.query for q in kept] == [q.query for q in plan.queries]
+    assert len(kept) == len(plan.queries)
+    assert kept[0].query == '"Kerem Boz" site:github.com'
+
+
 def test_prompt_handle_kuralini_tasir():
     from showis_llm import render_prompt
 
@@ -167,6 +221,140 @@ async def test_planner_llm_promptuna_kind_ve_nickname_koyar():
     assert "handle" in prompt
     assert "kerem" in prompt
     assert plan.queries[0].query == '"kerem" site:github.com'
+
+
+@pytest.mark.asyncio
+async def test_llm_handle_planinda_isim_sorgusu_elenir():
+    """LLM isim uydursa bile handle planına giremez (kod düzeyi garanti)."""
+    target = handle_target("kb")
+    variants = generate_variants("", "", {}, nickname="kb")
+    llm = LLMClient(
+        base_url="https://api.openai.com/v1",
+        api_key="sk-dummy",
+        model="gpt-4o-mini",
+        session_id="test",
+    )
+    planner = QueryPlanner(llm_client=llm)
+    mock_plan = {
+        "queries": [
+            {
+                "query": '"Kerem Boz" site:github.com',
+                "platform": "github",
+                "rationale": "Uydurulmuş tam isim",
+                "priority": 1,
+            },
+            {
+                "query": '"kb" site:github.com',
+                "platform": "github",
+                "rationale": "Nick araması",
+                "priority": 1,
+            },
+            {
+                "query": '"kb" site:gitlab.com',
+                "platform": "gitlab",
+                "rationale": "Nick araması",
+                "priority": 1,
+            },
+        ]
+    }
+
+    with respx.mock:
+        respx.post("https://api.openai.com/v1/chat/completions").respond(
+            200,
+            json={
+                "choices": [{"message": {"role": "assistant", "content": json.dumps(mock_plan)}}]
+            },
+        )
+        plan = await planner.plan(target, variants)
+
+    queries = [q.query for q in plan.queries]
+    assert queries == ['"kb" site:github.com', '"kb" site:gitlab.com']
+    assert not any("Kerem Boz" in q for q in queries)
+    assert planner.llm_disabled is False
+
+
+@pytest.mark.asyncio
+async def test_llm_bos_nick_handle_modunda_plan_bos_doner():
+    target = handle_target("   ")
+    llm = LLMClient(
+        base_url="https://api.openai.com/v1",
+        api_key="sk-dummy",
+        model="gpt-4o-mini",
+        session_id="test",
+    )
+    planner = QueryPlanner(llm_client=llm)
+    mock_plan = {
+        "queries": [
+            {
+                "query": '"kb" site:github.com',
+                "platform": "github",
+                "rationale": "Nick araması",
+                "priority": 1,
+            }
+        ]
+    }
+
+    with respx.mock:
+        respx.post("https://api.openai.com/v1/chat/completions").respond(
+            200,
+            json={
+                "choices": [{"message": {"role": "assistant", "content": json.dumps(mock_plan)}}]
+            },
+        )
+        plan = await planner.plan(target, generate_variants("", ""))
+
+    assert plan.queries == []
+    assert planner.llm_disabled is False
+
+
+@pytest.mark.asyncio
+async def test_llm_kotu_sorgu_tum_plani_dusurmez():
+    """Tek yasak sorgu atlanır, kalan sorgular yaşar; devre kesici açılmaz."""
+    target = name_target("Selin", "Kara")
+    variants = generate_variants("Selin", "Kara")
+    llm = LLMClient(
+        base_url="https://api.openai.com/v1",
+        api_key="sk-dummy",
+        model="gpt-4o-mini",
+        session_id="test",
+    )
+    planner = QueryPlanner(llm_client=llm)
+    mock_plan = {
+        "queries": [
+            {
+                "query": '"Selin Kara" breach dump password',
+                "platform": "web",
+                "rationale": "yasak",
+                "priority": 1,
+            },
+            {
+                "query": '"Selin Kara" site:github.com',
+                "platform": "github",
+                "rationale": "GitHub araması",
+                "priority": 1,
+            },
+            {
+                "query": '"Selin Kara" site:gitlab.com',
+                "platform": "gitlab",
+                "rationale": "GitLab araması",
+                "priority": 1,
+            },
+        ]
+    }
+
+    with respx.mock:
+        respx.post("https://api.openai.com/v1/chat/completions").respond(
+            200,
+            json={
+                "choices": [{"message": {"role": "assistant", "content": json.dumps(mock_plan)}}]
+            },
+        )
+        plan = await planner.plan(target, variants)
+
+    queries = [q.query for q in plan.queries]
+    assert queries == ['"Selin Kara" site:github.com', '"Selin Kara" site:gitlab.com']
+    assert all("breach" not in q for q in queries)
+    assert planner.llm_disabled is False
 
 
 @pytest.mark.asyncio

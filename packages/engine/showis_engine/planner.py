@@ -300,8 +300,8 @@ def _finalize_queries(queries: list[SearchQuery]) -> list[SearchQuery]:
 
     Her sorgu :func:`finalize_query` ile süzülür; boş/çok kısa sorgu
     (``ValueError``) veya yasak desen (``PolicyViolationError``) o sorguyu
-    düşürür. ``sanitize_query`` arama operatörlerini koruduğu için mevcut şablon
-    sorguları bayt bayt aynı kalır.
+    düşürür, kalanlar yaşar. ``sanitize_query`` arama operatörlerini koruduğu
+    için mevcut şablon sorguları bayt bayt aynı kalır.
     """
     finalized: list[SearchQuery] = []
     for q in queries:
@@ -312,6 +312,33 @@ def _finalize_queries(queries: list[SearchQuery]) -> list[SearchQuery]:
             continue
         finalized.append(q.model_copy(update={"query": cleaned}))
     return finalized
+
+
+def _enforce_handle_queries(target: Target, queries: list[SearchQuery]) -> list[SearchQuery]:
+    """Handle modu garantisini **kod** düzeyinde uygular (prompt'a güvenmez).
+
+    ``target.kind == "handle"`` iken nick dışı her sorgu düşer: LLM tam isim
+    uydursa da, isim kaynaklı varyant sorgusu karışsa da plana giremez. Nick
+    normalize edilemiyorsa (boş) handle modunda aranacak bir şey yoktur → plan
+    boş döner. İsim modunda filtre yok (davranış değişmez).
+    """
+    if target.kind != "handle":
+        return queries
+    nick = _nickname_term(target)
+    if not nick:
+        return []
+    needle = nick.casefold()
+    kept = [q for q in queries if needle in q.query.casefold()]
+    if len(kept) != len(queries):
+        logger.debug(
+            "Handle modunda nick dışı %d sorgu elendi", len(queries) - len(kept)
+        )
+    return kept
+
+
+def _finalize_plan(target: Target, queries: list[SearchQuery]) -> QueryPlan:
+    """Her iki yolun (şablon + LLM) paylaştığı son adım: kapı + handle filtresi."""
+    return QueryPlan(queries=_enforce_handle_queries(target, _finalize_queries(queries)))
 
 
 def build_template_fallback_queries(
@@ -362,7 +389,7 @@ def build_template_fallback_queries(
         # İsim sorguları aynen korunur; nick sorguları listenin sonuna eklenir.
         queries.extend(_nickname_queries(nick))
 
-    return QueryPlan(queries=_finalize_queries(queries))
+    return _finalize_plan(target, queries)
 
 
 # ---------------------------------------------------------------------------
@@ -503,12 +530,11 @@ class QueryPlanner:
             )
 
             if isinstance(plan, QueryPlan) and plan.queries:
-                # LLM ciktisi da yasak desen kontrolunden gecer (hints enjeksiyonu)
-                guarded = [
-                    q.model_copy(update={"query": finalize_query(q.query)})
-                    for q in plan.queries[:max_queries]
-                ]
-                return QueryPlan(queries=guarded)
+                # LLM çıktısı da aynı kapıdan geçer: TEK kötü sorgu tüm planı
+                # (ve devre kesiciyi) düşürmez, yalnızca o sorgu atlanır.
+                guarded = _finalize_plan(target, plan.queries[:max_queries])
+                if guarded.queries:
+                    return guarded
 
         except Exception as e:
             # Aynı tarama ömründe ikinci deneme yok (devre kesici + bu bayrak).
