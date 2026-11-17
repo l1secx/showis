@@ -86,6 +86,12 @@ def test_guard_target_temiz_hedefi_gecirir():
     assert guard_target(target).review_required is False
 
 
+def test_guard_target_nick_tek_basina_sinyal_tasir():
+    """Nick ayrı alan; ad/soyad olmasa da yaş sinyali taranmalı (spec §10)."""
+    target = Target(kind="handle", nickname="lise öğrencisi", hints={})
+    assert guard_target(target).review_required is True
+
+
 @pytest.mark.asyncio
 async def test_planner_inceleme_gerektiren_hedef_icin_sorgu_uretmez():
     target = Target(

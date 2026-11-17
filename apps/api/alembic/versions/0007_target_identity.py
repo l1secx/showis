@@ -31,9 +31,12 @@ depends_on: Union[str, Sequence[str], None] = None
 #: NOT: `hints` kolonu Postgres `json`'dur (0001_initial_schema `sa.JSON()`), `jsonb`
 #: degil. `?` (anahtar var mi) operatoru yalnizca jsonb'de bulunur; bu yuzden
 #: anahtar varligi `->>` uzerinden test edilir (hem `json` hem `jsonb` ile calisir).
+#:
+#: NOT: `hints` degeri 200 karaktere kadar cikabildigi icin backfill `left(..., 128)`
+#: ile kirpilir; aksi halde legacy veri `VARCHAR(128)` sinirinda migration'i patlatirdi.
 _NICKNAME_BACKFILL = """
 UPDATE targets
-   SET nickname = COALESCE(hints->>'nickname', hints->>'username')
+   SET nickname = left(COALESCE(hints->>'nickname', hints->>'username'), 128)
  WHERE nickname IS NULL
    AND COALESCE(hints->>'nickname', hints->>'username') IS NOT NULL
 """

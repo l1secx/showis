@@ -148,12 +148,12 @@ class TargetInput(BaseModel):
         """Yalnız **açıkça verilen** `nickname` için geçerli kural (R14).
 
         `hints["username"]`'den taşınan değer bu denetimden geçmez: eski payload'lar
-        422'ye dönmesin diye legacy girdi toleransı vardır, taşınan değer sadece `@`
-        temizliğinden geçer.
+        422'ye dönmesin diye legacy girdi toleransı vardır; taşınan değer sadece `@`
+        temizliği ve `MAX_NICKNAME` kırpmasından geçer.
         """
-        # R14: kural explicit nick'e uygulanır; `hints.username` legacy tolerans (sadece `@`
-        # soyulur). Bedeli: DB'de 2 karakterlik legacy handle kalabilir; `variants.py`
-        # exact-handle varyantını `<3` kuralıyla elemediği için böyle değerler yine aranabilir.
+        # R14: ≥3/alnum kuralı explicit nick'e uygulanır; `hints.username` legacy tolerans.
+        # Bedeli: DB'de 2 karakterlik legacy handle kalabilir; `variants.py` exact-handle
+        # varyantını `<3` kuralıyla elemediği için böyle değerler yine aranabilir.
         normalized = normalize_turkish(value)
         if len(normalized) < MIN_NICK_BASE or not any(ch.isalnum() for ch in normalized):
             raise ValueError(
@@ -167,9 +167,11 @@ class TargetInput(BaseModel):
         #: `hints.username` deprecated: varsa tek kimlik kaynağına (`nickname`) taşınır
         #: ve hints'ten düşer. Taşınan değer **yeniden doğrulanmaz** (R14): legacy
         #: payload'lar 422'ye dönmesin; nick kuralı yalnız açıkça verilen `nickname` için.
+        #: Yine de `VARCHAR(128)` sınırı korunur — 129–200 karakterlik eski bir hint
+        #: DB'ye sığmadığı için insert 500'e düşmemeli; değer `MAX_NICKNAME`'e kırpılır.
         migrated = self.hints.pop("username", None)
         if migrated is not None and not self.nickname:
-            self.nickname = str(migrated).strip().lstrip("@").strip()
+            self.nickname = str(migrated).strip().lstrip("@").strip()[:MAX_NICKNAME]
 
         if self.kind == "name" and len(self.first_name) < 2:
             raise ValueError("ad en az 2 karakter olmalı (soyad opsiyonel)")
@@ -207,23 +209,13 @@ async def create_case(
     data: CaseCreateRequest, request: Request, db: AsyncSession = Depends(get_db)
 ):
     # SEC-07: reşit-olmayan / uygun olmayan hedef sinyali burada durdurulur.
-    # Spec §10: tarama ad-soyad **ve** nick birleşimi üzerinden yapılır; `guard_target`
-    # yalnız `first_name`/`last_name`/`hints` okuduğu için kimliğin tamamı taşınır.
-    # Bilinçli olarak `display_name` değil: ad-soyad varsa `display_name` nick'i düşürür,
-    # bu ise daha sıkı ve doğru olan taramayı (nick de yaş sinyali olabilir) garanti eder.
-    identity_text = " ".join(
-        part
-        for part in (
-            data.target.first_name,
-            data.target.last_name,
-            data.target.nickname,
-        )
-        if part
-    )
+    # Spec §10: `guard_target` ad + soyad + nick + hints birleşimini tarar, bu yüzden
+    # kontrat hedefi gerçek alanlarla kurulur (nick ayrıca `first_name`'e paketlenmez).
     contract_target = Target(
         kind=data.target.kind,
+        first_name=data.target.first_name,
+        last_name=data.target.last_name,
         nickname=data.target.nickname,
-        first_name=identity_text,
         hints=data.target.hints,
     )
     guard_target(contract_target)
