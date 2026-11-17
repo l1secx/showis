@@ -506,6 +506,7 @@ async def list_cases(
     items = []
     for c in page:
         target = c.targets[0] if c.targets else None
+        contract = _db_target_to_contract(target) if target else None
         scan = scan_info.get(c.id) or {}
         items.append(
             {
@@ -518,12 +519,12 @@ async def list_cases(
                 "created_at": c.created_at.isoformat() if c.created_at else None,
                 "target": (
                     {
-                        "kind": target.kind or "name",
-                        "first_name": target.first_name,
-                        "last_name": target.last_name,
-                        "nickname": target.nickname or "",
+                        "kind": contract.kind,
+                        "first_name": contract.first_name,
+                        "last_name": contract.last_name,
+                        "nickname": contract.nickname,
                     }
-                    if target
+                    if contract
                     else None
                 ),
                 "seeds_count": len(c.seeds),
@@ -554,6 +555,7 @@ async def get_case(case_id: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Case not found")
 
     target = case.targets[0] if case.targets else None
+    contract = _db_target_to_contract(target) if target else None
     return {
         "id": case.id,
         "name": case.name,
@@ -564,13 +566,13 @@ async def get_case(case_id: str, db: AsyncSession = Depends(get_db)):
         "retention_days": case.retention_days,
         "created_at": case.created_at.isoformat(),
         "target": {
-            "kind": target.kind or "name",
-            "first_name": target.first_name,
-            "last_name": target.last_name,
-            "nickname": target.nickname or "",
-            "hints": target.hints,
+            "kind": contract.kind,
+            "first_name": contract.first_name,
+            "last_name": contract.last_name,
+            "nickname": contract.nickname,
+            "hints": contract.hints,
         }
-        if target
+        if contract
         else None,
         "seeds": [
             {
@@ -1038,6 +1040,8 @@ async def export_case(
         target=f"Case: {case.name}",
     )
 
+    contract = _db_target_to_contract(target) if target else None
+
     return {
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "case": {
@@ -1051,15 +1055,15 @@ async def export_case(
             "created_at": case.created_at.isoformat(),
         },
         "target": {
-            "kind": target.kind or "name",
-            "first_name": target.first_name,
-            "last_name": target.last_name,
-            "nickname": target.nickname or "",
-            "name_forms": target.name_forms,
-            "hints": target.hints,
-            "review_required": target.review_required,
+            "kind": contract.kind,
+            "first_name": contract.first_name,
+            "last_name": contract.last_name,
+            "nickname": contract.nickname,
+            "name_forms": contract.name_forms,
+            "hints": contract.hints,
+            "review_required": contract.review_required,
         }
-        if target
+        if contract
         else None,
         "seeds": [
             {

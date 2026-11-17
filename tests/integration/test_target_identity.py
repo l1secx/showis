@@ -177,6 +177,98 @@ async def test_detail_list_and_export_expose_identity(client, handle_case_id):
     assert export["target"]["nickname"] == "kerem"
 
 
+async def test_handle_only_target_never_emits_null_names(client, handle_case_id):
+    """Handle hedefinde ad/soyad yoktur: üç okuma yolu da `null` değil `""` döner."""
+    expected = {
+        "kind": "handle",
+        "first_name": "",
+        "last_name": "",
+        "nickname": "kerem",
+    }
+    detail = (await client.get(f"/api/v1/cases/{handle_case_id}")).json()
+    assert {k: detail["target"][k] for k in expected} == expected
+
+    listed = (await client.get("/api/v1/cases?q=kerem")).json()["items"]
+    assert [i["id"] for i in listed] == [handle_case_id]
+    assert {k: listed[0]["target"][k] for k in expected} == expected
+
+    export = (await client.get(f"/api/v1/cases/{handle_case_id}/export")).json()
+    assert {k: export["target"][k] for k in expected} == expected
+
+
+async def test_null_named_target_serializes_empty_strings(client, db_factory):
+    """`0007` geçişiyle gelen NULL satır (API'yi atlayan yol) `null` sızdırmamalı."""
+    from showis.db.models import Case as DbCase
+    from showis.db.models import Target as DbTarget
+
+    async with db_factory() as session:
+        session.add(
+            DbCase(
+                id="case-null-names",
+                name="Null Satır",
+                purpose="test",
+                legal_basis="self_check",
+            )
+        )
+        session.add(
+            DbTarget(
+                case_id="case-null-names",
+                kind="handle",
+                first_name=None,
+                last_name=None,
+                nickname="kerem",
+                hints={},
+            )
+        )
+        await session.commit()
+
+    expected = {
+        "kind": "handle",
+        "first_name": "",
+        "last_name": "",
+        "nickname": "kerem",
+    }
+    detail = (await client.get("/api/v1/cases/case-null-names")).json()
+    assert {k: detail["target"][k] for k in expected} == expected
+
+    listed = (await client.get("/api/v1/cases?q=kerem")).json()["items"]
+    assert [i["id"] for i in listed] == ["case-null-names"]
+    assert {k: listed[0]["target"][k] for k in expected} == expected
+
+    export = (await client.get("/api/v1/cases/case-null-names/export")).json()
+    assert {k: export["target"][k] for k in expected} == expected
+
+
+async def test_name_only_target_keeps_real_names(client):
+    """Ad/soyad hedefinde gerçek değerler korunur, nick boş kalır."""
+    created = await client.post(
+        "/api/v1/cases",
+        json={
+            "name": "İsimli",
+            "purpose": "x" * 10,
+            "legal_basis": "self_check",
+            "retention_days": 7,
+            "target": {"kind": "name", "first_name": "Kerem", "last_name": "Boz"},
+            "seeds": [],
+        },
+    )
+    assert created.status_code == 201, created.text
+    case_id = created.json()["id"]
+    expected = {
+        "kind": "name",
+        "first_name": "Kerem",
+        "last_name": "Boz",
+        "nickname": "",
+    }
+    for body in (
+        (await client.get(f"/api/v1/cases/{case_id}")).json(),
+        (await client.get(f"/api/v1/cases/{case_id}/export")).json(),
+    ):
+        assert {k: body["target"][k] for k in expected} == expected
+    listed = (await client.get("/api/v1/cases?q=kerem")).json()["items"]
+    assert {k: listed[0]["target"][k] for k in expected} == expected
+
+
 def test_contract_target_maps_none_to_empty_string():
     # DB satırı None taşısa bile kontrat "" üretmeli
     row = SimpleNamespace(
