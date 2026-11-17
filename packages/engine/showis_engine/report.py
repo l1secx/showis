@@ -159,6 +159,27 @@ def _one_line_reason(finding: dict[str, Any], limit: int = 120) -> str:
     return "Sinyal kırılımı yok"
 
 
+def target_display_name(target: dict[str, Any]) -> str:
+    """Hedef etiketi: ad varsa "Ad Soyad", yoksa "@nick", ikisi de yoksa "".
+
+    Handle hedeflerinde ad/soyad boştur; raporlarda boş "Ad Soyad:" satırı ya da
+    `None` basılmaması için tek kaynak burasıdır (kontrat `Target.display_name`
+    ile aynı semantik).
+    """
+    full = " ".join(
+        part
+        for part in (
+            str(target.get("first_name") or "").strip(),
+            str(target.get("last_name") or "").strip(),
+        )
+        if part
+    ).strip()
+    if full:
+        return full
+    nick = str(target.get("nickname") or "").strip().lstrip("@")
+    return f"@{nick}" if nick else ""
+
+
 def build_report_sections(report_data: dict[str, Any]) -> dict[str, Any]:
     """Raporun karar-odaklı bölümlerini üretir (JSON/PDF/HTML ortak kaynak).
 
@@ -316,11 +337,7 @@ def build_report_sections(report_data: dict[str, Any]) -> dict[str, Any]:
             retention_until = None
 
     executive_summary = {
-        "target_name": " ".join(
-            part
-            for part in (target.get("first_name") or "", target.get("last_name") or "")
-            if part
-        ).strip(),
+        "target_name": target_display_name(target),
         "case_name": case.get("name"),
         "mode": scan.get("mode"),
         "scan_started_at": scan.get("started_at"),
@@ -519,8 +536,8 @@ _PDF_FRAGMENTS = {
         "<b>Rapor tarihi:</b> {{ generated_at or '-' }}"
     ),
     "target": report_env.from_string(
-        "<b>Ad Soyad:</b> {{ target.first_name }} {{ target.last_name }}<br/>"
-        "<b>İpuçları:</b> {{ target.hints }}"
+        "<b>Ad Soyad:</b> {{ target_label or '-' }}<br/>"
+        "<b>İpuçları:</b> {{ hints }}"
     ),
     "executive": report_env.from_string(
         "<b>Mod:</b> {{ scan.mode or '-' }} &nbsp; "
@@ -542,6 +559,18 @@ _PDF_FRAGMENTS = {
         "{{ retention or '-' }}"
     ),
 }
+
+
+def render_target_block(report_data: dict[str, Any]) -> str:
+    """Hedef bloğu (PDF/HTML "Ad Soyad" satırı) — etiket tek kaynaktan.
+
+    Ad yoksa `@nick`, o da yoksa `-` basılır; boş satır veya `None` çıkmaz.
+    """
+    target = report_data.get("target") or {}
+    return _PDF_FRAGMENTS["target"].render(
+        target_label=target_display_name(target),
+        hints=target.get("hints") or {},
+    )
 
 
 def _pdf_cell(value: Any) -> str:
@@ -663,7 +692,6 @@ def generate_pdf_report(report_data: dict[str, Any]) -> bytes:
         return table
 
     case = report_data.get("case", {})
-    target = report_data.get("target", {})
     findings = report_data.get("findings", [])
     evidence = report_data.get("evidence", [])
     generated_at = report_data.get("generated_at", "")
@@ -735,7 +763,7 @@ def generate_pdf_report(report_data: dict[str, Any]) -> bytes:
                 body_style,
             ),
             Paragraph(_t("3. Hedef"), h2_style),
-            Paragraph(_t(_PDF_FRAGMENTS["target"].render(target=target)), body_style),
+            Paragraph(_t(render_target_block(report_data)), body_style),
             Paragraph(_t("4. Yöntem"), h2_style),
             Paragraph(
                 _t(

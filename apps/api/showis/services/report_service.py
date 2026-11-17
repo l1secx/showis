@@ -20,6 +20,8 @@ from showis.db.models import (
     Scan,
     Target,
 )
+from showis.services.targets import db_target_to_contract
+from showis_contracts import Target as TargetContract
 from showis_engine.report import (
     build_report_sections,
     generate_html_report,
@@ -146,6 +148,15 @@ async def build_report_data(db: AsyncSession, case_id: str) -> dict[str, Any]:
     target = (
         await db.execute(select(Target).where(Target.case_id == case_id))
     ).scalar_one_or_none()
+    target_contract = db_target_to_contract(target) if target else TargetContract()
+    target_block = {
+        "kind": target_contract.kind,
+        "first_name": target_contract.first_name,
+        "last_name": target_contract.last_name,
+        "nickname": target_contract.nickname,
+        "hints": target_contract.hints,
+        "name_forms": target_contract.name_forms,
+    }
     findings = (
         (await db.execute(select(Finding).where(Finding.case_id == case_id)))
         .scalars()
@@ -193,12 +204,8 @@ async def build_report_data(db: AsyncSession, case_id: str) -> dict[str, Any]:
             "retention_days": case.retention_days,
             "created_at": case.created_at.isoformat() if case.created_at else None,
         },
-        "target": {
-            "first_name": target.first_name if target else "",
-            "last_name": target.last_name if target else "",
-            "hints": target.hints if target else {},
-            "name_forms": target.name_forms if target else [],
-        },
+        # R21: hedef bloğu tek adaptörden gelir; hiçbir alan `null` olmaz.
+        "target": target_block,
         "entities": [
             {
                 "id": e.id,

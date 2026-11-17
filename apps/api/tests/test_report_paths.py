@@ -198,6 +198,49 @@ async def test_bilinmeyen_format_422(client, db_factory):
 
 
 # ---------------------------------------------------------------------------
+# 3b. R21: hedef bloğu sözleşmeden gelir — JSON'da null yok
+# ---------------------------------------------------------------------------
+
+
+async def test_build_report_data_handle_hedefi_null_icermez(db_factory):
+    """Handle hedefinde ad/soyad NULL; rapor JSON'u `""` ve nick/kind taşımalı."""
+    case_id = "case-handle-target"
+    async with db_factory() as session:
+        session.add(
+            DbCase(
+                id=case_id,
+                name="Handle Rapor",
+                purpose="test",
+                legal_basis="self_check",
+                retention_days=30,
+            )
+        )
+        session.add(
+            DbTarget(
+                case_id=case_id,
+                kind="handle",
+                nickname="kerem",
+                first_name=None,
+                last_name=None,
+                hints=None,
+            )
+        )
+        await session.commit()
+
+    async with db_factory() as session:
+        data = await report_service.build_report_data(session, case_id)
+
+    assert data["target"]["kind"] == "handle"
+    assert data["target"]["nickname"] == "kerem"
+    assert data["target"]["first_name"] == ""
+    assert data["target"]["last_name"] == ""
+    assert data["target"]["hints"] == {}
+    assert data["target"]["name_forms"] == []
+    # Bölümler de aynı sözleşmeyi görür
+    assert data["executive_summary"]["target_name"] == "@kerem"
+
+
+# ---------------------------------------------------------------------------
 # 4. SSE kuyruk sınırı (SEC-16)
 # ---------------------------------------------------------------------------
 

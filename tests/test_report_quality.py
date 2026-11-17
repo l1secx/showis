@@ -11,6 +11,7 @@ from showis_engine.report import (
     generate_json_report,
     generate_pdf_report,
     render_html_report,
+    render_target_block,
     report_env,
 )
 
@@ -168,6 +169,17 @@ def _report_data(*, with_edges: bool = True, with_dates: bool = True) -> dict:
     }
 
 
+def _render_report(target: dict) -> str:
+    """HTML raporu + PDF hedef bloğu tek metinde (Task 9: etiket her iki yerde)."""
+    data = _report_data()
+    data["target"] = target
+    return render_html_report(data) + render_target_block(data)
+
+
+def _handle_target_data() -> dict:
+    return {"kind": "handle", "nickname": "kerem", "first_name": "", "last_name": ""}
+
+
 # ---------------------------------------------------------------------------
 # 1. Yönetici özeti
 # ---------------------------------------------------------------------------
@@ -185,6 +197,19 @@ def test_executive_summary_alanlari_dolu():
     assert summary["status_counts"]["candidate"] == 1
     assert summary["status_counts"]["lead"] == 1
     assert summary["status_counts"]["rejected"] == 1
+
+
+def test_executive_summary_handle_hedefinde_nick_yazar():
+    """İsim yoksa `target_name` boş kalmaz: `@nick` basılır, `None` asla."""
+    data = _report_data()
+    data["target"] = _handle_target_data()
+    summary = build_report_sections(data)["executive_summary"]
+    assert summary["target_name"] == "@kerem"
+
+
+def test_report_renders_nick_when_name_missing():
+    html = _render_report(target=_handle_target_data())
+    assert "@kerem" in html and "None" not in html and "Ad Soyad:</b> <br/>" not in html
 
 
 def test_en_yuksek_bes_bulgu_siralanir():

@@ -397,7 +397,9 @@ def estimate_scan(
     concurrency = effective_concurrency(norm_mode(mode), calibration)
 
     hints = target.hints or {}
-    variants = generate_variants(target.first_name, target.last_name, hints).variants
+    variants = generate_variants(
+        target.first_name, target.last_name, hints, nickname=target.nickname
+    ).variants
     api_usernames = min(variant_cap(mode), len(variants))
 
     hint_count = sum(1 for k in ("school", "city", "company") if str(hints.get(k) or "").strip())

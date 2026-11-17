@@ -238,3 +238,74 @@ def test_empty_nickname_never_matches_handle(nickname):
     )
     assert f.breakdown.handle_exact == 0.0
     assert f.status == FindingStatus.REJECTED
+
+
+# ---------------------------------------------------------------------------
+# Task 9: explainer handle sinyalini bilir, hedef etiketi display_name
+# ---------------------------------------------------------------------------
+
+
+class _RecordingClient:
+    """LLM çağrısını ağa çıkmadan kaydeden sahte istemci."""
+
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    async def complete(self, messages, schema=None, temperature=0.0, max_tokens=None):  # noqa: ANN001
+        self.prompts.append(messages[0]["content"])
+        return "LLM açıklaması"
+
+
+@pytest.mark.asyncio
+async def test_handle_lead_explained_by_handle_evidence():
+    """Lead'in tek kanıtı handle eşleşmesi; açıklama 'kanıt zayıf' dememeli."""
+    target = _handle_target("kerem")
+    finding = Resolver().resolve_entity(
+        _handle_entity(label="kerem", username="kerem"),
+        target,
+        "c",
+        "s",
+        username_platform_count=1,
+    )
+    assert finding.status == FindingStatus.LEAD
+
+    explanation = await FindingExplainer(llm_client=None).explain(finding, target)
+    assert "kullanıcı adı tek platformda birebir eşleşti" in explanation
+    assert "kanıt kuvveti zayıf" not in explanation
+
+
+@pytest.mark.asyncio
+async def test_llm_prompt_uses_display_name_for_handle_target():
+    target = _handle_target("kerem")
+    finding = Resolver().resolve_entity(
+        _handle_entity(label="kerem", username="kerem"),
+        target,
+        "c",
+        "s",
+        username_platform_count=1,
+    )
+    client = _RecordingClient()
+    await FindingExplainer(llm_client=client).explain(finding, target)
+
+    assert client.prompts
+    prompt = client.prompts[0]
+    target_section = prompt.split("HEDEF:", 1)[1].split("BULGU", 1)[0]
+    assert "@kerem" in target_section
+    assert "None" not in target_section
+
+
+@pytest.mark.asyncio
+async def test_llm_prompt_adds_nick_only_when_name_present():
+    target = Target(kind="name", first_name="Kerem", last_name="Boz", nickname="kerem")
+    finding = Resolver().resolve_entity(
+        _handle_entity(label="kerem", username="kerem"),
+        target,
+        "c",
+        "s",
+        username_platform_count=1,
+    )
+    client = _RecordingClient()
+    await FindingExplainer(llm_client=client).explain(finding, target)
+
+    prompt = client.prompts[0]
+    assert "Kerem Boz (@kerem)" in prompt

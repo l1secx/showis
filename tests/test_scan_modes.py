@@ -16,6 +16,10 @@ def _target(school: str | None = None) -> Target:
     return Target(first_name="Kerem", last_name="Boz", hints=hints)
 
 
+def handle_target(nickname: str) -> Target:
+    return Target(kind="handle", nickname=nickname)
+
+
 def test_norm_mode_bilinmeyen_deger_o2():
     assert norm_mode(None) == "O2"
     assert norm_mode("standard") == "O2"
@@ -60,3 +64,15 @@ def test_o2_gercek_olcume_yakin_tahmin(monkeypatch):
     monkeypatch.setenv("SHOWIS_SCAN_CONCURRENCY", "1")
     sequential = estimate_scan(_target("ODTÜ"), "O2")
     assert sequential["seconds"] > est["seconds"]
+
+
+# ---------------------------------------------------------------------------
+# Task 9: handle hedefi tahmini — nick varyantları da sayılır
+# ---------------------------------------------------------------------------
+
+
+def test_estimate_counts_handle_variants():
+    est = estimate_scan(handle_target("kerem"), "O2")
+    assert est["tasks"] > 0
+    site = next(s for s in est["steps"] if s["key"] == "sitecheck")
+    assert site["tasks"] > 0

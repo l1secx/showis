@@ -58,10 +58,23 @@ class FindingExplainer:
         detail = f" ({'; '.join(reasons)})" if reasons else ""
         return f" Düşük güvenilirlik: hesap boş/atıl görünüyor, authenticity {score:.2f}{detail}."
 
+    @staticmethod
+    def _target_info(target: Target) -> str:
+        """LLM'e giden hedef etiketi: ad varsa "Ad Soyad (@nick)", yoksa "@nick".
+
+        `display_name` zaten doğru yedeği verir; nick yalnızca **ad da varsa**
+        parantez içinde eklenir (handle hedefinde `@nick` iki kez yazılmaz).
+        """
+        name = f"{target.first_name} {target.last_name}".strip()
+        nick = (target.nickname or "").strip().lstrip("@")
+        if not name:
+            return target.display_name
+        return f"{name} (@{nick})" if nick else name
+
     async def explain(self, finding: Finding, target: Target) -> str:
         """Finding için Türkçe kanıt açıklaması üretir. Skoru asla değiştirmez."""
         # Profilden gelen alanlar LLM'e gitmeden once redakte edilir (SEC4)
-        target_info = redact_text(f"{target.first_name} {target.last_name} ({target.hints})")
+        target_info = redact_text(f"{self._target_info(target)} ({target.hints})")
         breakdown_info = finding.breakdown.model_dump_json()
         evidence_summary = redact_text(
             f"Platform: {finding.platform}, URL: {finding.url}, Etiket: {finding.label}"
@@ -102,6 +115,8 @@ class FindingExplainer:
         signals: list[str] = []
         if finding.breakdown.username_exact_match > 0:
             signals.append("kullanıcı adı çoklu platformda eşleşti")
+        if finding.breakdown.handle_exact > 0:
+            signals.append("kullanıcı adı tek platformda birebir eşleşti")
         if finding.breakdown.name_similarity > 0:
             signals.append("isim yüksek oranda benziyor")
         if finding.breakdown.cross_link > 0:
