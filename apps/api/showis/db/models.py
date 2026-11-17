@@ -89,8 +89,13 @@ class Target(Base):
     case_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
     )
-    first_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    last_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    #: Kimlik bicimi: "name" (ad + soyad) veya "handle" (yalnizca kullanici adi).
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, server_default="name")
+    #: Handle hedeflerinde ad/soyad bilinmez (bkz. migration 0007).
+    first_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    last_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    #: Kullanici adi (handle). Yalnizca handle hedeflerinde dolu olur.
+    nickname: Mapped[str | None] = mapped_column(String(128), nullable=True)
     name_forms: Mapped[list[str]] = mapped_column(JSON_TYPE, default=list)
     hints: Mapped[dict[str, Any]] = mapped_column(JSON_TYPE, default=dict)
     review_required: Mapped[bool] = mapped_column(Boolean, default=False)
