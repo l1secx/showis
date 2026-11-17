@@ -184,7 +184,7 @@ async def test_review_pending_durumundaki_vaka_taranmaz(client, session_factory)
         lambda p: p.update({"purpose": "kisa"}),
         lambda p: p.update({"notes": "x" * 5000}),
         lambda p: p["target"].update({"first_name": "K"}),
-        lambda p: p["target"].update({"last_name": ""}),
+        lambda p: p["target"].update({"first_name": "", "last_name": "Boz"}),
         lambda p: p["target"].update({"hints": {"bilinmeyen": "x"}}),
         lambda p: p["target"].update({"hints": {"school": "x" * 300}}),
         lambda p: p["target"].update({"hints": {"school": {"nested": 1}}}),

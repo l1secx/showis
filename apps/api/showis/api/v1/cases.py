@@ -16,7 +16,7 @@ from fastapi import (
     Request,
     status,
 )
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from showis.db.models import Case, Edge, Entity, Evidence, Finding, Report, Scan
 from showis.db.models import Seed as DbSeed
 from showis.db.models import Target as DbTarget
@@ -29,6 +29,7 @@ from showis.services.scanner import ScannerService
 from showis_contracts import FindingStatus, Platform, Target
 from showis_engine.policy import guard_target
 from showis_engine.scan_modes import budget_for_mode, estimate_scan, norm_mode
+from showis_engine.variants import normalize_turkish
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,6 +46,9 @@ MAX_NOTES = 4000
 MAX_HINT_VALUE = 200
 MAX_HINTS = 10
 MAX_UID_FIELD = 512
+MAX_NICKNAME = 128
+#: Nick tabanı: `variants.normalize_turkish` sonrası en az bu kadar karakter (spec §6.1)
+MIN_NICK_BASE = 3
 HINT_KEYS = {"school", "city", "company", "username", "email", "extra"}
 USERNAME_PATTERN = r"^[A-Za-z0-9._-]{1,64}$"
 _EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,190}\.[A-Za-z]{2,}$")
@@ -104,22 +108,70 @@ class SeedInput(BaseModel):
 
 
 class TargetInput(BaseModel):
-    first_name: str = Field(min_length=2, max_length=80)
-    last_name: str = Field(min_length=2, max_length=80)
+    """Hedef kimliği — ad-soyad **veya** nick (spec §6.1).
+
+    Sıra: alan doğrulayıcıları (ad temizleme, `_clean_hints`, nick `@` temizliği)
+    çalışır; ardından `_check_identity` deprecated `hints["username"]`'i nick'e
+    taşır ve kimlik kurallarını uygular. `kind` varsayılanı `"name"` olduğundan
+    `kind` göndermeyen eski istemciler aynı davranır.
+
+    | Mod | Zorunlu | Opsiyonel |
+    |---|---|---|
+    | `name` | `first_name` (≥2) | `last_name`, `nickname` |
+    | `handle` | `nickname` (normalize sonrası ≥3 + ≥1 alfanümerik) | `first_name`, `last_name` |
+    """
+
+    kind: Literal["name", "handle"] = "name"
+    first_name: str = Field(default="", max_length=80)
+    last_name: str = Field(default="", max_length=80)
+    nickname: str = Field(default="", max_length=MAX_NICKNAME)
     hints: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("first_name", "last_name")
     @classmethod
     def _normalize_name(cls, value: str) -> str:
-        cleaned = " ".join(str(value).split())
-        if len(cleaned) < 2:
-            raise ValueError("ad/soyad en az 2 karakter olmalı")
-        return cleaned
+        return " ".join(str(value).split())
+
+    @field_validator("nickname")
+    @classmethod
+    def _strip_at(cls, value: str) -> str:
+        # Ham değer saklanır (görüntüleme için); yalnız baştaki `@` ve boşluklar düşer.
+        return str(value).strip().lstrip("@").strip()
 
     @field_validator("hints")
     @classmethod
     def _check_hints(cls, value: dict[str, Any]) -> dict[str, Any]:
         return _clean_hints(value)
+
+    @staticmethod
+    def _check_nickname(value: str) -> None:
+        normalized = normalize_turkish(value)
+        if len(normalized) < MIN_NICK_BASE or not any(ch.isalnum() for ch in normalized):
+            raise ValueError(
+                f"nickname normalize edildikten sonra en az {MIN_NICK_BASE} karakter "
+                "olmalı ve en az bir alfanümerik karakter içermeli"
+            )
+
+    @model_validator(mode="after")
+    def _check_identity(self) -> "TargetInput":
+        supplied = self.nickname
+        #: `hints.username` deprecated: varsa tek kimlik kaynağına (`nickname`) taşınır
+        #: ve hints'ten düşer. Eski istemciler kırılmasın diye taşınan değer yeniden
+        #: doğrulanmaz; nick kuralı **açıkça verilen** `nickname` için geçerlidir.
+        migrated = self.hints.pop("username", None)
+        if migrated is not None and not self.nickname:
+            self.nickname = str(migrated).strip().lstrip("@").strip()
+
+        if self.kind == "name" and len(self.first_name) < 2:
+            raise ValueError("ad en az 2 karakter olmalı (soyad opsiyonel)")
+        if supplied:
+            self._check_nickname(supplied)
+        if self.kind == "handle" and not self.nickname:
+            raise ValueError(
+                "handle modunda nickname zorunlu (normalize sonrası en az "
+                f"{MIN_NICK_BASE} karakter)"
+            )
+        return self
 
 
 class CaseCreateRequest(BaseModel):
@@ -146,9 +198,21 @@ async def create_case(
     data: CaseCreateRequest, request: Request, db: AsyncSession = Depends(get_db)
 ):
     # SEC-07: reşit-olmayan / uygun olmayan hedef sinyali burada durdurulur.
+    # Spec §10: tarama ad-soyad **ve** nick birleşimi üzerinden yapılır; `guard_target`
+    # yalnız `first_name`/`last_name`/`hints` okuduğu için kimliğin tamamı taşınır.
+    identity_text = " ".join(
+        part
+        for part in (
+            data.target.first_name,
+            data.target.last_name,
+            data.target.nickname,
+        )
+        if part
+    )
     contract_target = Target(
-        first_name=data.target.first_name,
-        last_name=data.target.last_name,
+        kind=data.target.kind,
+        nickname=data.target.nickname,
+        first_name=identity_text,
         hints=data.target.hints,
     )
     guard_target(contract_target)
@@ -187,6 +251,8 @@ async def create_case(
         case_id=case.id,
         first_name=data.target.first_name,
         last_name=data.target.last_name,
+        nickname=data.target.nickname,
+        kind=data.target.kind,
         hints=data.target.hints,
         review_required=False,
     )
@@ -491,8 +557,10 @@ async def get_case(case_id: str, db: AsyncSession = Depends(get_db)):
         "retention_days": case.retention_days,
         "created_at": case.created_at.isoformat(),
         "target": {
+            "kind": target.kind or "name",
             "first_name": target.first_name,
             "last_name": target.last_name,
+            "nickname": target.nickname or "",
             "hints": target.hints,
         }
         if target
