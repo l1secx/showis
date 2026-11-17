@@ -15,8 +15,9 @@
 #   bash scripts/e2e_acceptance.sh --strict        # BEKLENIYOR'lar da FAIL sayilsin
 #
 # Adimlar (T-330 ile genisletildi):
-#   1 health · 2 kimlik katmani · 3 vaka · 4 tahmin (+4b/4c O2 tutarlilik &
-#   sitecheck kapsami) · 5 tarama · 6 idempotans
+#   1 health · 2 kimlik katmani · 2c eski E2E temizligi · 3 vaka · 4 tahmin
+#   (+4b/4c O2 tutarlilik & sitecheck kapsami) · 5 tarama (409 → 1 retry) ·
+#   6 idempotans (+6c iptal terminali)
 #   7 bulgular (+7b authenticity) · 8 bulgu dogrulama · 9 rapor (+9b disk/izin)
 #   10 export (+10b-10f vaka listesi: zarf, arama, siralama, limit, legacy)
 #   11 grafik (+11b kenar bilgisi) · 12 JSON rapor bolumleri
@@ -143,17 +144,23 @@ if [[ -n "$BASIC_USER" ]]; then
 fi
 
 CLEANUP_PATHS=()
+CONF_AUTH=()        # token + basic (tam yetki)
+CONF_BASIC=()       # yalniz basic (proxy token'i ekler)
+#: T-378: script hangi noktada biterse bitsin kendi olusturdugu vakayi birakma.
+CASE_ID=""
+CASE_DELETED=0
 cleanup() {
   local path
   for path in ${CLEANUP_PATHS[@]+"${CLEANUP_PATHS[@]}"}; do
     [[ -n "$path" ]] && rm -rf "$path"
   done
+  if [[ -n "$CASE_ID" && "$CASE_DELETED" -eq 0 && "$KEEP" -eq 0 ]]; then
+    http_request auth DELETE "/api/v1/cases/${CASE_ID}" >/dev/null 2>&1 || true
+  fi
 }
 trap cleanup EXIT INT TERM
 
 CREDS_DIR=""
-CONF_AUTH=()        # token + basic (tam yetki)
-CONF_BASIC=()       # yalniz basic (proxy token'i ekler)
 if [[ "$BASIC_AUTH_ENABLED" -eq 1 || -n "$TOKEN" ]]; then
   old_umask="$(umask)"; umask 077
   CREDS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/showis-e2e.XXXXXX")"
@@ -349,8 +356,35 @@ else
   step_skip 2b "yalniz basic auth /cases -> 200" "basic auth verilmedi"
 fi
 
+# --------------------------- 2c) eski E2E vakalarini temizle (T-378)
+# Art arda kosularda onceki kosunun (yarim kalmis) vakasi/aktif taramasi
+# yenisiyle cakismasin: yalniz `purpose` icinde E2E isareti olanlar silinir.
+cleanup_deadline=$(( $(date +%s) + 20 ))
+stale_ids=""
+if http_request auth GET "/api/v1/cases?q=E2E%20kabul&limit=200"; then
+  if [[ "$HTTP_CODE" == "200" ]]; then
+    stale_ids="$(printf '%s' "$HTTP_BODY" | jq -r '
+      (if type == "object" then (.items // []) else . end)
+      | [ .[] | select(((.purpose // "") | test("E2E"; "i"))) | .id ] | .[]' 2>/dev/null || true)"
+  fi
+fi
+stale_count=0
+stale_deleted=0
+while IFS= read -r old_case; do
+  [[ -n "$old_case" ]] || continue
+  stale_count=$((stale_count + 1))
+  if [[ "$(date +%s)" -ge "$cleanup_deadline" ]]; then continue; fi
+  if http_request auth DELETE "/api/v1/cases/${old_case}"; then
+    [[ "$HTTP_CODE" == "204" ]] && stale_deleted=$((stale_deleted + 1))
+  fi
+done <<<"$stale_ids"
+if [[ "$stale_count" -eq 0 ]]; then
+  step_pass 2c "eski E2E temizligi" "kalinti yok"
+else
+  step_pass 2c "eski E2E temizligi" "${stale_deleted}/${stale_count} yarim vaka silindi"
+fi
+
 # ------------------------------------------------------------- 3) vaka acma
-CASE_ID=""
 case_payload="$(jq -n '{
   name: "E2E kabul testi",
   purpose: "E2E — otomatik kabul testi (T-323); hedef anonim",
@@ -373,7 +407,7 @@ else
 fi
 
 if [[ -z "$CASE_ID" ]]; then
-  for n in 4 4b 4c 5 6a 6b 7 7b 7c 8 9 9b 10 10b 10c 10d 10e 10f 10g 10h 10i \
+  for n in 4 4b 4c 5 6a 6b 6c 7 7b 7c 8 9 9b 10 10b 10c 10d 10e 10f 10g 10h 10i \
            11 11b 12 13 14 14b 14c 15 15b 19; do
     step_skip "$n" "(vaka yok)" "3. adim basarisiz"
   done
@@ -432,17 +466,31 @@ fi
 # --------------------------------------------------- 5) tarama + 6) idempotans
 SCAN_ID=""
 scan_finished=0
-if http_request auth POST "/api/v1/cases/${CASE_ID}/scan" '{"mode":"O1"}'; then
+# T-378: onceki kosudan kalan aktif tarama 409 verebilir → 3 sn backoff ile 1 retry.
+start_detail=""
+for attempt in 1 2; do
+  if ! http_request auth POST "/api/v1/cases/${CASE_ID}/scan" '{"mode":"O1"}'; then
+    step_fail 5a "O1 taramasi baslatildi" "baglanti hatasi"
+    SCAN_ID=""
+    break
+  fi
+  if [[ "$HTTP_CODE" == "409" && "$attempt" -eq 1 ]]; then
+    start_detail="409 → 3 sn backoff sonrasi tekrar"
+    sleep 3
+    continue
+  fi
   SCAN_ID="$(json_field '.scan_id')"
   if [[ ( "$HTTP_CODE" == "200" || "$HTTP_CODE" == "202" ) && -n "$SCAN_ID" && "$SCAN_ID" != "null" ]]; then
-    step_pass 5a "O1 taramasi baslatildi" "scan=${SCAN_ID:0:8}… HTTP $HTTP_CODE"
+    step_pass 5a "O1 taramasi baslatildi" "scan=${SCAN_ID:0:8}… HTTP $HTTP_CODE${start_detail:+ ($start_detail)}"
+  elif [[ "$HTTP_CODE" == "409" ]]; then
+    step_fail 5a "O1 taramasi baslatildi" "409 tekrar (gercek cakisma): $(printf '%s' "$HTTP_BODY" | head -c 140)"
+    SCAN_ID=""
   else
     step_fail 5a "O1 taramasi baslatildi" "HTTP $HTTP_CODE: $(printf '%s' "$HTTP_BODY" | head -c 180)"
     SCAN_ID=""
   fi
-else
-  step_fail 5a "O1 taramasi baslatildi" "baglanti hatasi"
-fi
+  break
+done
 
 # 6a) aktif tarama varken ikinci POST -> 409 (tarama henuz bitmedi)
 if [[ -n "$SCAN_ID" ]]; then
@@ -485,12 +533,23 @@ if [[ -n "$SCAN_ID" ]]; then
         step_pass 6b "bitmisken 2. POST /scan" "HTTP $HTTP_CODE (yeni tarama: ${rerun_scan:0:8}…) — iptal ediliyor"
         if [[ -n "$rerun_scan" && "$rerun_scan" != "null" ]]; then
           http_request auth POST "/api/v1/scans/${rerun_scan}/cancel" >/dev/null 2>&1 || true
-          CancelDeadline=$(( $(date +%s) + 60 ))
+          # T-378: iptal ASENKRON — terminal duruma (cancelled|completed) gelmeden
+          # devam etmek sonraki kosuda "409 aktif tarama" yarisi yaratiyordu.
+          CancelDeadline=$(( $(date +%s) + 20 ))
+          rerun_status="?"
           while [[ "$(date +%s)" -lt "$CancelDeadline" ]]; do
+            rerun_status="$(json_field '.status')"
             http_request auth GET "/api/v1/scans/${rerun_scan}" >/dev/null 2>&1 || true
-            [[ "$(json_field '.status')" != "running" && "$(json_field '.status')" != "queued" ]] && break
-            sleep 2
+            rerun_status="$(json_field '.status')"
+            case "$rerun_status" in cancelled|completed|failed) break ;; esac
+            sleep 1
           done
+          if [[ "$rerun_status" == "cancelled" || "$rerun_status" == "completed" ]]; then
+            step_pass 6c "2. tarama terminal durumda" "status=${rerun_status} (<=20 sn)"
+          else
+            step_warn 6c "2. tarama terminal durumda" \
+              "status=${rerun_status:-?} — 20 sn icinde durmadi (baslangic temizligi telafi eder)"
+          fi
         fi
       elif [[ "$HTTP_CODE" == "409" ]]; then
         step_pass 6b "bitmisken 2. POST /scan" "409 (hala aktif tarama var)"
@@ -1043,8 +1102,10 @@ else
       fi
       leftovers="$(report_artifacts | head -3)"
       if [[ "$ok_404" -eq 1 && -z "$leftovers" ]]; then
+        CASE_DELETED=1
         step_pass 20 "vaka silindi (204/404, rapor kalintisi yok)" "204 -> 404, rapor dosyalari silindi"
       elif [[ "$ok_404" -eq 1 ]]; then
+        CASE_DELETED=1   # DB satiri silindi; trap yalniz dosya kalintisi icin ugrasmasin
         step_fail 20 "vaka silindi" "FAIL: rapor kalintisi: ${leftovers}"
       else
         step_fail 20 "vaka silindi" "DELETE 204 ama GET $( [[ $ok_404 -eq 1 ]] && echo 404 || echo "$HTTP_CODE" )"
