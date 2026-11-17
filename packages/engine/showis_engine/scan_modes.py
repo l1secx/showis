@@ -78,9 +78,24 @@ _COST = {
 #: Engine, connector paketine bağımlı olmadığı için tembel (çağrı anında) import
 #: yapılır; connector yoksa tahmin için son bilinen sayı kullanılır.
 _SITE_COUNT_FALLBACK = 52
-_API_CONNECTORS = 18
-_IDENTIFIER_TASKS = 10
+#: T-371: gerçek O2 taramasından (8287e0d7) türetilen görev katsayıları:
+#: 22 profil-connector × 6 kullanıcı adı = 132, sitecheck 6 + sitecheck_search 10 = 16,
+#: yavaş connector 6×2 + 2 arama = 14, arama 1, kimlik doğrulama 1 → toplam 164.
+_API_CONNECTORS = 22
+_IDENTIFIER_TASKS = 1
 _RENDER_EVENTS = 6
+#: `sitecheck_search` connector'ının ek planladığı kullanıcı adı sayısı (max_usernames=10).
+_SITECHECK_SEARCH_USERNAMES = 10
+#: Her yavaş connector (TryHackMe/HackTheBox) kullanıcı adı başına kaç görev üretir
+_SLOW_TASKS_PER_USERNAME = 2
+#: Yavaş connector başına arama görevi (TryHackMe + HackTheBox)
+_SLOW_SEARCH_TASKS = 2
+#: Site başına istek katsayısı (T-371 ölçümü: robotlar süreç önbelleğinde → ~1.0).
+#: Soğuk worker/ilk taramada robots.txt origin başına bir kez eklenir; env ile artırılabilir.
+ROBOTS_FACTOR_ENV = "SHOWIS_ESTIMATE_ROBOTS_FACTOR"
+DEFAULT_SITE_REQUEST_FACTOR = 1.0
+#: Tahmin doğruluğu (ölçülen |tahmin-gerçek| ortalaması; T-371: %9 ve %16 → ~%15)
+_EXPECTED_ACCURACY_PCT = {"calibrated": 10, "heuristic": 18}
 
 #: Paralel yurutmede bolunebilen (ag bekleyen) adimlar. ``setup`` ve entity
 #: yazimi seri kaldigi icin bolunmez.
@@ -111,6 +126,9 @@ class Calibration:
     source: str = "heuristic"
     sample_count: int = 0
     generated_at: str | None = None
+    #: Ölçülen etkin paralellik (T-373): sum(görev süreleri) / duvar saati medyanı.
+    #: Tahmin, mod/env değerini bunun üstüne çıkarmaz (fiziksel sınır).
+    concurrency_observed: float | None = None
 
     @property
     def is_calibrated(self) -> bool:
@@ -168,11 +186,18 @@ def _parse_calibration(data: Any) -> Calibration:
     except (TypeError, ValueError):
         sample_count = 0
     generated_at = data.get("generated_at")
+    observed_raw = data.get("concurrency_observed")
+    observed: float | None = None
+    if isinstance(observed_raw, (int, float)) and not isinstance(observed_raw, bool):
+        value = float(observed_raw)
+        if math.isfinite(value) and value >= 1.0:
+            observed = min(float(MAX_CONCURRENCY), value)
     return Calibration(
         costs=costs,
         source=source if costs else "heuristic",
         sample_count=max(sample_count, 0),
         generated_at=str(generated_at) if generated_at else None,
+        concurrency_observed=observed,
     )
 
 
@@ -265,6 +290,24 @@ def scan_concurrency(mode: str | None = None) -> int:
     return resolve_concurrency(mode)
 
 
+def site_request_factor() -> float:
+    """Site başına istek katsayısı (``SHOWIS_ESTIMATE_ROBOTS_FACTOR``, 1.0..3.0)."""
+    raw = os.getenv(ROBOTS_FACTOR_ENV)
+    if raw is None or not str(raw).strip():
+        return DEFAULT_SITE_REQUEST_FACTOR
+    try:
+        value = float(str(raw).strip())
+    except ValueError:
+        logger.warning(
+            "Gecersiz %s=%r, varsayilan %s",
+            ROBOTS_FACTOR_ENV,
+            raw,
+            DEFAULT_SITE_REQUEST_FACTOR,
+        )
+        return DEFAULT_SITE_REQUEST_FACTOR
+    return min(3.0, max(1.0, value))
+
+
 def site_count() -> int:
     """Aktif site-check kapsamı (``SITES`` uzunluğu; yoksa son bilinen sayı)."""
     try:
@@ -312,6 +355,20 @@ def budget_for_mode(mode: str | None) -> dict[str, Any]:
     }
 
 
+def effective_concurrency(mode: str | None = None, calibration: Calibration | None = None) -> int:
+    """Tahmin için etkin paralellik: mod/env isteği, ölçülen paralelliğe kırpılır.
+
+    Fiziksel sınır: `calibration.concurrency_observed` (duvar saati bazlı ölçüm).
+    Ölçüm yoksa istenen değer aynen kullanılır (geriye uyum).
+    """
+    requested = resolve_concurrency(norm_mode(mode))
+    calibration = calibration if calibration is not None else load_calibration()
+    observed = calibration.concurrency_observed
+    if observed is None:
+        return requested
+    return max(MIN_CONCURRENCY, min(requested, int(round(observed))))
+
+
 def _step_seconds(
     tasks: int, cost_key: str, costs: dict[str, float], concurrency: int
 ) -> float:
@@ -336,7 +393,8 @@ def estimate_scan(
     profile = MODE_PROFILES[norm_mode(mode)]
     calibration = load_calibration(calibration_path)
     costs = effective_costs(calibration)
-    concurrency = resolve_concurrency(norm_mode(mode))
+    # T-373: istenen (env/mode) eşzamanlılık, ölçülen etkin paralelliğe kırpılır.
+    concurrency = effective_concurrency(norm_mode(mode), calibration)
 
     hints = target.hints or {}
     variants = generate_variants(target.first_name, target.last_name, hints).variants
@@ -345,8 +403,17 @@ def estimate_scan(
     hint_count = sum(1 for k in ("school", "city", "company") if str(hints.get(k) or "").strip())
     search_tasks = 1 + hint_count
     api_tasks = api_usernames * _API_CONNECTORS
-    slow_tasks = min(api_usernames, 8) * 2
+    # O1'de yavas connector'lar (sitecheck/render/tryhackme/hackthebox) hic planlanmaz.
+    slow_allowed = norm_mode(mode) != "O1"
+    slow_tasks = (
+        min(api_usernames, 8) * _SLOW_TASKS_PER_USERNAME + _SLOW_SEARCH_TASKS
+        if slow_allowed
+        else 0
+    )
     site_usernames = min(profile["usernames"], len(variants))
+    if site_usernames:
+        # `sitecheck_search` ayrıca aramadan bulduğu kimlikleri planlar (dedupe sonrası)
+        site_usernames += _SITECHECK_SEARCH_USERNAMES
 
     steps: list[dict[str, Any]] = []
 
@@ -359,7 +426,10 @@ def estimate_scan(
     seconds = costs["setup"]
     seconds += add_step("search", "Web araması (isim + ipuçları)", search_tasks, "query")
     seconds += add_step("api", "Herkese açık API connector'ları", api_tasks, "api_task")
-    seconds += add_step("slow", "Yavaş API'ler (TryHackMe, HackTheBox)", slow_tasks, "slow_task")
+    if slow_tasks:
+        seconds += add_step(
+            "slow", "Yavaş API'ler (TryHackMe, HackTheBox)", slow_tasks, "slow_task"
+        )
 
     if site_usernames:
         seconds += add_step(
@@ -387,12 +457,18 @@ def estimate_scan(
         "mode": norm_mode(mode),
         "seconds": int(seconds + 0.999),
         "tasks": min(tasks, profile["max_tasks"]),
-        "requests": tasks + site_usernames * site_count(),
+        # T-371: istek = görev başına ~1 + site başına robots/redirect katsayısı
+        "requests": int(round(tasks + site_usernames * site_count() * site_request_factor())),
         "steps": steps,
         "budget": budget_for_mode(mode),
         # Ek alanlar (sozlesme bozulmaz, UI kullanmak zorunda degil).
         "confidence": "calibrated" if calibration.is_calibrated else "heuristic",
+        "expected_accuracy_pct": _EXPECTED_ACCURACY_PCT[
+            "calibrated" if calibration.is_calibrated else "heuristic"
+        ],
+        "site_request_factor": site_request_factor(),
         "concurrency": concurrency,
+        "effective_concurrency": concurrency,
         "calibration": {
             "source": calibration.source,
             "sample_count": calibration.sample_count,

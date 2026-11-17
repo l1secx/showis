@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,7 @@ from showis_engine.scan_modes import (
     _COST,
     _IDENTIFIER_TASKS,
     _RENDER_EVENTS,
+    _SITECHECK_SEARCH_USERNAMES,
     DEFAULT_CALIBRATION_PATH,
     MODE_PROFILES,
     calibration_path,
@@ -34,6 +36,7 @@ from showis_engine.scan_modes import (
     norm_mode,
     reset_calibration_cache,
     scan_concurrency,
+    site_count,
 )
 from showis_engine.variants import generate_variants
 
@@ -59,7 +62,7 @@ def _target(school: str | None = None) -> Target:
 
 
 def _legacy_estimate(target: Target, mode: str = "O2") -> int:
-    """T-102 oncesi formül (sirali yurutme) — regresyon referansi."""
+    """Sıralı (concurrency=1) referans: güncel katsayılarla bölmesiz toplam."""
     profile = MODE_PROFILES[norm_mode(mode)]
     hints = target.hints or {}
     variants = generate_variants(target.first_name, target.last_name, hints).variants
@@ -69,8 +72,15 @@ def _legacy_estimate(target: Target, mode: str = "O2") -> int:
     )
     search_tasks = 1 + hint_count
     api_tasks = api_usernames * _API_CONNECTORS
-    slow_tasks = min(api_usernames, 8) * 2
+    slow_allowed = norm_mode(mode) != "O1"
+    slow_tasks = (
+        min(api_usernames, 8) * 2 + 2
+        if slow_allowed
+        else 0
+    )
     site_usernames = min(profile["usernames"], len(variants))
+    if site_usernames:
+        site_usernames += _SITECHECK_SEARCH_USERNAMES
 
     seconds = (
         _COST["setup"]
@@ -194,7 +204,8 @@ def test_env_bir_mod_profilini_ezer_tahminde(monkeypatch, tmp_path):
     assert sequential["seconds"] > default_o2["seconds"], "concurrency=1 daha uzun sürmeli"
 
 
-def test_concurrency_dort_tahmini_dusurur_ama_sifirlamaz(monkeypatch):
+def test_concurrency_dort_tahmini_dusurur_ama_sifirlamaz(monkeypatch, tmp_path):
+    monkeypatch.setenv("SHOWIS_CALIBRATION_PATH", str(tmp_path / "yok.json"))
     monkeypatch.setenv("SHOWIS_SCAN_CONCURRENCY", "1")
     sequential = estimate_scan(_target("ODTÜ"), "O2")
     monkeypatch.setenv("SHOWIS_SCAN_CONCURRENCY", "4")
@@ -574,7 +585,8 @@ def test_gecersiz_env_mod_profiline_duser(monkeypatch):
     assert resolve_concurrency("O3") == 8
 
 
-def test_env_yoksa_tahmin_mod_profilini_kullanir(monkeypatch):
+def test_env_yoksa_tahmin_mod_profilini_kullanir(monkeypatch, tmp_path):
+    monkeypatch.setenv("SHOWIS_CALIBRATION_PATH", str(tmp_path / "yok.json"))
     monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY", raising=False)
     o1 = estimate_scan(_target("ODTÜ"), "O1")
     o2 = estimate_scan(_target("ODTÜ"), "O2")
@@ -625,3 +637,170 @@ def test_host_limiter_env_sinirlari_kirpilir(monkeypatch):
     clamped = HostLimiter.from_env()
     assert clamped.max_per_host == 1
     assert clamped.min_interval == 0.0
+
+
+# ---------------------------------------------------------------------------
+# T-371: istek/görev tahmini gerçek ölçümle hizalı
+# ---------------------------------------------------------------------------
+
+#: Referans canlı ölçüm (O2, 64 site, 6 kullanıcı adı, hedef "Test Smoke")
+REF_WALL_SECONDS = 362
+REF_TASKS = 164
+REF_REQUESTS = 1176
+
+
+def _smoke_target() -> Target:
+    return Target(first_name="Test", last_name="Smoke", hints={})
+
+
+def test_gorev_sayisi_gercek_olcume_yakin(monkeypatch):
+    monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY", raising=False)
+    est = estimate_scan(_smoke_target(), "O2")
+    assert est["tasks"] == REF_TASKS, f"görev {est['tasks']} (beklenen {REF_TASKS})"
+
+
+def test_istek_sayisi_gercek_olcume_yuzde_yirmi_icinde(monkeypatch):
+    monkeypatch.delenv("SHOWIS_ESTIMATE_ROBOTS_FACTOR", raising=False)
+    monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY", raising=False)
+    est = estimate_scan(_smoke_target(), "O2")
+    deviation = abs(est["requests"] - REF_REQUESTS) / REF_REQUESTS
+    assert deviation <= 0.20, f"istek {est['requests']} vs {REF_REQUESTS} (%{deviation*100:.0f})"
+
+
+def test_sure_tahmini_gercek_olcume_yuzde_yirmi_icinde(monkeypatch):
+    monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY", raising=False)
+    est = estimate_scan(_smoke_target(), "O2")
+    deviation = abs(est["seconds"] - REF_WALL_SECONDS) / REF_WALL_SECONDS
+    assert deviation <= 0.20, f"süre {est['seconds']} vs {REF_WALL_SECONDS} (%{deviation*100:.0f})"
+
+
+def test_site_basina_istek_faktoru_env_ile_ayarlanir(monkeypatch):
+    monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY", raising=False)
+    monkeypatch.setenv("SHOWIS_ESTIMATE_ROBOTS_FACTOR", "1.0")
+    base = estimate_scan(_smoke_target(), "O2")
+    monkeypatch.setenv("SHOWIS_ESTIMATE_ROBOTS_FACTOR", "2.0")
+    doubled = estimate_scan(_smoke_target(), "O2")
+    site_tasks = next(s["tasks"] for s in base["steps"] if s["key"] == "sitecheck")
+    sites = site_count()
+    assert doubled["requests"] - base["requests"] == pytest.approx(site_tasks * sites, rel=0.01)
+    assert base["site_request_factor"] == 1.0
+    assert doubled["site_request_factor"] == 2.0
+
+
+def test_site_faktoru_kirpilir(monkeypatch):
+    monkeypatch.setenv("SHOWIS_ESTIMATE_ROBOTS_FACTOR", "99")
+    assert estimate_scan(_smoke_target(), "O1")["site_request_factor"] == 3.0
+    monkeypatch.setenv("SHOWIS_ESTIMATE_ROBOTS_FACTOR", "0.1")
+    assert estimate_scan(_smoke_target(), "O1")["site_request_factor"] == 1.0
+
+
+def test_beklenen_dogruluk_alani_ciktiya_eklenir(monkeypatch):
+    monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY", raising=False)
+    est = estimate_scan(_smoke_target(), "O2")
+    assert isinstance(est["expected_accuracy_pct"], int)
+    assert 5 <= est["expected_accuracy_pct"] <= 30
+    assert est["confidence"] in ("calibrated", "heuristic")
+
+
+def test_o1_yavas_connector_gorevlerini_saymaz(monkeypatch):
+    monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY", raising=False)
+    est = estimate_scan(_smoke_target(), "O1")
+    keys = {step["key"] for step in est["steps"]}
+    assert "slow" not in keys, "O1'de yavaş connector yok"
+    assert "sitecheck" not in keys
+    assert est["tasks"] == next(s["tasks"] for s in est["steps"] if s["key"] == "api") + next(
+        s["tasks"] for s in est["steps"] if s["key"] == "search"
+    )
+
+
+# ---------------------------------------------------------------------------
+# T-373: etkin paralellik (observed) ile süre tahmini
+# ---------------------------------------------------------------------------
+
+
+def Path_tempdir() -> Path:  # noqa: N802 - test yardımcısı
+    """Geçici dizin (pytest tmp_path fixture'ı olmadan kullanılır)."""
+    return Path(tempfile.mkdtemp(prefix="showis-cal-"))
+
+
+def _calibration_with_observed(tmp_path, observed: float | None) -> Path:
+    costs = {"api_task": 0.5, "setup": 11.64}
+    payload = {
+        "version": 1,
+        "source": "db",
+        "sample_count": 175,
+        "generated_at": "2026-11-17T00:29:00+00:00",
+        "costs": costs,
+    }
+    if observed is not None:
+        payload["concurrency_observed"] = observed
+    path = tmp_path / f"cal-{observed}.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_observed_paralellik_sure_tahminini_gercege_yakinlastirir(monkeypatch):
+    """Gerçek tarama 362 sn; observed=3.14 ile tahmin ±%10 içinde olmalı."""
+    monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY", raising=False)
+    path = _calibration_with_observed(Path_tempdir(), 3.14)
+    est = estimate_scan(_smoke_target(), "O2", calibration_path=path)
+    deviation = abs(est["seconds"] - REF_WALL_SECONDS) / REF_WALL_SECONDS
+    assert deviation <= 0.10, (
+        f"tahmin {est['seconds']} sn, gerçek {REF_WALL_SECONDS} (±%{deviation * 100:.0f})"
+    )
+    assert est["effective_concurrency"] == 3
+    reset_calibration_cache()
+
+
+def test_observed_yoksa_mod_eszamanliligi_kullanilir(monkeypatch):
+    monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY", raising=False)
+    path = _calibration_with_observed(Path_tempdir(), None)
+    est = estimate_scan(_smoke_target(), "O2", calibration_path=path)
+    assert est["effective_concurrency"] == MODE_PROFILES["O2"]["concurrency"]
+    reset_calibration_cache()
+
+
+def test_env_observed_sinirini_asaramaz(monkeypatch):
+    """env 8 verilse bile ölçülen paralellik (3.14 → 3) fiziksel sınırdır."""
+    path = _calibration_with_observed(Path_tempdir(), 3.14)
+    monkeypatch.setenv("SHOWIS_SCAN_CONCURRENCY", "8")
+    est = estimate_scan(_smoke_target(), "O2", calibration_path=path)
+    assert est["effective_concurrency"] == 3
+    # env daha küçükse env kazanır
+    monkeypatch.setenv("SHOWIS_SCAN_CONCURRENCY", "2")
+    small = estimate_scan(_smoke_target(), "O2", calibration_path=path)
+    assert small["effective_concurrency"] == 2
+    assert small["seconds"] > est["seconds"]
+    reset_calibration_cache()
+
+
+def test_observed_gecersiz_degerler_yok_sayilir(monkeypatch):
+    monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY", raising=False)
+    for bad in (0, -1, "x", True):
+        path = _calibration_with_observed(Path_tempdir(), bad)  # type: ignore[arg-type]
+        est = estimate_scan(_smoke_target(), "O2", calibration_path=path)
+        assert est["effective_concurrency"] == MODE_PROFILES["O2"]["concurrency"], bad
+        reset_calibration_cache()
+
+
+def test_o1_o3_efektif_paralellik_makul(monkeypatch):
+    monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY", raising=False)
+    path = _calibration_with_observed(Path_tempdir(), 3.14)
+    o1 = estimate_scan(_smoke_target(), "O1", calibration_path=path)
+    o3 = estimate_scan(_smoke_target(), "O3", calibration_path=path)
+    assert o1["effective_concurrency"] == 2  # O1 profili observed'dan küçük
+    assert o3["effective_concurrency"] == 3  # observed sınırı
+    assert 0 < o1["seconds"] < o3["seconds"]
+    reset_calibration_cache()
+
+
+def test_gercek_kalibrasyon_dosyasi_hedef_araliginda(monkeypatch):
+    """Repodaki kalibration.json (observed=3.14) ile O2 tahmini 362 ±%10."""
+    real = DEFAULT_CALIBRATION_PATH
+    calibration = load_calibration(real)
+    if calibration.concurrency_observed is None:
+        pytest.skip("kalibrasyonda concurrency_observed yok (T-373 öncesi dosya)")
+    monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY", raising=False)
+    est = estimate_scan(_smoke_target(), "O2", calibration_path=real)
+    deviation = abs(est["seconds"] - REF_WALL_SECONDS) / REF_WALL_SECONDS
+    assert deviation <= 0.10, f"{est['seconds']} vs {REF_WALL_SECONDS}"

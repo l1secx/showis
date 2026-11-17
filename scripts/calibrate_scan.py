@@ -72,6 +72,9 @@ DEFAULT_OUT = REPO_ROOT / "packages/engine/showis_engine" / CALIBRATION_FILENAME
 DEFAULT_MIN_SAMPLES = 30
 TASK_ROW_LIMIT = 5000
 SCAN_LIMIT = 200
+#: T-373: etkin paralellik gözlemi için son kaç tarama kullanılır (rejim değişimi:
+#: LLM fallback T-333, site sayısı T-357 → eski taramalar farklı duvar saatine sahip).
+OBSERVED_SCAN_WINDOW = 3
 MAX_SETUP_SECONDS = 900.0
 MAX_ENTITY_SECONDS = 15.0
 
@@ -191,6 +194,8 @@ class Measurement:
     scans: int = 0
     task_rows: int = 0
     sources: dict[str, int] = field(default_factory=dict)
+    #: T-373: ölçülen etkin paralellik (sum görev süresi / duvar saati)
+    observed_concurrency: float | None = None
 
 
 def aggregate_task_rows(
@@ -323,6 +328,15 @@ async def measure_db(dsn: str, min_samples: int) -> Measurement:
         measurement.sample_counts.update(overhead_counts)
         measurement.sources.update(overhead_counts)
         measurement.scans = scans
+        # T-373: etkin paralellik, setup/entity dâhil TÜM kalibre maliyetlerle hesaplanır
+        all_costs = dict(_COST)
+        all_costs.update(measurement.costs)
+        measurement.observed_concurrency = observed_concurrency(
+            wall_rows,
+            all_costs,
+            dict(measurement.sample_counts),
+            measurement.task_rows,
+        )
     finally:
         await pool.close()
     return measurement
@@ -445,6 +459,44 @@ async def measure_live(rounds: int, target_name: str, wanted: set[str]) -> Measu
     return measurement
 
 
+def observed_concurrency(
+    wall_rows: list[tuple[str, float]],
+    costs: dict[str, float],
+    sample_counts: dict[str, int],
+    task_count: int,
+) -> float | None:
+    """Tahmin modelinin **gerçekleşen** paralelliği (T-373).
+
+    Tanım: modelin paralel adım yükü (Σ görev_sayısı × kalibre maliyet) bölü
+    gerçekleşen duvar saatinin paralel payı (``wall_median − setup − entity``).
+
+    Neden ``sum(görev süreleri)/wall`` değil: o oran *görev* eşzamanlılığını verir
+    (ölçümde 5.25) ve duvar saatini birebir açıklar; oysa tahmin modeli adım
+    maliyetlerini (site başına 64 istek, host limiter, kuyruk) zaten içeriyor ve
+    bunları tam paralel varsayıyor. Gerçek hız, modelin paralel yükünün duvar
+    saatine oranıdır (ölçümde ~3.1) — host limiter ve uzun kuyruk yüzünden
+    istenen eşzamanlılığın (6) altında kalır.
+    """
+    if not wall_rows or task_count <= 0:
+        return None
+    # En yeni N tarama (SQL `started_at DESC` sırası korunur)
+    recent = wall_rows[:OBSERVED_SCAN_WINDOW]
+    walls = sorted(wall for _scan, wall in recent if wall > 0)
+    if not walls:
+        return None
+    wall_median = statistics.median(walls)
+    # Yalnız GÖREV düzeyi anahtarlar; setup/entity tarama düzeyi (load'a girmez)
+    task_keys = set(costs) - {"setup", "entity"}
+    parallel_load = sum(
+        count * costs[key] for key, count in sample_counts.items() if key in task_keys
+    )
+    fixed = costs.get("setup", 0.0) + task_count * costs.get("entity", 0.0)
+    parallel_wall = max(1.0, wall_median - fixed)
+    if parallel_load <= 0:
+        return None
+    return round(max(1.0, min(8.0, parallel_load / parallel_wall)), 2)
+
+
 def build_payload(
     measurement: Measurement,
     live: Measurement | None,
@@ -471,7 +523,11 @@ def build_payload(
         "sample_count": int(sum(sources.values())),
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "costs": costs,
-        "concurrency_observed": concurrency,
+        "concurrency_observed": (
+            measurement.observed_concurrency
+            if measurement.observed_concurrency is not None
+            else concurrency
+        ),
         "details": {
             "task_rows": measurement.task_rows,
             "scans": measurement.scans,

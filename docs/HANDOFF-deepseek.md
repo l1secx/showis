@@ -5,8 +5,10 @@ Amaç: **isim + soyisim (+ okul) verildiğinde anlamlı sonuç üretmek**, sonu�
 Bulgular sekmesine akıtmak, kimlik grafiğini kurmak, tarama süresini önceden
 tahmin etmek ve raporu tek sayfada karar verilebilir hale getirmek.
 
-> **Son güncelleme:** 2026-11-17 00:5x (gece kampanyası sonu, T-101 → T-324).
-> Önceki sürümdeki "açık işler" listesi büyük ölçüde kapandı; güncel liste aşağıda.
+> **Son güncelleme:** 2026-11-17 sabah (gece kampanyası sonu, **70+ görev**, T-101 → T-372).
+> Bu sürüm **ikinci fazı** (03:00 sonrası: vaka arama/sayfalama, 64 site-check, sorgu
+> indeksleri, authenticity backfill, HTML rapor, SSE kirası, LLM devre kesici) ve güncel
+> açık işleri içerir. Kısa özet: `.orchestrator/final-report.md`.
 
 ## Bu gece ne değişti (özet)
 
@@ -27,6 +29,35 @@ tahmin etmek ve raporu tek sayfada karar verilebilir hale getirmek.
 | Güvenlik sertleştirme | `main.py`, `services/audit.py` | Gövde sınırı 8 MB → 413 (`SHOWIS_MAX_BODY_BYTES`), CORS allowlist, yasaklı host/SSRF politikası, log redaksiyonu |
 | Ops | `infra/scripts/{backup,backup-verify,restore,ensure-perms}.sh`, `ci.yml` | Yedek + restore tatbikatı (700/600 izinler), digest'li imajlar, CI'da pip-audit + npm audit + secret tarama |
 
+### İkinci faz (03:00 sonrası)
+
+| Alan | Dosya / konu | Değişiklik |
+| --- | --- | --- |
+| Vaka listesi | `api/v1/cases.py` (T-358, T-366) | `GET /cases?q=&status=&mode=&limit=&offset=&sort=` → zarf (`items/total/limit/offset`); `%`/`_` kaçışlı ILIKE, N+1 yok (≤6 sorgu); `legacy=1` (≤500 satır) web uyumu; `q≤128`, `offset≤10 000` |
+| Site-check | `connectors/sitecheck/sites.py`, `scripts/validate_sites.py` (T-357) | **48 → 64 spec** (+29 `Platform` üyesi); 12 canlı doğrulandı, yanlış pozitif 0; `{u}` enjeksiyonu `quote(safe="")` + allowlist ile kapatıldı |
+| Veritabanı | `alembic/versions/0006_query_indexes.py` | **11 indeks** (cases/scans/targets/findings); 100k satırda Q1 50×, Q4 357× hızlı, FK kaskad 3.3× |
+| Authenticity | `showis_engine/authenticity.py`, `scanner.py`, `scripts/backfill_authenticity.py` (T-326/T-367) | Skor artık `findings.authenticity` + `reasons` olarak yazılıyor; geçmiş 137 bulgu backfill edildi (yalnız NULL, kararlar korunur); API `?min_authenticity` |
+| Kimlik id'leri | `showis_contracts/entities.py` (T-346) | `make_entity_id` / `make_finding_id`: 96 karakter sınırı, uzun kimlikte deterministik hash (HTB UUID taşması kapandı) |
+| HTML rapor | `showis_engine/report.py`, `api/v1/reports.py` (T-313/T-316) | `format=html` + `CSP: default-src 'none'`; vaka bazlı klasör; `X-Content-Type-Options` |
+| SSE | `api/v1/scans.py` (T-302/T-354/T-356) | Kira (lease) tabanlı slot: `lease_id`/`renewed_at`, 90 sn TTL reap, `is_disconnected()` kontrolü, `Retry-After`, `X-Scan-Status` |
+| LLM | `packages/llm/showis_llm/breaker.py` (T-352) | Devre kesici: ardışık hata sonrası kısa süre LLM atlanır, yerel açıklamaya düşer |
+| Audit | `services/audit.py`, `main.py` (T-320/T-343/T-356) | `actor_ip` güven modeli (X-Real-IP → XFF **sağdan ilk güvenilmeyen**, peer CIDR kontrolü `SHOWIS_TRUSTED_PROXIES`); 401/413 audit'i **hız sınırlı** (5/dk, 503 → 1/dk, `suppressed` özeti) |
+| Dayanıklılık | `tests/test_scanner_soak.py` (T-331/T-345) | 100 görev/c=8, %20 hata, iptal fırtınası, bütçe senaryoları; deterministik Event tabanlı senkronizasyon, 20/20 koşu flake=0 |
+
+## Nasıl doğrularım
+
+| Komut | Ne yapar | Gerekli env / dosya |
+| --- | --- | --- |
+| `make gate` | Statik kapı: ruff + mypy + pytest + web build (**canlıya dokunmaz**) | — |
+| `bash scripts/final_gate.sh --live` | Yukarısı + uçtan uca kabul testi (`--strict`) | `SHOWIS_API_TOKEN`, `SHOWIS_BASIC_AUTH_USER/PASSWORD` (veya `--basic-auth user:parola`) |
+| `bash scripts/e2e_acceptance.sh --strict` | vaka → tahmin → tarama → bulgu → rapor → export → silme akışı | aynı ikili (token + edge parolası) |
+| `bash scripts/smoke_scan.sh --mode O2` | Canlı tarama süresi + DB kanıtı (`data/smoke/*.json`) | `--basic-auth` veya `SHOWIS_BASIC_AUTH_*` + token |
+| `python scripts/backfill_edges.py --case-id <uuid> --dry-run` | Kimlik edge'lerini geçmiş taramalar için üretir (varsayılan dry-run) | DSN: `--database-url` → `SHOWIS_DATABASE_URL` → `DATABASE_URL` → `infra/.env`; `--apply` için **Atlas onayı** |
+| `python scripts/backfill_authenticity.py --dry-run` | NULL `authenticity` alanlarını doldurur (idempotent, kararlar korunur) | aynı DSN; `--apply` yazma yapar |
+| `python scripts/validate_sites.py [--static\|--live --limit 15]` | Site-check spec doğrulaması; `--static` ağsız, `--live` gerçek istek | ağ yalnız `--live` |
+| `bash infra/scripts/auth-smoke.sh` | Edge basic auth + API token + `8005` kapalı kontrolü | parola: `SHOWIS_CADDY_PASSWORD_FILE` (varsayılan `infra/.secrets/caddy-basic-auth.txt`) |
+| `bash infra/scripts/backup-verify.sh` | Yedeği sha256 ile doğrular, `showis_restore_test`'e restore eder (**canlı DB'ye dokunmaz**) | `infra/.env` (POSTGRES_*) |
+
 ## Doğrulama
 
 ```bash
@@ -46,37 +77,25 @@ tahmin ucu 305 sn (±%11). Sıralı yürütme referansı 636 sn idi.
 
 ## Açık işler (öncelik sırası)
 
-1. **Dağıtım (bloklayıcı).** T-302/T-304/T-313/T-316/T-320 imajları **canlıya alınmadı**
-   (`docker compose up -d --no-deps api web worker` Mert'te). SEC-13 (`auth.failed` +
-   `actor_ip`) ve SEC-16 (404 + 3 bağlantı limiti) canlıda doğrulanmadan final teslim
-   için NO-GO. Retest: `GET /api/v1/scans/<yok>/events` → 404, 4. bağlantı → 429,
-   `audit_logs`'ta `auth.failed` + `details.actor_ip`.
-2. **npm audit / `postcss` (next 16 yükseltmesi).** `next@16.3.x` içindeki gömülü
-   `postcss<=8.5.22` high advisory (4 GHSA) Mert'in CI allowlist'inde. `next@16.4.6`
-   (breaking) yükseltmesi sonrası allowlist **silinmeli**, kapı blocking kalmalı.
-   Ayrıca `caddy:2.7.x` sürüm yükseltmesi (digest'li ama eski).
-3. **Çok kiracılı sahiplik (IDOR'a hazırlık).** Tek kullanıcı/paylaşılan token modeli
-   var; `owner_id` kolonu + her sorguda sahiplik filtresi (404 dönüşü) eklenmeden
-   çok kiracıya geçilmemeli. `cases/findings/settings` uçları bugün yalnız auth'lu.
-4. **SEC-10 — `guard_query` hâlâ yalnız LLM yolunda.** `planner.build_template_fallback_queries`
-   hint'ten üretilen sorguları guard'dan geçirmiyor (`hints` allowlist'i var ama `extra`
-   alanına yasak desen yazılırsa şablon sorgusu denetimsiz çıkar). Düzeltme:
-   şablon sorgularını da `guard_query`'den geçir + `policy.query_blocked` audit'i.
-5. **`settings.py` audit'lerinde `actor_ip` yok.** `settings.provider.update/delete`
-   `record_audit(...)` kullanıyor; `record_request_audit(db, request, ...)`'e geçiş
-   (tek satır × 2) — sır rotasyonu izinin IP'si eksik kalıyor.
-6. **`edge`'ler için canlı backfill onayı.** `scripts/backfill_edges.py` hazır
-   (varsayılan dry-run). Canlı DB'ye yazma Atlas onayı bekliyor; dry-run raporu
-   `outbox/software-architect.md` (T-309) içinde.
-7. **SEC-19 — host `data/reports/` eski kopyaları.** Konteyner artık docker volume
-   kullanıyor ama host'ta eski (PII içeren) PDF/JSON dosyaları dünya-okunur durumda;
-   `chmod 700/600` + KVKK saklama taraması (Mert).
-8. **SEC-20 — `storage_key` istemciye dönüyor** (`findings.py`: evidence yanıtı).
-   Yalnız dosya adı/`evidence_id` dönmeli (düşük, tek satır).
-9. **Planner çıktısı connector sorgularına girmiyor** (eski madde 5): `QueryPlanner.plan()`
-   sonuçları loglanıyor; LLM varsa buradan gelen sorgular `WebSearchConnector`'a beslenmeli.
-10. **Çoklu dil + docx/xlsx + evidence gallery** (ROADMAP 5.2 kalanı) ve
-    `case.export`'un `GET` yerine `POST`'a taşınması (yan etkili okuma).
+> Durum: yeni imajlar **canlıda** (doğrulandı: `GET /cases` zarf döner, `/scans/<yok>/events` → 404,
+> `audit_logs`'ta `auth.failed` / `finding.update` / `report.download` / `request.rejected` var).
+> Kalan işler aşağıda; her satırda **neden → nerede → tahmini efor**.
+
+| # | Açık | Neden | Nerede | Efor |
+| --- | --- | --- | --- | --- |
+| 1 | **npm audit `postcss` (next 16 major)** | `next@16.3.x` içindeki gömülü `postcss<=8.5.22` **high** advisory (4 GHSA) CI allowlist'inde; yükseltme yapılmadıkça kapı gerçekten "blocking" değil | `apps/web/package.json`, `.github/workflows/ci.yml` (allowlist), `infra/docker/Dockerfile.web` | 0.5–1 gün (breaking upgrade + rebuild + smoke) |
+| 2 | **Çok kiracılı sahiplik (IDOR hazırlığı)** | Tek paylaşılan token: kimliği olan herkes **tüm** vakaları/bulguları görür. Çok kullanıcıya geçildiği an IDOR olur | `apps/api/showis/db/models.py` (`owner_id` + migration), `api/v1/{cases,scans,findings,reports,settings}.py` (her sorguya sahiplik filtresi, 404) | 2–3 gün |
+| 3 | **Edge (Caddy) basic-auth 401'leri audit edilmiyor** | Yanlış basic parola API'ye hiç ulaşmıyor → `auth.failed` yazılmıyor; brute-force yalnız Caddy erişim logunda | `infra/caddy/Caddyfile` + `infra/scripts/caddy-render-config.sh` (erişim logu/rate-limit ya da log→API köprüsü) | 0.5 gün |
+| 4 | **`settings.py` audit'lerinde `actor_ip` yok** | `settings.provider.update/delete` `record_audit(...)` kullanıyor; sır rotasyonunun IP'si kayıtsız (canlıda `settings.provider.*` satırı da yok) | `apps/api/showis/api/v1/settings.py:209,233` → `record_request_audit(db, request, ...)` | 10 dakika |
+| 5 | **`guard_query` yalnız LLM yolunda** | `build_template_fallback_queries` hint'ten ürettiği sorguları guard'dan geçirmiyor; `extra` alanına yasak desen yazılırsa şablon sorgusu denetimsiz çıkar | `showis_engine/planner.py` (şablon üretimi) + `policy.guard_query` + `policy.query_blocked` audit'i | 0.5 gün |
+| 6 | **`pg_trgm` GIN / normalize arama kolonu** | `ILIKE '%q%'` ölçekte seq scan (şu an 100 vaka sorun değil, 10k'da değil); Türkçe **büyük `İ`** katlaması SQL'de eksik (`q=inceleme` ≠ `İnceleme…`) | Migration (`pg_trgm` + `GIN (name gin_trgm_ops)`), `cases.name`/`targets` ad-soyad; kalıcı çözüm `search_name` kolonu | 0.5 gün (+ Atlas onayı) |
+| 7 | **MinIO evidence entegrasyonu (ROADMAP 4.2)** | Kanıt dosyaları konteyner diskinde; S3 lifecycle/ölçekleme yok, `storage_key` yerel yol | `showis_engine/http.py:EvidenceStore`, `services/retention.py`, `infra/docker-compose.yml` (minio zaten var) | 2–3 gün |
+| 8 | **TLS + LUKS** | `:8083` düz HTTP (basic auth + token cleartext) ve disk şifresiz → cihaz kaybı/dinleme = PII ifşası | `infra/caddy/Caddyfile` (site adresi → ACME), host `cryptsetup` | TLS 2–4 saat · LUKS bakım penceresi (yeniden kurulum) |
+
+Küçük/tek satırlık kalanlar: `case.export` hâlâ `GET` (yan etkili okuma → `POST`),
+`storage_key` istemciye dönüyor (SEC-20, yalnız dosya adı dönmeli),
+planner çıktısı connector sorgularına beslenmiyor, ROADMAP 5.2 kalanı (çoklu dil,
+word cloud, docx/xlsx).
 
 ## Dokunmadan önce sor
 
@@ -87,3 +106,9 @@ tahmin ucu 305 sn (±%11). Sıralı yürütme referansı 636 sn idi.
 - `.env.example` / `infra/.env.example` yalnız **anahtar adı** taşır; değer yazmayın.
 - `apps/web/lib/types.ts` şema jeneratöründen üretilir (`make schemas`); `Platform`
   enum'una ekleme yaptıysanız jeneratörü çalıştırıp farkı commit edin.
+- `SHOWIS_TRUSTED_PROXIES`: `actor_ip` yalnız bu CIDR'lerdeki peer'lar için başlıklara
+  güvenir; üretimde daraltın (runbook 7b).
+- Migration sırası: `0006_query_indexes` ve `0005_wide_identity_ids` **önce** uygulanmalı,
+  sonra yeni imajlar (id genişliği + indeksler kod varsayımı).
+- SSE slotları süreç içi: çok replikada limit replika başına 3'tür (paylaşımlı sayaç
+  gerekirse Redis).

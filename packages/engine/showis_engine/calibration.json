@@ -1,19 +1,17 @@
 {
   "version": 1,
   "source": "db",
-  "sample_count": 151,
-  "generated_at": "2026-11-16T21:14:36+00:00",
+  "sample_count": 175,
+  "generated_at": "2026-11-17T00:29:13+00:00",
   "costs": {
-    "site_username": 30.99,
-    "slow_task": 14.67,
-    "api_task": 0.62,
-    "setup": 91.7
+    "api_task": 0.5,
+    "setup": 11.64
   },
-  "concurrency_observed": 4,
+  "concurrency_observed": 3.14,
   "details": {
-    "task_rows": 140,
+    "task_rows": 164,
     "scans": 11,
     "live_sampled": false,
-    "db_min_samples": 10
+    "db_min_samples": 30
   }
 }

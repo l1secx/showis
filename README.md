@@ -43,6 +43,13 @@ raporlayan kişisel OSINT web uygulaması.
   basic auth; CORS allowlist; dokümantasyon uçları varsayılan **kapalı**
   (`SHOWIS_DOCS_ENABLED`); istek gövdesi 8 MB ile sınırlı (413); audit izi
   (`actor_ip` = X-Real-IP → XFF **son** değeri) tüm kritik işlemlerde.
+- **Vaka yönetimi:** `GET /cases` sunucu tarafı **arama** (vaka adı, amaç, hedef ad/soyad —
+  `%`/`_` kaçışlı), durum/mod filtresi, sıralama (`created_desc|created_asc|name_asc|updated_desc`)
+  ve sayfalama (`limit` 1..200, `offset`); yanıt zarfı `items/total/limit/offset`
+  (eski düz liste için `?legacy=1`). 100+ vakada UI zorlanmaz.
+- **Operasyon:** `/health` (container healthcheck, kimliksiz), `/healthz` (derin kontrol: DB/Redis/
+  disk), `/api/v1/metrics` (Prometheus metni, token + yerel kaynak); günlük yedek + restore
+  tatbikatı (`infra/scripts/backup.sh` → `backup-verify.sh`), yedek dizini `data/backups` (700/600).
 - **Uyumluluk:** KVKK saklama süreleri, kaskad silme (rapor klasörü dahil), JSON/PDF/HTML dışa aktarma.
 
 ## Kurulum

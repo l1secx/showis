@@ -45,17 +45,18 @@ def test_estimate_okul_ipucu_sorgu_sayisini_artirir():
 
 
 def test_o2_gercek_olcume_yakin_tahmin(monkeypatch):
-    """Canli O2 taramasi 604 sn / 146 gorev olculdu; tahmin %35 icinde kalmali.
+    """Canlı O2 ölçümü (T-371: 362 sn / 164 görev / 1176 istek) ±%25 içinde kalmalı.
 
-    Olcum siralı yurutmeyle alindi; es zamanlilik 1 iken tahmin bu olcume
-    yakin kalmali, paralelde ise dogrusal olarak dusmeli (T-101/T-102).
+    Eski 604-657 sn'lik referans 48 site + 18 connector + LLM beklemesi dönemine
+    aitti; T-333 (LLM hızlı fallback) ve T-357 (64 site) sonrası model güncellendi.
     """
-    monkeypatch.setenv("SHOWIS_SCAN_CONCURRENCY", "1")
+    monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY", raising=False)
     est = estimate_scan(_target("ODTÜ"), "O2")
-    assert 400 <= est["seconds"] <= 820
-    assert 100 <= est["tasks"] <= 260
+    assert 280 <= est["seconds"] <= 520, est["seconds"]
+    assert 120 <= est["tasks"] <= 260
     assert {s["key"] for s in est["steps"]} >= {"search", "api", "sitecheck"}
 
-    monkeypatch.setenv("SHOWIS_SCAN_CONCURRENCY", "4")
-    parallel = estimate_scan(_target("ODTÜ"), "O2")
-    assert 0 < parallel["seconds"] < est["seconds"]
+    # Concurrency=1 sıralı üst sınırdır (bölme yok) — paralelden büyük olmalı.
+    monkeypatch.setenv("SHOWIS_SCAN_CONCURRENCY", "1")
+    sequential = estimate_scan(_target("ODTÜ"), "O2")
+    assert sequential["seconds"] > est["seconds"]

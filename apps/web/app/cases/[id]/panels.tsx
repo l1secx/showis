@@ -408,8 +408,13 @@ function readStoredShowRejected(caseId: string): boolean {
 
 /* --- T-301: authenticity (hesap güvenilirliği) --- */
 
-/** Düşük güvenilirlik eşiği — backend'in uyarı cümlesiyle aynı (0.35). */
-const LOW_AUTH_THRESHOLD = 0.35;
+/**
+ * Güvenilirlik renk eşikleri (tek kaynak — T-301 spec):
+ *   < 0.35 kırmızı · 0.35–0.70 amber · > 0.70 yeşil
+ * Başka bir bileşende kopyalamayın; bu sabitleri import edin.
+ */
+export const LOW_AUTH_THRESHOLD = 0.35;
+export const HIGH_AUTH_THRESHOLD = 0.7;
 
 type FindingWithAuth = FindingItem & {
   authenticity?: number | null;
@@ -427,7 +432,12 @@ function isLowAuthenticity(f: FindingWithAuth): boolean {
   return typeof f.authenticity === "number" && f.authenticity < LOW_AUTH_THRESHOLD;
 }
 
-function authenticityTone(score: number): { text: string; border: string; bar: string; label: string } {
+export function authenticityTone(score: number): {
+  text: string;
+  border: string;
+  bar: string;
+  label: string;
+} {
   if (score < LOW_AUTH_THRESHOLD) {
     return {
       text: "text-red-300",
@@ -436,7 +446,7 @@ function authenticityTone(score: number): { text: string; border: string; bar: s
       label: "düşük güvenilirlik",
     };
   }
-  if (score < 0.6) {
+  if (score < HIGH_AUTH_THRESHOLD) {
     return {
       text: "text-amber-300",
       border: "border-amber-500/40 bg-amber-500/10",

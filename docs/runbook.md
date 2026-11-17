@@ -194,6 +194,20 @@ Eski düz liste gerekiyorsa `?legacy=1`. Örnek: `curl -s -u showis:*** -H "X-AP
 Bilinen sınır: Türkçe büyük `İ` ile küçük harf arama eşleşmez (SQL katlaması) — normalize
 kolon/indeks migration'ı önerildi.
 
+## Yardımcı script'ler (yeni)
+
+| Script | Ne yapar | Gerekli env / dosya |
+|---|---|---|
+| `make gate` → `scripts/final_gate.sh` | Statik kapı: ruff + mypy + pytest + web build (**canlıya dokunmaz**); `--live` uçtan uca kabulü de koşar | `--live` için `SHOWIS_API_TOKEN` + `SHOWIS_BASIC_AUTH_USER/PASSWORD` |
+| `scripts/e2e_acceptance.sh [--strict]` | vaka → tahmin → tarama → bulgu → rapor → export → silme akışı | token + edge parolası (`--basic-auth` veya `SHOWIS_BASIC_AUTH_*`) |
+| `scripts/smoke_scan.sh --mode O2` | Canlı tarama süresi + görev/istek/bulgu sayıları; kanıt `data/smoke/*.json` | token + basic auth (`--basic-auth` / env) |
+| `scripts/backfill_edges.py --case-id <uuid> [--dry-run\|--apply]` | Kimlik edge'lerini (SAME_PERSON/CROSS_LINK) geçmiş taramalar için üretir; varsayılan **dry-run**, `--apply` canlı yazar | DSN: `--database-url` → `SHOWIS_DATABASE_URL` → `DATABASE_URL` → `infra/.env` |
+| `scripts/backfill_authenticity.py [--dry-run\|--apply] [--case-id]` | NULL `findings.authenticity` alanlarını doldurur; yalnız NULL (idempotent), kullanıcı kararları korunur | aynı DSN |
+| `scripts/validate_sites.py [--static\|--live --limit N]` | Site-check spec doğrulaması: `--static` ağsız (CI), `--live` gerçek istekle yanlış-pozitif kontrolü | yalnız `--live` ağ ister |
+| `infra/scripts/auth-smoke.sh [BASE] [LAN_IP]` | Edge basic auth + API token + `8005` kapalı kontrolü | parola: `SHOWIS_CADDY_PASSWORD_FILE` (varsayılan `infra/.secrets/caddy-basic-auth.txt`) |
+| `infra/scripts/backup-verify.sh` | En yeni dump'ı sha256 ile doğrular, `showis_restore_test`'e restore eder, satır sayılarını karşılaştırır (**canlı DB'ye dokunmaz**) | `infra/.env` (POSTGRES_*) |
+| `infra/scripts/ensure-perms.sh` | `data/` ve `data/backups/` izinlerini 700/600'e çeker (idempotent) | root |
+
 ## Sorun giderme
 
 | Belirti | Kontrol |
