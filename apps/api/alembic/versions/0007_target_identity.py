@@ -27,11 +27,15 @@ depends_on: Union[str, Sequence[str], None] = None
 
 #: Handle-only hedeflerde kullanici adi `hints` icinde bu anahtarlarla geliyordu
 #: (`nickname` once, sonra `username`).
+#:
+#: NOT: `hints` kolonu Postgres `json`'dur (0001_initial_schema `sa.JSON()`), `jsonb`
+#: degil. `?` (anahtar var mi) operatoru yalnizca jsonb'de bulunur; bu yuzden
+#: anahtar varligi `->>` uzerinden test edilir (hem `json` hem `jsonb` ile calisir).
 _NICKNAME_BACKFILL = """
 UPDATE targets
    SET nickname = COALESCE(hints->>'nickname', hints->>'username')
  WHERE nickname IS NULL
-   AND (hints ? 'nickname' OR hints ? 'username')
+   AND COALESCE(hints->>'nickname', hints->>'username') IS NOT NULL
 """
 
 
