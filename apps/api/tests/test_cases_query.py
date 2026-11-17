@@ -173,6 +173,40 @@ async def test_arama_alanlari(client, db_factory, query, expected):
     assert [c["id"] for c in res.json()["items"]] == expected
 
 
+async def test_arama_nickname_handle_only(client, db_factory):
+    """R18: handle-only vaka (ad/soyad NULL) `?q=` ile nick'ten bulunur."""
+    await _seed(db_factory)
+    async with db_factory() as session:
+        session.add(
+            DbCase(
+                id="case-handle",
+                name="Handle Vakası",
+                purpose="kimlik biçimi testi",
+                legal_basis="self_check",
+            )
+        )
+        session.add(
+            DbTarget(case_id="case-handle", kind="handle", nickname="kerem", hints={})
+        )
+        await session.commit()
+
+    # nick eşleşmesi
+    res = await client.get("/api/v1/cases?q=kerem")
+    assert res.status_code == 200
+    items = res.json()["items"]
+    assert [c["id"] for c in items] == ["case-handle"]
+    assert items[0]["target"]["nickname"] == "kerem"
+
+    # eşleşmeyen nick dönmez
+    res = await client.get("/api/v1/cases?q=baska")
+    assert res.status_code == 200
+    assert res.json()["items"] == []
+
+    # ad/soyad araması bozulmadı
+    res = await client.get("/api/v1/cases?q=yılmaz")
+    assert [c["id"] for c in res.json()["items"]] == ["case-ayse"]
+
+
 async def test_joker_kacisi(client, db_factory):
     """`%` ve `_` desen olarak YORUMLANMAZ (kullanıcı joker üretemez)."""
     await _seed(db_factory)

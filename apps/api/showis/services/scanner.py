@@ -38,6 +38,7 @@ from showis.db.models import (
 )
 from showis.services.audit import record_audit
 from showis.services.orchestrator import event_broadcaster
+from showis.services.targets import db_target_to_contract
 from showis_connectors.websearch.normalize import extract_platform_from_url
 from showis_contracts import (
     Budget,
@@ -264,15 +265,9 @@ class ScannerService:
             return
 
         # Prepare contracts (DB NULL'ları kontratta "" olur — handle hedefinde
-        # ad/soyad yoktur; `kind` varsayılanı "name").
-        target = Target(
-            kind=db_target.kind or "name",
-            first_name=db_target.first_name or "",
-            last_name=db_target.last_name or "",
-            nickname=db_target.nickname or "",
-            hints=db_target.hints or {},
-            review_required=bool(db_target.review_required),
-        )
+        # ad/soyad yoktur; `kind` varsayılanı "name"). Tek dönüşüm noktası:
+        # `services.targets.db_target_to_contract`.
+        target = db_target_to_contract(db_target)
         seeds_res = await db.execute(select(DbSeed).where(DbSeed.case_id == case.id))
         db_seeds = seeds_res.scalars().all()
         def _seed_platform(value: str) -> Platform:

@@ -26,6 +26,7 @@ from showis.services.connectors_factory import build_connectors, build_llm_clien
 from showis.services.report_service import create_report, purge_case_reports
 from showis.services.retention import _evidence_file_path
 from showis.services.scanner import ScannerService
+from showis.services.targets import db_target_to_contract as _db_target_to_contract
 from showis_contracts import FindingStatus, Platform, Target
 from showis_engine.policy import guard_target
 from showis_engine.scan_modes import budget_for_mode, estimate_scan, norm_mode
@@ -336,11 +337,12 @@ def _case_filters(q: str | None, case_status: str | None) -> list[Any]:
     text = (q or "").strip()
     if text:
         pattern = _escape_like(text)
-        # Hedef ad/soyad için alt sorgu: join ile satır çoğaltmadan arama
+        # Hedef ad/soyad/nick için alt sorgu: join ile satır çoğaltmadan arama
         target_hit = select(DbTarget.case_id).where(
             or_(
                 DbTarget.first_name.ilike(pattern, escape="\\"),
                 DbTarget.last_name.ilike(pattern, escape="\\"),
+                DbTarget.nickname.ilike(pattern, escape="\\"),
             )
         )
         conditions.append(
@@ -797,23 +799,6 @@ async def _find_active_scan(db: AsyncSession, case_id: str) -> Scan | None:
             .order_by(Scan.created_at.desc())
         )
     ).scalars().first()
-
-
-def _db_target_to_contract(row: Any) -> Target:
-    """DB hedef satırını kontrat `Target`ına çevirir.
-
-    Şema geçişinde (`0007`) ad/soyad/nick/kind NULL olabilir; kontrat bu
-    alanlarda `str` bekler. Tek dönüşüm noktası: `None → ""`, `kind → "name"`.
-    Böylece defense-in-depth `guard_target` nick'i de görür.
-    """
-    return Target(
-        kind=row.kind or "name",
-        first_name=row.first_name or "",
-        last_name=row.last_name or "",
-        nickname=row.nickname or "",
-        hints=row.hints or {},
-        review_required=bool(row.review_required),
-    )
 
 
 async def _load_contract_target(db: AsyncSession, case_id: str) -> Target | None:
