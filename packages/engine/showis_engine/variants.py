@@ -56,7 +56,7 @@ def generate_variants(
     soyad = normalize_turkish(last_name)
     a = ad[0] if ad else ""
 
-    nick = normalize_turkish(nickname.lstrip("@"))
+    nick = normalize_turkish((nickname or "").lstrip("@"))
     year = str(hints.get("year") or hints.get("birth_year") or "")
 
     variants: list[UsernameVariant] = []
@@ -70,10 +70,19 @@ def generate_variants(
                 UsernameVariant(username=clean_u, pattern=pattern, confidence=confidence)
             )
 
-    # 1. Known handle (exact). Kullanıcının verdiği nick tahmin değil kanıttır:
-    #    kısa olsa da (ör. 2 karakter) korunur, bu yüzden min_len=1.
+    # 1. Nickname block (exact handle + guesses). Kanıt (exact handle) ve tahminler
+    #    birlikte en başta durur: tüketiciler listeyi sırayla dilimliyor
+    #    (planner `[:10]`/`[:15]`, publicapi/sitecheck `max_usernames`), bu yüzden
+    #    nick tahminleri isim desenlerinin arkasına düşerse hiç aranmaz.
     if nick:
+        # Exact nick tahmin değil kanıttır: kısa olsa da (ör. 2 karakter) korunur.
         add_variant(nick, "manual", 1.0, min_len=1)
+        if year:
+            add_variant(f"{nick}{year}", "nick+year", 0.95)
+        add_variant(f"{nick}99", "nick+digits", 0.85)
+        add_variant(f"{nick}01", "nick+digits", 0.85)
+        add_variant(f"{nick}_dev", "nick_dev", 0.85)
+        add_variant(f"{nick}.dev", "nick_dev", 0.85)
 
     # 2. Primary name-surname patterns (High confidence)
     if ad and soyad:
@@ -110,17 +119,6 @@ def generate_variants(
         add_variant(soyad, "last", 0.60)
         if year:
             add_variant(f"{soyad}{year}", "last+year", 0.65)
-
-    # 4. Handle tahminleri. Kanıt (exact handle) ve isim desenleri listeye zaten
-    #    girdikten sonra eklenir; böylece nick varken bile ilk sıralar
-    #    "bilinen handle → isim desenleri" olur.
-    if nick:
-        if year:
-            add_variant(f"{nick}{year}", "nick+year", 0.95)
-        add_variant(f"{nick}99", "nick+digits", 0.85)
-        add_variant(f"{nick}01", "nick+digits", 0.85)
-        add_variant(f"{nick}_dev", "nick_dev", 0.85)
-        add_variant(f"{nick}.dev", "nick_dev", 0.85)
 
     # İsim formları yalnız ad/soyad varsa üretilir; handle-only hedefte boş kalır.
     name_forms: list[str] = []

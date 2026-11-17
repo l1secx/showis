@@ -53,5 +53,22 @@ def test_hints_username_no_longer_creates_variants():
 
 
 def test_name_mode_output_is_unchanged():
+    # Nick bloğu (exact + tahminler) isim desenlerinden ÖNCE gelir; tahminler
+    # planner/connector dilim bütçelerinin ([:10], [:15], max_usernames) içinde kalsın.
     vs = generate_variants("Kerem", "Boz", {"city": "Ankara"}, nickname="kb")
-    assert [v.username for v in vs.variants][:3] == ["kb", "kerem.boz", "keremboz"]
+    assert [v.username for v in vs.variants][:3] == ["kb", "kb99", "kb01"]
+
+
+def test_nickname_block_stays_inside_consumer_slices():
+    # planner `[:10]`/`[:15]`, publicapi/sitecheck `max_usernames` ile dilimliyor:
+    # nick tahminleri bu pencerelerin dışına düşmemeli.
+    vs = generate_variants("Kerem", "Boz", {"year": "1995"}, nickname="kb")
+    first10 = {v.username for v in vs.variants[:10]}
+    assert {"kb", "kb1995", "kb99", "kb01", "kb_dev", "kb.dev"} <= first10
+
+
+def test_none_nickname_does_not_crash():
+    # DB'den nullable okunan nickname None gelebilir (handle-only hedefte değil,
+    # eski satırlarda) — üretici çökmemeli.
+    vs = generate_variants("Kerem", "Boz", {}, nickname=None)  # type: ignore[arg-type]
+    assert "kerem.boz" in [v.username for v in vs.variants]
