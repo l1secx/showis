@@ -62,21 +62,29 @@ class WebSearchConnector:
     # ------------------------------------------------------------------
 
     def _queries(self, ctx: ScanContext) -> list[str]:
+        from showis_engine.planner import sanitize_hint
+
         target = ctx.target
         fullname = f"{target.first_name} {target.last_name}".strip()
-        if not fullname:
+        # Handle hedefi: ad/soyad yok, yalniz nick var. Bos tirnakli sorgu
+        # (`""`) arama motorunda anlamsizdir; nick'ten kurulur. Nick de
+        # kullanici girdisidir: tirnak/operator enjeksiyonu notralize edilir.
+        nick = sanitize_hint((target.nickname or "").strip().lstrip("@"))
+        if fullname:
+            subject = f'"{fullname}"'
+        elif nick:
+            subject = f'"{nick}"'
+        else:
             return []
         hints = target.hints or {}
-        queries = [f'"{fullname}"']
+        queries = [subject]
         # Okul/sehir ipucu ayni isimli kisileri ayiklar.
         # T-377 (SEC-10): ipucu metni guvenilmez — operatorler notralize edilir,
         # uzunluk kirpilir, kontrol karakteri iceren deger atlanir.
-        from showis_engine.planner import sanitize_hint
-
         for key in ("school", "city", "company"):
             value = sanitize_hint(hints.get(key))
             if value:
-                queries.append(f'"{fullname}" {value}')
+                queries.append(f"{subject} {value}")
         return queries
 
     async def plan(self, ctx: ScanContext) -> list[TaskSpec]:

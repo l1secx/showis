@@ -1,5 +1,7 @@
 """Site-check motoru testleri — sentetik SiteSpec + respx mock."""
 
+import asyncio
+
 import pytest
 import respx
 from showis_connectors.sitecheck.connector import SiteCheckConnector
@@ -11,6 +13,7 @@ from showis_connectors.sitecheck.engine import (
     UNKNOWN,
     UsernameCheckEngine,
 )
+from showis_connectors.sitecheck.search_connector import SiteCheckSearchConnector
 from showis_connectors.sitecheck.sites import SiteSpec
 from showis_contracts import (
     ObservationKind,
@@ -208,3 +211,44 @@ def test_json_site_specs_require_200():
     assert json_specs, "en az bir JSON spec bekleniyor"
     for spec in json_specs:
         assert spec.expect_status == 200, spec.key
+
+
+# ---------------------------------------------------------------------------
+# Handle (yalnız nick) hedefi
+# ---------------------------------------------------------------------------
+
+
+def _handle_ctx(nickname: str = "kerem", scan_id: str = "s-handle-sitecheck") -> ScanContext:
+    return ScanContext(
+        case_id="c1",
+        scan_id=scan_id,
+        target=Target(kind="handle", nickname=nickname),
+        seeds=[],
+    )
+
+
+def test_sitecheck_handle_mode_queries_nick():
+    specs = asyncio.run(SiteCheckConnector().plan(_handle_ctx()))
+    usernames = [str(s.params.get("username") or "") for s in specs]
+    joined = " ".join(usernames + [str(s.params.get("query") or "") for s in specs])
+    assert "kerem" in joined and '""' not in joined
+
+
+def test_sitecheck_search_handle_mode_searches_nick():
+    """Arama sorgusu nick'ten kurulur; boş tırnaklı sorgu atılmaz."""
+
+    class _Provider:
+        name = "fake"
+
+        def __init__(self) -> None:
+            self.queries: list[str] = []
+
+        async def search(self, query: str, *, limit: int = 20, site: str | None = None):
+            self.queries.append(query)
+            return []
+
+    provider = _Provider()
+    connector = SiteCheckSearchConnector(search_provider=provider)
+    asyncio.run(connector.plan(_handle_ctx(scan_id="s-handle-sitecheck-search")))
+    assert provider.queries == ['"kerem"']
+

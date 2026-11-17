@@ -108,7 +108,10 @@ class SiteCheckConnector:
         from showis_engine.variants import generate_variants
 
         variants = generate_variants(
-            ctx.target.first_name, ctx.target.last_name, ctx.target.hints or {}
+            ctx.target.first_name,
+            ctx.target.last_name,
+            ctx.target.hints or {},
+            nickname=ctx.target.nickname,
         )
         budget = self.max_usernames
         for v in variants.variants:

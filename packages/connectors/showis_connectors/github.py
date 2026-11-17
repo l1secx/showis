@@ -82,31 +82,41 @@ class GitHubConnector:
                     )
                 )
 
-        # 2. Name query search
+        # 2. Identity query search (ad-soyad veya nick)
         # T-377 (SEC-10): ipucu metni guvenilmez; tirnak/operator enjeksiyonu
         # `sanitize_hint` ile notralize edilir (tek kaynak: showis_engine.planner).
         from showis_engine.planner import sanitize_hint
 
         fullname = f"{target.first_name} {target.last_name}".strip()
-        q_parts = [f'"{fullname}" in:name']
-        city = sanitize_hint(target.hints.get("city"))
-        if city:
-            q_parts.append(f'location:"{city}"')
-        company = sanitize_hint(target.hints.get("company"))
-        if company:
-            q_parts.append(f'company:"{company}"')
+        # Nick de kullanici girdisidir: tirnak/operator enjeksiyonu ayni
+        # `sanitize_hint` ile notralize edilir (SEC-10).
+        nick = sanitize_hint((target.nickname or "").strip().lstrip("@"))
+        q_parts: list[str] = []
+        if fullname:
+            q_parts.append(f'"{fullname}" in:name')
+        elif nick:
+            # Handle hedefi: ad/soyad yok, nick ile kimlik aramasi (`in:login`).
+            q_parts.append(f"{nick} in:login")
+        # Ne ad ne nick varsa `"" in:name` gibi bos sorgu uretilmez.
+        if q_parts:
+            city = sanitize_hint(target.hints.get("city"))
+            if city:
+                q_parts.append(f'location:"{city}"')
+            company = sanitize_hint(target.hints.get("company"))
+            if company:
+                q_parts.append(f'company:"{company}"')
 
-        query_str = " ".join(q_parts)
-        tasks.append(
-            TaskSpec(
-                id=str(uuid.uuid4()),
-                connector=self.name,
-                platform=self.platform,
-                kind="search_users",
-                params={"query": query_str},
-                priority=3,
+            query_str = " ".join(q_parts)
+            tasks.append(
+                TaskSpec(
+                    id=str(uuid.uuid4()),
+                    connector=self.name,
+                    platform=self.platform,
+                    kind="search_users",
+                    params={"query": query_str},
+                    priority=3,
+                )
             )
-        )
 
         return tasks
 

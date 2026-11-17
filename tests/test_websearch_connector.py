@@ -24,6 +24,21 @@ def _ctx(hints=None) -> ScanContext:
     )
 
 
+def _handle_ctx(nickname: str = "kerem", hints: dict | None = None) -> ScanContext:
+    """Yalnız nick taşıyan hedef (ad/soyad yok)."""
+    return ScanContext(
+        case_id="c-1",
+        scan_id="s-handle-websearch",
+        target=Target(kind="handle", nickname=nickname, hints=hints or {}),
+        seeds=[],
+    )
+
+
+def stub_provider() -> FakeProvider:
+    """Ağa çıkmayan arama sağlayıcısı (plan testleri için)."""
+    return FakeProvider([])
+
+
 def _hit(url: str, title: str, snippet: str = "", rank: int = 1) -> SearchHit:
     return SearchHit(url=url, title=title, snippet=snippet, rank=rank, provider="fake")
 
@@ -88,6 +103,36 @@ def test_normalize_is_stable_across_queries():
     a = conn.normalize(obs("q1"))[0][0]
     b = conn.normalize(obs("q2"))[0][0]
     assert a.id == b.id  # ayni URL -> ayni entity
+
+
+@pytest.mark.asyncio
+async def test_websearch_handle_mode_returns_queries():
+    conn = WebSearchConnector(search_provider=stub_provider())
+    specs = await conn.plan(_handle_ctx("kerem"))
+    assert specs and specs[0].params["query"] == '"kerem"'
+
+
+@pytest.mark.asyncio
+async def test_websearch_handle_mode_adds_hint_queries():
+    """İpuçları nick sorgusuna eklenir; boş ipucu sorgu üretmez."""
+    conn = WebSearchConnector(search_provider=stub_provider())
+    specs = await conn.plan(
+        _handle_ctx("kerem", {"school": "ODTÜ", "city": "Ankara", "company": "  "})
+    )
+    assert [s.params["query"] for s in specs] == [
+        '"kerem"',
+        '"kerem" ODTÜ',
+        '"kerem" Ankara',
+    ]
+
+
+@pytest.mark.asyncio
+async def test_no_connector_emits_empty_quotes():
+    from showis_connectors.github import GitHubConnector
+
+    for conn in [GitHubConnector(), WebSearchConnector(search_provider=stub_provider())]:
+        for spec in await conn.plan(_handle_ctx("kerem")):
+            assert '""' not in str(spec.params.get("query") or "")
 
 
 @pytest.mark.asyncio

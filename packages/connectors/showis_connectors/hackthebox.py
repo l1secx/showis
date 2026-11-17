@@ -127,7 +127,10 @@ class HackTheBoxConnector(RenderedProfileConnector):
             from showis_engine.variants import generate_variants
 
             variant_set = generate_variants(
-                ctx.target.first_name, ctx.target.last_name, ctx.target.hints or {}
+                ctx.target.first_name,
+                ctx.target.last_name,
+                ctx.target.hints or {},
+                nickname=ctx.target.nickname,
             )
             count = 0
             for v in variant_set.variants:

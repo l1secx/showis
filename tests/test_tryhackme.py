@@ -39,7 +39,12 @@ def make_ctx(**kwargs) -> ScanContext:
     return ScanContext(
         case_id="c1",
         scan_id="s1",
-        target=Target(first_name="Kerem", last_name="Boz", hints=kwargs.pop("hints", {})),
+        target=Target(
+            first_name="Kerem",
+            last_name="Boz",
+            nickname=kwargs.pop("nickname", ""),
+            hints=kwargs.pop("hints", {}),
+        ),
         seeds=kwargs.pop("seeds", []),
         **kwargs,
     )
@@ -62,15 +67,15 @@ async def test_thm_plan_with_seed_and_variants():
     connector = TryHackMeConnector(browser_client=BrowserClient(BROWSER_URL))
     ctx = make_ctx(
         seeds=[Seed(platform=Platform.TRYHACKME, username="keremboz")],
-        hints={"nickname": "kerem"},
+        nickname="kerem",
     )
     tasks = await connector.plan(ctx)
     kinds = [t.kind for t in tasks]
     assert "fetch_profile" in kinds
     usernames = [t.params.get("username") for t in tasks if t.kind == "fetch_profile"]
     assert "keremboz" in usernames
-    # varyantlar da uretildi (nickname'den)
-    assert any(u and u.startswith("kerem") for u in usernames)
+    # nick birinci sınıf alan: tam nick varyantı da üretilmeli
+    assert "kerem" in usernames
 
 
 @pytest.mark.asyncio

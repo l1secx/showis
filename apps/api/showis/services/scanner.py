@@ -357,6 +357,19 @@ class ScannerService:
                 all_task_specs.extend(specs)
             except Exception as e:
                 logger.error("Connector plan error (%s): %s", conn.name, e)
+        # Sifir gorev sessizce gecmemeli: handle hedefinde tek kimlik kaynagi
+        # nick'tir; uretim tamamen bos kaldiysa nedeni kullaniciya soylenir.
+        if not all_task_specs and target.kind == "handle":
+            await event_broadcaster.broadcast(
+                scan.id,
+                "log",
+                {
+                    "message": (
+                        "Hedef yalnızca kullanıcı adı içeriyor; "
+                        "hiçbir connector görev üretilemedi."
+                    )
+                },
+            )
         missing = skipped_connectors(scan.mode, [c.name for c in self.connectors])
         if missing:
             await event_broadcaster.broadcast(

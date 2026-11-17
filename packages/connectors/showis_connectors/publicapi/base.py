@@ -158,7 +158,10 @@ class PublicProfileConnector:
         from showis_engine.variants import generate_variants
 
         variants = generate_variants(
-            ctx.target.first_name, ctx.target.last_name, ctx.target.hints or {}
+            ctx.target.first_name,
+            ctx.target.last_name,
+            ctx.target.hints or {},
+            nickname=ctx.target.nickname,
         )
         tasks: list[TaskSpec] = []
         for v in variants.variants:

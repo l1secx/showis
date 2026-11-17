@@ -50,14 +50,20 @@ class SiteCheckSearchConnector(SiteCheckConnector):
             return tasks
 
         fullname = f"{ctx.target.first_name} {ctx.target.last_name}".strip()
-        if not fullname:
+        # Handle hedefinde ad/soyad yoktur: arama sorgusu nick'ten kurulur.
+        # Nick kullanici girdisidir: tirnak enjeksiyonu notralize edilir (SEC-10).
+        from showis_engine.planner import sanitize_hint
+
+        nick = sanitize_hint((ctx.target.nickname or "").strip().lstrip("@"))
+        subject = fullname or nick
+        if not subject:
             return tasks
 
         seen = {str(t.params.get("username") or "") for t in tasks}
         try:
             # Tirnakli arama: ayni adi tasiyan ilgisiz kisileri ele
             hits = await self.search_provider.search(
-                query=f'"{fullname}"', limit=30, site=None
+                query=f'"{subject}"', limit=30, site=None
             )
         except Exception as exc:
             logger.warning("Arama sağlayıcısı başarısız oldu: %s", exc)

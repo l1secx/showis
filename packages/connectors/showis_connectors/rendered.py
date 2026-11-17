@@ -109,7 +109,10 @@ class RenderedProfileConnector:
 
         target = ctx.target
         variant_set = generate_variants(
-            target.first_name, target.last_name, target.hints or {}
+            target.first_name,
+            target.last_name,
+            target.hints or {},
+            nickname=target.nickname,
         )
         tasks: list[TaskSpec] = []
         for v in variant_set.variants:
@@ -131,9 +134,17 @@ class RenderedProfileConnector:
         if not self.search_provider:
             return None
         fullname = f"{ctx.target.first_name} {ctx.target.last_name}".strip()
+        # Handle hedefinde ad/soyad yoktur: sorgu nick'ten kurulur (bos `""` yok).
+        # Nick kullanici girdisidir: tirnak enjeksiyonu notralize edilir (SEC-10).
+        from showis_engine.planner import sanitize_hint
+
+        nick = sanitize_hint((ctx.target.nickname or "").strip().lstrip("@"))
+        subject = fullname or nick
+        if not subject:
+            return None
         return self._make_task(
             "search",
-            {"query": f'"{fullname}" site:{self.search_site}', "limit": 10},
+            {"query": f'"{subject}" site:{self.search_site}', "limit": 10},
             priority=2,
         )
 

@@ -345,3 +345,56 @@ async def test_handle_only_scan_produces_variants(db_factory, monkeypatch):
     ]
     assert counts, events
     assert counts[0] > 0
+
+
+async def test_empty_handle_plan_logs_reason(db_factory, monkeypatch):
+    """Review Focus #4: handle modunda sıfır görev sessizce geçmemeli."""
+    from showis.db.models import Case as DbCase
+    from showis.db.models import Scan as DbScan
+    from showis.db.models import Target as DbTarget
+    from showis.services import scanner as scanner_mod
+    from showis.services.scanner import ScannerService
+
+    async with db_factory() as session:
+        session.add_all(
+            [
+                DbCase(
+                    id="case-handle-zero",
+                    name="Handle Zero",
+                    purpose="test",
+                    legal_basis="self_check",
+                    retention_days=7,
+                ),
+                DbTarget(
+                    case_id="case-handle-zero",
+                    kind="handle",
+                    first_name=None,
+                    last_name=None,
+                    nickname="kerem",
+                    hints={},
+                    review_required=False,
+                ),
+                DbScan(
+                    id="scan-handle-zero",
+                    case_id="case-handle-zero",
+                    mode="O2",
+                    status="queued",
+                    budget={},
+                ),
+            ]
+        )
+        await session.commit()
+
+    logged: list[str] = []
+
+    async def _record(scan_id, event_type, data):
+        logged.append(str((data or {}).get("message", "")))
+
+    monkeypatch.setattr(scanner_mod.event_broadcaster, "broadcast", _record)
+
+    async with db_factory() as session:
+        # Connector yok: tüm plan'lar boş döner (sıfır görev yolu).
+        await ScannerService(connectors=[]).execute_scan("scan-handle-zero", session)
+
+    assert any("görev üretilemedi" in message for message in logged), logged
+
