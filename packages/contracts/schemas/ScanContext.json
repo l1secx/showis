@@ -192,12 +192,28 @@
     },
     "Target": {
       "properties": {
+        "kind": {
+          "default": "name",
+          "enum": [
+            "name",
+            "handle"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
         "first_name": {
+          "default": "",
           "title": "First Name",
           "type": "string"
         },
         "last_name": {
+          "default": "",
           "title": "Last Name",
+          "type": "string"
+        },
+        "nickname": {
+          "default": "",
+          "title": "Nickname",
           "type": "string"
         },
         "name_forms": {
@@ -218,10 +234,6 @@
           "type": "boolean"
         }
       },
-      "required": [
-        "first_name",
-        "last_name"
-      ],
       "title": "Target",
       "type": "object"
     }

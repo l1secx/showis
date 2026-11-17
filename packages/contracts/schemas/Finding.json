@@ -7,6 +7,11 @@
           "title": "Username Exact Match",
           "type": "number"
         },
+        "handle_exact": {
+          "default": 0.0,
+          "title": "Handle Exact",
+          "type": "number"
+        },
         "name_similarity": {
           "default": 0.0,
           "title": "Name Similarity",

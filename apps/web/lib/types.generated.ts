@@ -161,6 +161,7 @@ export interface Edge {
 }
 export interface ConfidenceBreakdown {
   username_exact_match?: number;
+  handle_exact?: number;
   name_similarity?: number;
   cross_link?: number;
   bio_location_company?: number;
@@ -198,8 +199,10 @@ export interface TaskSpec {
   rate_limit_key?: string | null;
 }
 export interface Target {
-  first_name: string;
-  last_name: string;
+  kind?: "name" | "handle";
+  first_name?: string;
+  last_name?: string;
+  nickname?: string;
   name_forms?: string[];
   hints?: Record<string, unknown>;
   review_required?: boolean;
