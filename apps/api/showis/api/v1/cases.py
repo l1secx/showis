@@ -145,6 +145,15 @@ class TargetInput(BaseModel):
 
     @staticmethod
     def _check_nickname(value: str) -> None:
+        """Yalnız **açıkça verilen** `nickname` için geçerli kural (R14).
+
+        `hints["username"]`'den taşınan değer bu denetimden geçmez: eski payload'lar
+        422'ye dönmesin diye legacy girdi toleransı vardır, taşınan değer sadece `@`
+        temizliğinden geçer.
+        """
+        # R14: kural explicit nick'e uygulanır; `hints.username` legacy tolerans (sadece `@`
+        # soyulur). Bedeli: DB'de 2 karakterlik legacy handle kalabilir; `variants.py`
+        # exact-handle varyantını `<3` kuralıyla elemediği için böyle değerler yine aranabilir.
         normalized = normalize_turkish(value)
         if len(normalized) < MIN_NICK_BASE or not any(ch.isalnum() for ch in normalized):
             raise ValueError(
@@ -156,8 +165,8 @@ class TargetInput(BaseModel):
     def _check_identity(self) -> "TargetInput":
         supplied = self.nickname
         #: `hints.username` deprecated: varsa tek kimlik kaynağına (`nickname`) taşınır
-        #: ve hints'ten düşer. Eski istemciler kırılmasın diye taşınan değer yeniden
-        #: doğrulanmaz; nick kuralı **açıkça verilen** `nickname` için geçerlidir.
+        #: ve hints'ten düşer. Taşınan değer **yeniden doğrulanmaz** (R14): legacy
+        #: payload'lar 422'ye dönmesin; nick kuralı yalnız açıkça verilen `nickname` için.
         migrated = self.hints.pop("username", None)
         if migrated is not None and not self.nickname:
             self.nickname = str(migrated).strip().lstrip("@").strip()
@@ -200,6 +209,8 @@ async def create_case(
     # SEC-07: reşit-olmayan / uygun olmayan hedef sinyali burada durdurulur.
     # Spec §10: tarama ad-soyad **ve** nick birleşimi üzerinden yapılır; `guard_target`
     # yalnız `first_name`/`last_name`/`hints` okuduğu için kimliğin tamamı taşınır.
+    # Bilinçli olarak `display_name` değil: ad-soyad varsa `display_name` nick'i düşürür,
+    # bu ise daha sıkı ve doğru olan taramayı (nick de yaş sinyali olabilir) garanti eder.
     identity_text = " ".join(
         part
         for part in (
