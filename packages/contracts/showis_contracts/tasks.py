@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -19,11 +19,20 @@ class TaskSpec(BaseModel):
 
 
 class Target(BaseModel):
-    first_name: str
-    last_name: str
+    kind: Literal["name", "handle"] = "name"
+    first_name: str = ""
+    last_name: str = ""
+    nickname: str = ""
     name_forms: list[str] = Field(default_factory=list)
     hints: dict[str, Any] = Field(default_factory=dict)
     review_required: bool = False
+
+    @property
+    def display_name(self) -> str:
+        full = f"{self.first_name} {self.last_name}".strip()
+        if full:
+            return full
+        return f"@{self.nickname}" if self.nickname else ""
 
 
 class Seed(BaseModel):

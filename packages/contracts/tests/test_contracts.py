@@ -180,3 +180,21 @@ def test_llm_models_roundtrip():
     assert len(QueryPlan.model_validate_json(plan.model_dump_json()).queries) == 1
     assert len(VariantSet.model_validate_json(variants.model_dump_json()).variants) == 1
     assert ExtractionResult.model_validate_json(extraction.model_dump_json()).username == "ayilmaz"
+
+
+def test_target_display_name_prefers_full_name():
+    t = Target(first_name="Kerem", last_name="Boz", nickname="kb")
+    assert t.display_name == "Kerem Boz"
+
+
+def test_target_display_name_falls_back_to_nick():
+    assert Target(kind="handle", nickname="kerem").display_name == "@kerem"
+
+
+def test_target_display_name_no_trailing_space_without_surname():
+    assert Target(first_name="Kerem", nickname="kb").display_name == "Kerem"
+
+
+def test_target_defaults_are_backward_compatible():
+    t = Target(first_name="A", last_name="B")
+    assert t.kind == "name" and t.nickname == ""
