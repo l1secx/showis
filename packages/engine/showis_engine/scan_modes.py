@@ -63,6 +63,9 @@ MODE_PROFILES: dict[str, dict[str, int]] = {
     },
 }
 
+#: Mod basina planner'in urettigi sorgularin kac tanesinin gercek arama gorevine donusecegi.
+PLANNER_CAP: dict[str, int] = {"O1": 0, "O2": 8, "O3": 20}
+
 #: Gercek bir O2 taramasindan olculen maliyetler (saniye).
 _COST = {
     "setup": 60.0,  # varyant + planlama + ilk ag gecikmesi
@@ -338,6 +341,11 @@ def task_allowed(mode: str | None, connector: str) -> bool:
 def variant_cap(mode: str | None) -> int:
     """Connector basina denenecek kullanici adi varyanti (O1 hizli kalsin)."""
     return MODE_PROFILES[norm_mode(mode)]["variant_tasks"]
+
+
+def planner_cap(mode: str | None) -> int:
+    """Moda göre planner sorgu tavanı (O1=0, O2=8, O3=20)."""
+    return PLANNER_CAP[norm_mode(mode)]
 
 
 def skipped_connectors(mode: str | None, connectors: list[str]) -> list[str]:

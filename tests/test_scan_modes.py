@@ -6,6 +6,7 @@ from showis_engine.scan_modes import (
     budget_for_mode,
     estimate_scan,
     norm_mode,
+    planner_cap,
     skipped_connectors,
     task_allowed,
 )
@@ -24,6 +25,11 @@ def test_norm_mode_bilinmeyen_deger_o2():
     assert norm_mode(None) == "O2"
     assert norm_mode("standard") == "O2"
     assert norm_mode("o3") == "O3"
+
+
+@pytest.mark.parametrize("mode,expected", [("O1", 0), ("O2", 8), ("O3", 20), ("o3", 20), ("x", 8)])
+def test_planner_cap_by_mode(mode, expected):
+    assert planner_cap(mode) == expected
 
 
 def test_o1_slow_connectorlari_atlar():
