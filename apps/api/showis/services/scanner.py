@@ -97,6 +97,9 @@ _MAX_LLM_EXPLANATIONS = 12
 #: Planner sorgusundan uretilen arama gorevi basina sonuc limiti.
 PLANNER_SEARCH_LIMIT = 20
 
+#: Planner gorevlerinin calistigi connector (`TaskSpec.connector`).
+PLANNER_CONNECTOR = "websearch"
+
 #: Planner sorgusundaki arama operatorleri (degerleriyle birlikte). Bos sorgu
 #: tespitinde metinden cikarilir: `'"" site:x.com'` arama terimi tasimaz.
 _QUERY_OPERATOR_RE = re.compile(
@@ -184,6 +187,18 @@ def _has_search_term(text: str) -> bool:
     """Sorgu gercek bir arama terimi tasiyor mu (yalniz tirnak/operator degil)?"""
     stripped = _QUERY_OPERATOR_RE.sub(" ", text).replace('"', " ")
     return bool(stripped.split())
+
+
+def _has_planner_connector(connectors: list[Any]) -> bool:
+    """Planner gorevlerini kosabilecek connector sette var mi?
+
+    Planner gorevleri :data:`PLANNER_CONNECTOR`'a aittir. Connector sette
+    yoksa gorev hicbir zaman dispatch edilemez; DB'de sonsuza kadar beklemesin
+    diye tarama sonunda **yaniltici** bicimde "butce/zaman" atlandi olarak
+    isaretlenirdi. Bu yuzden yalnizca gercekten kosabilecek gorev eklenir.
+    Uretimde ``build_connectors`` bu connector'i her zaman kurar.
+    """
+    return any(getattr(conn, "name", None) == PLANNER_CONNECTOR for conn in connectors)
 
 
 class ScannerService:
@@ -284,7 +299,7 @@ class ScannerService:
             specs.append(
                 TaskSpec(
                     id=str(uuid.uuid4()),
-                    connector="websearch",
+                    connector=PLANNER_CONNECTOR,
                     platform=q.platform,
                     kind="search",
                     params={
@@ -407,14 +422,11 @@ class ScannerService:
             {"message": f"{len(variants.variants)} kullanıcı adı varyantı üretildi."},
         )
 
+        query_plan: QueryPlan | None = None
         try:
+            # Plani uret; hata olursa `query_plan` None kalir ve planner gorevi
+            # eklenmez (connector gorevleri etkilenmez — eski davranis korunur).
             query_plan = await self.planner.plan(target, variants)
-            if self.llm_client:
-                msg = (
-                    f"LLM dinamik sorgu planlayıcı devrede: "
-                    f"{len(query_plan.queries)} hedefli sorgu üretildi."
-                )
-                await event_broadcaster.broadcast(scan.id, "log", {"message": msg})
         except Exception as exc:
             logger.warning("Query planlama hatası: %s", exc)
 
@@ -453,6 +465,37 @@ class ScannerService:
                 scan.id,
                 "log",
                 {"message": f"{scan.mode} modunda atlanan connector'lar: {', '.join(missing)}"},
+            )
+
+        # Planner sorgularini gercek arama gorevlerine cevir (Faz 2). Tekillestirme
+        # iki tarafta da **kanonik** metinle yapilir (controller R25): connector
+        # sorgulari once `finalize_query`'den gecer, aksi halde bu fonksiyonun
+        # ileride degismesi sessizce yinelenen gorev uretirdi.
+        existing_queries: list[str] = []
+        for spec in all_task_specs:
+            raw = (spec.params or {}).get("query")
+            if not isinstance(raw, str) or not raw.strip():
+                continue
+            try:
+                existing_queries.append(finalize_query(raw))
+            except (ValueError, PolicyViolationError):
+                logger.debug("Connector sorgusu kanoniklestirilemedi: %r", raw)
+        # Planner gorevleri `PLANNER_CONNECTOR` (websearch) uzerinde kosar: sette
+        # yoksa gorev dispatch edilemez, DB'de yaniltici bicimde "butce/zaman"
+        # atlandi olarak kalirdi (bkz. `_has_planner_connector`).
+        planner_specs = (
+            self._planner_task_specs(query_plan, scan.mode, existing_queries)
+            if query_plan is not None and _has_planner_connector(self.connectors)
+            else []
+        )
+        if planner_specs:
+            all_task_specs.extend(planner_specs)
+            # Log yalnizca GERCEKTEN eklenen gorev sayisini soyler: plan bircok
+            # sorgu uretip hepsi tekillestirmede elenebilir.
+            await event_broadcaster.broadcast(
+                scan.id,
+                "log",
+                {"message": f"Sorgu planlayıcı {len(planner_specs)} arama görevi ekledi."},
             )
 
         # Record tasks in DB

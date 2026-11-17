@@ -44,8 +44,10 @@ import pytest
 import pytest_asyncio
 import showis.api.v1.cases as cases_module
 from showis.db.models import AuditLog
+from showis.db.models import Entity as DbEntity
 from showis.db.models import Scan as DbScan
 from showis.db.models import Task as DbTask
+from showis.services.orchestrator import event_broadcaster
 from showis_contracts import (
     Entity,
     EntityType,
@@ -56,7 +58,8 @@ from showis_contracts import (
     ScanContext,
     TaskSpec,
 )
-from sqlalchemy import select
+from showis_engine.planner import finalize_query
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 # ---------------------------------------------------------------------------
@@ -622,3 +625,179 @@ async def test_ikinci_tarama_bulgulari_cogaltmaz(api: ApiHarness):
     assert len(first_findings) == 3
     assert len(second_findings) == 3, "entity/finding kimlikleri deterministik olmali"
     assert {f["id"] for f in first_findings} == {f["id"] for f in second_findings}
+
+
+# ---------------------------------------------------------------------------
+# 8. Planner sorgulari gercek arama gorevi olarak yazilir (Faz 2, Task 14)
+# ---------------------------------------------------------------------------
+
+#: Sahte arama connector'unun her sorgu icin dondurdugu tek URL. Planner
+#: gorevlerinin hepsi ayni sonucu getirir; entity dedupe bunu tek satira indirir.
+SHARED_HIT_URL = "https://example.com/shared-hit"
+
+
+class FakeSearchConnector(FakeConnector):
+    """`websearch` gorevlerini karsilayan sahte arama connector'u (ag istegi yok).
+
+    Planner'in urettigi gorevler DB'ye `connector="websearch"` olarak yazilir;
+    bu sahte connector de o adla kaydolur ve **her sorguda ayni sonucu**
+    dondurur. Boylece "ayni sonuc iki kez entity yazmamali" kurali gercekten
+    sinanir (planner gorevi ayni URL'i baska bir gorevle paylasir).
+    """
+
+    platform: Platform = Platform.WEB
+    tier: RiskTier = RiskTier.C
+
+    def __init__(self, name: str = "websearch"):
+        super().__init__(name=name, tasks=0)
+        self.queries: list[str] = []
+
+    async def plan(self, ctx: ScanContext) -> list[TaskSpec]:
+        self.planned += 1
+        return []
+
+    async def run(self, task: TaskSpec, ctx: ScanContext) -> list[Observation]:
+        self.queries.append(str(task.params.get("query") or ""))
+        return [
+            Observation(
+                id=f"obs-{task.id}",
+                connector=self.name,
+                platform=self.platform,
+                kind=ObservationKind.PROFILE,
+                subject="shared_handle",
+                tier=self.tier,
+                data={"login": "shared_handle"},
+            )
+        ]
+
+    def normalize(self, obs: Observation) -> tuple[list[Entity], list]:
+        return (
+            [
+                Entity(
+                    id=f"{self.platform.value}:{obs.subject}",
+                    type=EntityType.ACCOUNT,
+                    platform=self.platform,
+                    label=obs.subject,
+                    url=SHARED_HIT_URL,
+                    attributes={"username": obs.subject},
+                )
+            ],
+            [],
+        )
+
+
+def _planner_params(tasks: list[DbTask]) -> list[dict]:
+    """DB gorev satirlarindan planner kaynakli olanlarin `params` sozlukleri."""
+    return [t.params or {} for t in tasks if (t.params or {}).get("source") == "planner"]
+
+
+@pytest.mark.asyncio
+async def test_o2_taramasi_planner_gorevleri_uretir(api: ApiHarness):
+    """O2'de plan (LLM yokken sablon) gercek gorevlere donusur: 0 < n <= 8."""
+    api.connectors = [FakeConnector(name="fake", tasks=2), FakeSearchConnector()]
+    case_id = await api.create_case(name="Planner O2")
+    scan_id = await api.start_scan(case_id, mode="O2")
+
+    assert (await api.scan_status(scan_id))["status"] == "completed"
+    planner = _planner_params(await api.scan_task_rows(scan_id))
+    assert 0 < len(planner) <= 8, f"O2 planner gorev sayisi beklenen aralikta degil: {len(planner)}"
+
+    for params in planner:
+        query = params.get("query")
+        assert isinstance(query, str) and query.strip(), f"bos planner sorgusu: {params!r}"
+        assert '""' not in query, f"bos tirnakli planner sorgusu: {query!r}"
+        assert query == finalize_query(query), (
+            f"planner sorgusu kanonik metin olmali: {query!r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_o1_taramasi_planner_gorevi_uretmez(api: ApiHarness):
+    """O1 hizli modda planlama tavani 0: hicbir planner gorevi yazilmaz."""
+    api.connectors = [FakeConnector(name="fake", tasks=2), FakeSearchConnector()]
+    case_id = await api.create_case(name="Planner O1")
+    scan_id = await api.start_scan(case_id, mode="O1")
+
+    assert (await api.scan_status(scan_id))["status"] == "completed"
+    assert _planner_params(await api.scan_task_rows(scan_id)) == []
+
+
+@pytest.mark.asyncio
+async def test_websearch_connector_yoksa_planner_gorevi_eklenmez(api: ApiHarness):
+    """Planner gorevi `websearch` connector'inda kosar; connector yoksa eklenmez.
+
+    Aksi halde hicbir zaman dispatch edilemeyen satirlar DB'de "butce/zaman
+    nedeniyle atlandi" gibi yaniltici bir hatayla kalirdi.
+    """
+    api.connectors = [FakeConnector(name="fake", tasks=2)]
+    case_id = await api.create_case(name="Planner Connector Yok")
+    scan_id = await api.start_scan(case_id, mode="O2")
+
+    assert (await api.scan_status(scan_id))["status"] == "completed"
+    assert _planner_params(await api.scan_task_rows(scan_id)) == []
+    # Connector gorevleri bundan etkilenmez
+    assert len(await api.scan_task_rows(scan_id)) == 2
+
+
+@pytest.mark.asyncio
+async def test_planner_gorevleri_ayni_entity_i_cogaltmaz(api: ApiHarness):
+    """Review Focus #5: ayni sonuc iki kez entity yazmamali."""
+    search = FakeSearchConnector()
+    api.connectors = [FakeConnector(name="fake", tasks=2), search]
+    case_id = await api.create_case(name="Planner Entity Dedupe")
+    scan_id = await api.start_scan(case_id, mode="O2")
+
+    assert (await api.scan_status(scan_id))["status"] == "completed"
+    assert len(_planner_params(await api.scan_task_rows(scan_id))) > 1
+    assert len(search.queries) > 1, "planner gorevleri gercekten calismadi"
+
+    async with api.factory() as session:
+        duplicated = (
+            await session.execute(
+                select(DbEntity.url, func.count().label("c"))
+                .where(DbEntity.case_id == case_id, DbEntity.url.is_not(None))
+                .group_by(DbEntity.url)
+                .having(func.count() > 1)
+            )
+        ).all()
+        shared_ids = list(
+            (
+                await session.execute(
+                    select(DbEntity.id).where(
+                        DbEntity.case_id == case_id, DbEntity.url == SHARED_HIT_URL
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert duplicated == [], f"ayni URL birden fazla entity satiri: {duplicated}"
+    assert shared_ids == ["web:shared_handle"], shared_ids
+
+
+@pytest.mark.asyncio
+async def test_planner_log_mesaji_eklenen_gorev_sayisini_yazar(
+    api: ApiHarness, monkeypatch
+):
+    """Log, plandaki sorgu sayisini degil **eklenen** gorev sayisini soyler."""
+    logs: list[str] = []
+    original = event_broadcaster.broadcast
+
+    async def _record(scan_id: str, event_type: str, data: dict) -> None:
+        if event_type == "log":
+            logs.append(str(data.get("message") or ""))
+        await original(scan_id, event_type, data)
+
+    monkeypatch.setattr(event_broadcaster, "broadcast", _record)
+
+    api.connectors = [FakeConnector(name="fake", tasks=2), FakeSearchConnector()]
+    case_id = await api.create_case(name="Planner Log")
+    scan_id = await api.start_scan(case_id, mode="O2")
+    assert (await api.scan_status(scan_id))["status"] == "completed"
+
+    planner_count = len(_planner_params(await api.scan_task_rows(scan_id)))
+    assert planner_count > 0
+    assert any(f"{planner_count} arama görevi" in message for message in logs), logs
+    assert not any("hedefli sorgu üretildi" in message for message in logs), (
+        f"eski iyimser log metni kalmamali: {logs}"
+    )
