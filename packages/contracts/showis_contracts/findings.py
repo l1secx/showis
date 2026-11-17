@@ -7,6 +7,9 @@ from .enums import FindingStatus, Platform
 
 class ConfidenceBreakdown(BaseModel):
     username_exact_match: float = 0.0
+    #: Tek platformda birebir handle eşleşmesi (handle-only hedef); çok platformlu
+    #: eşleşme `username_exact_match`'e aittir, ikisi aynı kanıt için verilmez.
+    handle_exact: float = 0.0
     name_similarity: float = 0.0
     cross_link: float = 0.0
     bio_location_company: float = 0.0

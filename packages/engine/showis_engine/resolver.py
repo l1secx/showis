@@ -80,16 +80,30 @@ class Resolver:
         ):
             breakdown.username_exact_match = 0.30
 
-        # 2. name_similarity (0.20)
+        # 2. handle_exact (0.15): tek platformda birebir handle eşleşmesi.
+        #    Yalnız `username_platform_count == 1` için verilir; çok platformlu
+        #    eşleşmenin kanıtı zaten `username_exact_match`'te — aynı kanıt iki
+        #    sinyal olarak sayılmaz. Handle `attributes["username"]`'de olmayabilir
+        #    (GitHub profil entity'leri yalnız `label` taşır), o yüzden `label`
+        #    yedeği kullanılır.
+        if breakdown.username_exact_match == 0 and username_platform_count == 1:
+            target_handle = normalize_turkish(target.nickname)
+            candidate_handle = normalize_turkish(
+                str(attrs.get("username") or entity.label or "")
+            )
+            if target_handle and target_handle == candidate_handle:
+                breakdown.handle_exact = 0.15
+
+        # 3. name_similarity (0.20)
         target_fullname = f"{target.first_name} {target.last_name}"
         candidate_name = attrs.get("name") or attrs.get("search_title")
         breakdown.name_similarity = calculate_name_similarity(target_fullname, candidate_name)
 
-        # 3. cross_link (0.25)
+        # 4. cross_link (0.25)
         if has_cross_link:
             breakdown.cross_link = 0.25
 
-        # 4. bio_location_company (0.15: 0.05 per field)
+        # 5. bio_location_company (0.15: 0.05 per field)
         bio_matches = 0
         target_hints = target.hints
         if target_hints.get("city") and attrs.get("location"):
@@ -114,15 +128,15 @@ class Resolver:
                 bio_matches += 1
         breakdown.bio_location_company = round(min(bio_matches, 3) * 0.05, 2)
 
-        # 5. commit_email_or_pgp (0.15)
+        # 6. commit_email_or_pgp (0.15)
         if email_or_pgp_match:
             breakdown.commit_email_or_pgp = 0.15
 
-        # 6. avatar_exact_hash (0.10)
+        # 7. avatar_exact_hash (0.10)
         if avatar_match:
             breakdown.avatar_exact_hash = 0.10
 
-        # 7. contradiction (-0.20)
+        # 8. contradiction (-0.20)
         if not has_contradiction and self.detect_contradiction(target, attrs):
             has_contradiction = True
         if has_contradiction:
@@ -131,6 +145,7 @@ class Resolver:
         # Total clamped between 0.0 and 1.0
         total_score = (
             breakdown.username_exact_match
+            + breakdown.handle_exact
             + breakdown.name_similarity
             + breakdown.cross_link
             + breakdown.bio_location_company
@@ -157,13 +172,15 @@ class Resolver:
         auth_reasons = list(auth.reasons)
 
         # Status threshold: >=0.80 CONFIRMED, 0.50-0.79 CANDIDATE,
-        # isim/okul benzerligi olan dusuk skorlar LEAD (ipucu), gerisi REJECTED.
+        # isim/okul/handle benzerligi olan dusuk skorlar LEAD (ipucu), gerisi REJECTED.
         if total_score >= 0.80:
             status = FindingStatus.CONFIRMED
         elif total_score >= 0.50:
             status = FindingStatus.CANDIDATE
         elif not has_contradiction and (
-            breakdown.name_similarity > 0 or breakdown.bio_location_company > 0
+            breakdown.name_similarity > 0
+            or breakdown.bio_location_company > 0
+            or breakdown.handle_exact > 0
         ):
             status = FindingStatus.LEAD
         else:

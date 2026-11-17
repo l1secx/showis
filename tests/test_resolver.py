@@ -151,3 +151,90 @@ def test_authenticity_skoru_statusu_degistirmez(authenticity):
         assert finding.authenticity is not None  # resolver kendi hesaplar
     else:
         assert finding.authenticity == pytest.approx(authenticity)
+
+
+# ---------------------------------------------------------------------------
+# Task 6: handle_exact — tek platformda birebir handle eşleşmesi (LEAD)
+# ---------------------------------------------------------------------------
+
+
+def _handle_target(nickname: str = "kerem") -> Target:
+    return Target(kind="handle", nickname=nickname)
+
+
+def _handle_entity(
+    *, label: str = "kerem", platform: Platform = Platform.GITHUB, **attrs
+) -> Entity:
+    return Entity(
+        id=f"{platform.value}:{label}",
+        type=EntityType.ACCOUNT,
+        platform=platform,
+        label=label,
+        attributes=dict(attrs),
+    )
+
+
+def test_single_platform_exact_handle_is_a_lead():
+    f = Resolver().resolve_entity(
+        _handle_entity(label="kerem", username="kerem"),
+        _handle_target("kerem"),
+        "c",
+        "s",
+        username_platform_count=1,
+    )
+    assert f.breakdown.handle_exact == 0.15
+    assert f.breakdown.username_exact_match == 0.0
+    assert f.score == 0.15
+    assert f.status == FindingStatus.LEAD
+
+
+def test_two_platforms_use_username_exact_not_handle_exact():
+    f = Resolver().resolve_entity(
+        _handle_entity(label="kerem", username="kerem"),
+        _handle_target("kerem"),
+        "c",
+        "s",
+        username_platform_count=2,
+    )
+    assert f.breakdown.username_exact_match == 0.30
+    assert f.breakdown.handle_exact == 0.0
+    assert f.score == 0.30
+
+
+def test_handle_exact_falls_back_to_label_when_username_missing():
+    """GitHub profil entity'leri yalnız `label` taşır (attrs'ta username yok)."""
+    f = Resolver().resolve_entity(
+        _handle_entity(label="Kerem"),
+        _handle_target("kerem"),
+        "c",
+        "s",
+        username_platform_count=1,
+    )
+    assert f.breakdown.handle_exact == 0.15
+    assert f.status == FindingStatus.LEAD
+
+
+def test_handle_exact_ignores_mismatched_handle():
+    f = Resolver().resolve_entity(
+        _handle_entity(label="someoneelse", username="someoneelse"),
+        _handle_target("kerem"),
+        "c",
+        "s",
+        username_platform_count=1,
+    )
+    assert f.breakdown.handle_exact == 0.0
+    assert f.status == FindingStatus.REJECTED
+
+
+@pytest.mark.parametrize("nickname", ["", "   ", "@"])
+def test_empty_nickname_never_matches_handle(nickname):
+    """Boş nick normalize edilince boş kalır; boş handle eşleşme sayılmaz."""
+    f = Resolver().resolve_entity(
+        _handle_entity(label="", username=""),
+        Target(kind="handle", nickname=nickname),
+        "c",
+        "s",
+        username_platform_count=1,
+    )
+    assert f.breakdown.handle_exact == 0.0
+    assert f.status == FindingStatus.REJECTED
