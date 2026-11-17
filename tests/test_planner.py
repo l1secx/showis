@@ -23,6 +23,152 @@ def test_planner_fallback_templates():
     assert any("site:hackthebox.com" in q for q in query_strings)
 
 
+# ---------------------------------------------------------------------------
+# Faz 1 = A: handle-farkında planlama
+# ---------------------------------------------------------------------------
+
+
+def name_target(first: str, last: str, nickname: str = "") -> Target:
+    return Target(kind="name", first_name=first, last_name=last, nickname=nickname)
+
+
+def handle_target(nickname: str) -> Target:
+    return Target(kind="handle", nickname=nickname)
+
+
+def _site_operands(plan: QueryPlan) -> set[str]:
+    """`"{terim}" site:...` biçimindeki sorguların site operandlarını toplar."""
+    operands: set[str] = set()
+    for q in plan.queries:
+        _, _, rest = q.query.partition('" ')
+        if rest.startswith("site:"):
+            operands.add(rest)
+    return operands
+
+
+def test_handle_mode_plans_nick_queries_only():
+    plan = build_template_fallback_queries(
+        handle_target("kerem"), generate_variants("", "", {}, nickname="kerem")
+    )
+    queries = [q.query for q in plan.queries]
+    assert queries and all("kerem" in q for q in queries)
+    assert not any('""' in q for q in queries)
+    assert not any("Kerem" in q for q in queries)
+
+
+def test_handle_mode_kapsami_isim_yoluyla_ayni():
+    name_plan = build_template_fallback_queries(name_target("Kerem", "Boz"), None)
+    handle_plan = build_template_fallback_queries(handle_target("kerem"), None)
+
+    assert _site_operands(handle_plan) == _site_operands(name_plan)
+    handle_queries = [q.query for q in handle_plan.queries]
+    assert '"kerem" site:github.com' in handle_queries
+    assert '"kerem" site:gitlab.com' in handle_queries
+    # platform-bağımsız sorgu da üretilir
+    assert '"kerem"' in handle_queries
+    assert all(q.rationale for q in handle_plan.queries)
+    assert all(q.priority for q in handle_plan.queries)
+
+
+def test_name_mode_plan_is_unchanged():
+    plan = build_template_fallback_queries(name_target("Kerem", "Boz"), None)
+    assert plan.queries[0].query == '"Kerem Boz" site:github.com'
+
+
+def test_name_mode_nick_sorgulari_sonuna_eklenir():
+    base = build_template_fallback_queries(name_target("Kerem", "Boz"), None)
+    with_nick = build_template_fallback_queries(name_target("Kerem", "Boz", "kb"), None)
+
+    base_queries = [q.query for q in base.queries]
+    assert [q.query for q in with_nick.queries[: len(base_queries)]] == base_queries
+    tail = [q.query for q in with_nick.queries[len(base_queries) :]]
+    assert '"kb" site:github.com' in tail
+    assert '"kb"' in tail
+    assert not any('""' in q for q in with_nick.queries)
+
+
+def test_template_queries_pass_finalize_query():
+    from showis_engine.planner import finalize_query
+
+    plan = build_template_fallback_queries(handle_target("kerem"), None)
+    assert all(q.query == finalize_query(q.query) for q in plan.queries)
+
+
+def test_template_gate_isim_yolunda_da_uygulanir():
+    from showis_engine.planner import finalize_query
+
+    plan = build_template_fallback_queries(
+        name_target("Kerem", "Boz", "kb"),
+        generate_variants("Kerem", "Boz", nickname="kb"),
+    )
+    assert all(q.query == finalize_query(q.query) for q in plan.queries)
+
+
+def test_nicksiz_handle_sorgu_uretmez():
+    """Nick normalize edilemiyorsa bozuk sorgu değil, hiç sorgu üretilmez."""
+    for target in (handle_target(""), handle_target("@"), handle_target('"')):
+        assert build_template_fallback_queries(target, None).queries == []
+
+
+def test_yasak_desene_takilan_sablon_sorgulari_atlanir():
+    """finalize_query fırlatırsa o sorgu plana girmez (tüm şablon yolu)."""
+    assert build_template_fallback_queries(handle_target("leak"), None).queries == []
+
+
+def test_prompt_handle_kuralini_tasir():
+    from showis_llm import render_prompt
+
+    rendered = render_prompt(
+        "query_planner",
+        first_name="",
+        last_name="",
+        hints={},
+        variants=["kerem"],
+        kind="handle",
+        nickname="kerem",
+    )
+    assert "handle" in rendered
+    assert "kerem" in rendered
+    assert "uydurma" in rendered
+
+
+@pytest.mark.asyncio
+async def test_planner_llm_promptuna_kind_ve_nickname_koyar():
+    target = handle_target("kerem")
+    variants = generate_variants("", "", {}, nickname="kerem")
+    llm = LLMClient(
+        base_url="https://api.openai.com/v1",
+        api_key="sk-dummy",
+        model="gpt-4o-mini",
+        session_id="test",
+    )
+    planner = QueryPlanner(llm_client=llm)
+    mock_plan = {
+        "queries": [
+            {
+                "query": '"kerem" site:github.com',
+                "platform": "github",
+                "rationale": "Nick araması",
+                "priority": 1,
+            }
+        ]
+    }
+
+    with respx.mock(assert_all_called=True) as mock:
+        endpoint = mock.post("https://api.openai.com/v1/chat/completions").respond(
+            200,
+            json={
+                "choices": [{"message": {"role": "assistant", "content": json.dumps(mock_plan)}}]
+            },
+        )
+        plan = await planner.plan(target, variants)
+
+    prompt = json.loads(endpoint.calls[0].request.content)["messages"][0]["content"]
+    assert "handle" in prompt
+    assert "kerem" in prompt
+    assert plan.queries[0].query == '"kerem" site:github.com'
+
+
 @pytest.mark.asyncio
 async def test_planner_with_llm():
     target = Target(first_name="Selin", last_name="Kara")

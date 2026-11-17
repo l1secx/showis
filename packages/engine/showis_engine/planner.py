@@ -76,6 +76,243 @@ _VARIANT_OR_TERMS: tuple[str, ...] = (
     "rootme",
 )
 
+#: `"{terim}" <site>` biçiminde üretilen platform sorguları. İsim ve nick yolu
+#: **aynı** tabloyu kullanır; tek fark gerekçe metnidir ("tam isim araması" →
+#: "nick araması"). Böylece handle modu isim yoluyla aynı platform kapsamına
+#: sahip olur (tek kaynak, iki dil).
+#: (site operatörü, platform, isim yolu gerekçesi, öncelik)
+_PLATFORM_QUERIES: tuple[tuple[str, Platform, str, int], ...] = (
+    # --- Derin connector'lar (Tier A) ---
+    ("site:github.com", Platform.GITHUB, "GitHub üzerinde tam isim araması", 1),
+    ("site:gitlab.com", Platform.GITLAB, "GitLab üzerinde tam isim araması", 1),
+    ("site:keybase.io", Platform.KEYBASE, "Keybase üzerinde tam isim araması", 1),
+    ("site:reddit.com", Platform.REDDIT, "Reddit üzerinde tam isim araması", 1),
+    ("site:dev.to", Platform.DEVTO, "Dev.to üzerinde tam isim araması", 1),
+    ("site:news.ycombinator.com", Platform.HACKERNEWS, "HackerNews üzerinde tam isim araması", 1),
+    ("site:npmjs.com", Platform.NPM, "NPM üzerinde tam isim araması", 1),
+    ("site:pypi.org", Platform.PYPI, "PyPI üzerinde tam isim araması", 1),
+    ("site:hub.docker.com", Platform.DOCKERHUB, "DockerHub üzerinde tam isim araması", 1),
+    ("site:chess.com", Platform.CHESS, "Chess.com üzerinde tam isim araması", 1),
+    ("site:steamcommunity.com", Platform.STEAM, "Steam üzerinde tam isim araması", 1),
+    ("site:gravatar.com", Platform.GRAVATAR, "Gravatar üzerinde tam isim araması", 1),
+    # --- CTF / hacking platformlari ---
+    ("site:tryhackme.com", Platform.TRYHACKME, "TryHackMe üzerinde tam isim araması", 2),
+    ("site:hackthebox.com", Platform.HACKTHEBOX, "HackTheBox üzerinde tam isim araması", 2),
+    ("site:root-me.org", Platform.ROOTME, "Root-ME üzerinde tam isim araması", 2),
+    # --- Sosyal platformlar (login duvarı nedeniyle daha düşük öncelik) ---
+    (
+        "site:linkedin.com",
+        Platform.WEB,
+        "LinkedIn üzerinde tam isim araması (herkese açık sayfalar)",
+        2,
+    ),
+    ("site:twitter.com OR site:x.com", Platform.WEB, "Twitter/X üzerinde tam isim araması", 2),
+    ("site:instagram.com", Platform.WEB, "Instagram üzerinde tam isim araması", 2),
+    ("site:facebook.com", Platform.WEB, "Facebook üzerinde tam isim araması", 2),
+    ("site:tiktok.com", Platform.WEB, "TikTok üzerinde tam isim araması", 2),
+    ("site:threads.net", Platform.WEB, "Threads üzerinde tam isim araması", 2),
+    # --- Gelistirme / teknoloji platformlari ---
+    ("site:medium.com", Platform.MEDIUM, "Medium üzerinde tam isim araması", 2),
+    ("site:behance.net", Platform.BEHANCE, "Behance üzerinde tam isim araması", 2),
+    ("site:dribbble.com", Platform.DRIBBBLE, "Dribbble üzerinde tam isim araması", 2),
+    ("site:codepen.io", Platform.CODEPEN, "CodePen üzerinde tam isim araması", 2),
+    ("site:codewars.com", Platform.CODEWARS, "Codewars üzerinde tam isim araması", 2),
+    ("site:kaggle.com", Platform.KAGGLE, "Kaggle üzerinde tam isim araması", 2),
+    ("site:bitbucket.org", Platform.BITBUCKET, "Bitbucket üzerinde tam isim araması", 2),
+    ("site:codeberg.org", Platform.CODEBERG, "Codeberg üzerinde tam isim araması", 2),
+    ("site:hashnode.com", Platform.HASHNODE, "Hashnode üzerinde tam isim araması", 2),
+    # --- Paket / kod depolari ---
+    ("site:rubygems.org", Platform.RUBYGEMS, "RubyGems üzerinde tam isim araması", 2),
+    ("site:nuget.org", Platform.NUGET, "NuGet üzerinde tam isim araması", 2),
+    ("site:packagist.org", Platform.PACKAGIST, "Packagist üzerinde tam isim araması", 2),
+    (
+        "site:marketplace.visualstudio.com",
+        Platform.VSMARKET,
+        "VS Marketplace üzerinde tam isim araması",
+        2,
+    ),
+    # --- Oyun / medya / icerik platformlari ---
+    ("site:youtube.com", Platform.YOUTUBE, "YouTube üzerinde tam isim araması", 2),
+    ("site:myanimelist.net", Platform.MYANIMELIST, "MyAnimeList üzerinde tam isim araması", 2),
+    ("site:letterboxd.com", Platform.LETTERBOXD, "Letterboxd üzerinde tam isim araması", 2),
+    ("site:goodreads.com", Platform.GOODREADS, "Goodreads üzerinde tam isim araması", 2),
+    ("site:soundcloud.com", Platform.SOUNDCLOUD, "SoundCloud üzerinde tam isim araması", 2),
+    ("site:wattpad.com", Platform.WATTPAD, "Wattpad üzerinde tam isim araması", 2),
+    ("site:flickr.com", Platform.FLICKR, "Flickr üzerinde tam isim araması", 2),
+    ("site:musicbrainz.org", Platform.MUSICBRAINZ, "MusicBrainz üzerinde tam isim araması", 2),
+    ("site:9gag.com", Platform.NINEGAG, "9GAG üzerinde tam isim araması", 2),
+    ("site:speakerdeck.com", Platform.SPEAKERDECK, "SpeakerDeck üzerinde tam isim araması", 2),
+    # --- Fediverse / sosyal (instance-bazli) ---
+    (
+        "site:mastodon.social",
+        Platform.MASTODON,
+        "Mastodon (mastodon.social) üzerinde tam isim araması",
+        2,
+    ),
+    (
+        "site:pixelfed.social",
+        Platform.PIXELFED,
+        "Pixelfed (pixelfed.social) üzerinde tam isim araması",
+        2,
+    ),
+    # --- Yeni sosyal API'ler ---
+    ("site:bsky.app", Platform.BLUESKY, "Bluesky üzerinde tam isim araması", 2),
+    ("site:huggingface.co", Platform.HUGGINGFACE, "HuggingFace üzerinde tam isim araması", 2),
+    ("site:kitsu.io", Platform.KITSU, "Kitsu üzerinde tam isim araması", 2),
+    ("site:wordpress.com", Platform.WORDPRESS, "WordPress.com blog üzerinde tam isim araması", 2),
+)
+
+#: Şablon planının **birincil** blok tavanı (mevcut davranış korunur). Nick ve
+#: platform-bağımsız sorgular bu tavanın dışında eklenir; böylece 50 satırlık
+#: site tablosu tavanı tek başına doldursa bile nick sorguları kaybolmaz.
+_MAX_TEMPLATE_QUERIES = 50
+
+
+def _nickname_term(target: Target) -> str:
+    """Hedefin nick'ini sorguya güvenle konabilecek biçime getirir.
+
+    Baştaki ``@`` atılır; tırnak/operatör/negasyon :func:`sanitize_hint` ile
+    nötralize edilir. Normalize sonucu boşsa "" döner (o zaman hiç nick sorgusu
+    üretilmez).
+    """
+    raw = str(target.nickname or "").strip().lstrip("@").strip()
+    if not raw:
+        return ""
+    return sanitize_hint(raw)
+
+
+def _site_queries(term: str, *, nickname: bool = False) -> list[SearchQuery]:
+    """Platform bazlı `"{terim}" site:...` sorguları.
+
+    ``term`` boşsa hiç sorgu üretilmez: `"" site:github.com` gibi bozuk sorgu
+    hiçbir koşulda plana girmez. ``nickname=True`` gerekçe metnini nick diline
+    çevirir.
+    """
+    if not term:
+        return []
+    queries: list[SearchQuery] = []
+    for site, platform, rationale, priority in _PLATFORM_QUERIES:
+        queries.append(
+            SearchQuery(
+                query=f'"{term}" {site}',
+                platform=platform,
+                rationale=rationale.replace("tam isim", "nick") if nickname else rationale,
+                priority=priority,
+            )
+        )
+    return queries
+
+
+def _agnostic_nick_query(nick: str) -> list[SearchQuery]:
+    """Platform-bağımsız geniş nick sorgusu (`"nick"`)."""
+    if not nick:
+        return []
+    return [
+        SearchQuery(
+            query=f'"{nick}"',
+            platform=Platform.WEB,
+            rationale="Web genelinde nick araması",
+            priority=3,
+        )
+    ]
+
+
+def _nickname_queries(nick: str) -> list[SearchQuery]:
+    """Nick sorgu bloğu: platform kapsamı + platform-bağımsız geniş sorgu."""
+    queries = _site_queries(nick, nickname=True)
+    queries.extend(_agnostic_nick_query(nick))
+    return queries
+
+
+def _generic_name_queries(fullname: str) -> list[SearchQuery]:
+    """Domain-bağımsız isim + anahtar sözcük sorguları."""
+    if not fullname:
+        return []
+    return [
+        SearchQuery(
+            query=f'"{fullname}" {keyword}',
+            platform=Platform.WEB,
+            rationale=f"Web genelinde isim ve {keyword} anahtarı araması",
+            priority=3,
+        )
+        for keyword in ("github", "developer", "engineer")
+    ]
+
+
+def _combined_name_queries(ad: str, soyad: str) -> list[SearchQuery]:
+    """Birleşik ad-soyad (username) biçimleri — yalnız iki alan da doluysa."""
+    if not ad or not soyad:
+        return []
+    patterns = (
+        (f"{ad}{soyad}", "Birleşik ad soyad araması"),
+        (f"{ad}.{soyad}", "Noktalı ad soyad araması"),
+        (f"{ad}_{soyad}", "Alt çizgili ad soyad araması"),
+        (f"{ad}-{soyad}", "Tireli ad soyad araması"),
+    )
+    return [
+        SearchQuery(
+            query=f'"{pattern}" github',
+            platform=Platform.WEB,
+            rationale=rationale,
+            priority=3,
+        )
+        for pattern, rationale in patterns
+    ]
+
+
+def _profile_queries(ad: str) -> list[SearchQuery]:
+    """CTF platformlarında profil araması (yalnız ad varsa: `""` üretilmez)."""
+    if not ad:
+        return []
+    return [
+        SearchQuery(
+            query=f'site:tryhackme.com/p "{ad}"',
+            platform=Platform.TRYHACKME,
+            rationale="TryHackMe profil arama (isim)",
+            priority=4,
+        ),
+        SearchQuery(
+            query=f'site:hackthebox.com/profile "{ad}"',
+            platform=Platform.HACKTHEBOX,
+            rationale="HackTheBox profil arama (isim)",
+            priority=4,
+        ),
+    ]
+
+
+def _variant_queries(variants: VariantSet | None) -> list[SearchQuery]:
+    """Varyant kullanıcı adları için geniş OR sorguları."""
+    if not variants or not variants.variants:
+        return []
+    return [
+        SearchQuery(
+            query=f'"{v.username}" ({" OR ".join(_VARIANT_OR_TERMS)})',
+            platform=Platform.WEB,
+            rationale=f"Varyant kullanıcı adı araması: {v.username}",
+            priority=4,
+        )
+        for v in variants.variants[:15]
+    ]
+
+
+def _finalize_queries(queries: list[SearchQuery]) -> list[SearchQuery]:
+    """Şablon çıktısının **tek** son kapısı (T-377/SEC-10).
+
+    Her sorgu :func:`finalize_query` ile süzülür; boş/çok kısa sorgu
+    (``ValueError``) veya yasak desen (``PolicyViolationError``) o sorguyu
+    düşürür. ``sanitize_query`` arama operatörlerini koruduğu için mevcut şablon
+    sorguları bayt bayt aynı kalır.
+    """
+    finalized: list[SearchQuery] = []
+    for q in queries:
+        try:
+            cleaned = finalize_query(q.query)
+        except (ValueError, PolicyViolationError):
+            logger.debug("Şablon sorgusu elendi: %r", q.query)
+            continue
+        finalized.append(q.model_copy(update={"query": cleaned}))
+    return finalized
+
 
 def build_template_fallback_queries(
     target: Target, variants: VariantSet | None = None
@@ -90,448 +327,42 @@ def build_template_fallback_queries(
     Goodreads, SoundCloud, CodePen, CodeWars, Behance, Dribbble, About.me, Linktree,
     Telegram, VK, Lichess, Duolingo, Tumblr, itch.io, Substack, DeviantArt, Bitbucket,
     Codeberg, Hashnode, Kaggle, RootMe.
+
+    Handle modu (``target.kind == "handle"`` ya da ad/soyad birlikte boş): isim
+    biçimli sorgu **üretilmez**; aynı platform kapsamı nick ile kurulur
+    (``"{nick}" site:github.com``, …) ve platform-bağımsız ``"{nick}"`` sorgusu
+    eklenir. İsim modunda nick varsa mevcut isim sorguları **aynen** korunur,
+    nick sorguları listenin sonuna eklenir.
     """
     fullname = f"{target.first_name} {target.last_name}".strip()
     ad = target.first_name.strip()
     soyad = target.last_name.strip()
+    nick = _nickname_term(target)
+    # Handle modu: hedef nick ile tanımlı ya da ad/soyad hiç yok. Bu modda
+    # `"" site:github.com` gibi bozuk isim sorgusu üretilmez.
+    handle_mode = target.kind == "handle" or not fullname
 
     queries: list[SearchQuery] = []
+    if handle_mode:
+        # `_site_queries` 50 satırlık tabloyu üretir; tavan tek başına dolduğu
+        # için varyantlar burada da plana giremez (isim yolundaki davranışın aynısı).
+        queries.extend(_site_queries(nick, nickname=True))
+        queries.extend(_variant_queries(variants))
+        queries = queries[:_MAX_TEMPLATE_QUERIES]
+        # Platform-bağımsız geniş sorgu tavan dışında: tablo tavanı doldursa
+        # bile handle modunun son çare kapsamı kaybolmaz.
+        queries.extend(_agnostic_nick_query(nick))
+    else:
+        queries.extend(_site_queries(fullname))
+        queries.extend(_generic_name_queries(fullname))
+        queries.extend(_combined_name_queries(ad, soyad))
+        queries.extend(_profile_queries(ad))
+        queries.extend(_variant_queries(variants))
+        queries = queries[:_MAX_TEMPLATE_QUERIES]
+        # İsim sorguları aynen korunur; nick sorguları listenin sonuna eklenir.
+        queries.extend(_nickname_queries(nick))
 
-    # --- Derin connector'lar (Tier A) ---
-    queries.extend(
-        [
-            SearchQuery(
-                query=f'"{fullname}" site:github.com',
-                platform=Platform.GITHUB,
-                rationale="GitHub üzerinde tam isim araması",
-                priority=1,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:gitlab.com',
-                platform=Platform.GITLAB,
-                rationale="GitLab üzerinde tam isim araması",
-                priority=1,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:keybase.io',
-                platform=Platform.KEYBASE,
-                rationale="Keybase üzerinde tam isim araması",
-                priority=1,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:reddit.com',
-                platform=Platform.REDDIT,
-                rationale="Reddit üzerinde tam isim araması",
-                priority=1,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:dev.to',
-                platform=Platform.DEVTO,
-                rationale="Dev.to üzerinde tam isim araması",
-                priority=1,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:news.ycombinator.com',
-                platform=Platform.HACKERNEWS,
-                rationale="HackerNews üzerinde tam isim araması",
-                priority=1,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:npmjs.com',
-                platform=Platform.NPM,
-                rationale="NPM üzerinde tam isim araması",
-                priority=1,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:pypi.org',
-                platform=Platform.PYPI,
-                rationale="PyPI üzerinde tam isim araması",
-                priority=1,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:hub.docker.com',
-                platform=Platform.DOCKERHUB,
-                rationale="DockerHub üzerinde tam isim araması",
-                priority=1,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:chess.com',
-                platform=Platform.CHESS,
-                rationale="Chess.com üzerinde tam isim araması",
-                priority=1,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:steamcommunity.com',
-                platform=Platform.STEAM,
-                rationale="Steam üzerinde tam isim araması",
-                priority=1,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:gravatar.com',
-                platform=Platform.GRAVATAR,
-                rationale="Gravatar üzerinde tam isim araması",
-                priority=1,
-            ),
-        ]
-    )
-
-    # --- CTF / hacking platformlari ---
-    queries.extend(
-        [
-            SearchQuery(
-                query=f'"{fullname}" site:tryhackme.com',
-                platform=Platform.TRYHACKME,
-                rationale="TryHackMe üzerinde tam isim araması",
-                priority=2,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:hackthebox.com',
-                platform=Platform.HACKTHEBOX,
-                rationale="HackTheBox üzerinde tam isim araması",
-                priority=2,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:root-me.org',
-                platform=Platform.ROOTME,
-                rationale="Root-ME üzerinde tam isim araması",
-                priority=2,
-            ),
-        ]
-    )
-
-    # --- Sosyal platformlar (login duvarı nedeniyle daha düşük öncelik ---
-    #    ancak isim araması bazen halka açık sayfalara dönebilir)
-    queries.extend(
-        [
-            SearchQuery(
-                query=f'"{fullname}" site:linkedin.com',
-                platform=Platform.WEB,
-                rationale="LinkedIn üzerinde tam isim araması (herkese açık sayfalar)",
-                priority=2,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:twitter.com OR site:x.com',
-                platform=Platform.WEB,
-                rationale="Twitter/X üzerinde tam isim araması",
-                priority=2,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:instagram.com',
-                platform=Platform.WEB,
-                rationale="Instagram üzerinde tam isim araması",
-                priority=2,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:facebook.com',
-                platform=Platform.WEB,
-                rationale="Facebook üzerinde tam isim araması",
-                priority=2,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:tiktok.com',
-                platform=Platform.WEB,
-                rationale="TikTok üzerinde tam isim araması",
-                priority=2,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:threads.net',
-                platform=Platform.WEB,
-                rationale="Threads üzerinde tam isim araması",
-                priority=2,
-            ),
-        ]
-    )
-
-    # --- Gelistirme / teknoloji platformlari ---
-    queries.extend(
-        [
-            SearchQuery(
-                query=f'"{fullname}" site:medium.com',
-                platform=Platform.MEDIUM,
-                rationale="Medium üzerinde tam isim araması",
-                priority=2,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:behance.net',
-                platform=Platform.BEHANCE,
-                rationale="Behance üzerinde tam isim araması",
-                priority=2,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:dribbble.com',
-                platform=Platform.DRIBBBLE,
-                rationale="Dribbble üzerinde tam isim araması",
-                priority=2,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:codepen.io',
-                platform=Platform.CODEPEN,
-                rationale="CodePen üzerinde tam isim araması",
-                priority=2,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:codewars.com',
-                platform=Platform.CODEWARS,
-                rationale="Codewars üzerinde tam isim araması",
-                priority=2,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:kaggle.com',
-                platform=Platform.KAGGLE,
-                rationale="Kaggle üzerinde tam isim araması",
-                priority=2,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:bitbucket.org',
-                platform=Platform.BITBUCKET,
-                rationale="Bitbucket üzerinde tam isim araması",
-                priority=2,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:codeberg.org',
-                platform=Platform.CODEBERG,
-                rationale="Codeberg üzerinde tam isim araması",
-                priority=2,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:hashnode.com',
-                platform=Platform.HASHNODE,
-                rationale="Hashnode üzerinde tam isim araması",
-                priority=2,
-            ),
-        ]
-    )
-
-    # --- Paket / kod depolari ---
-    queries.extend(
-        [
-            SearchQuery(
-                query=f'"{fullname}" site:rubygems.org',
-                platform=Platform.RUBYGEMS,
-                rationale="RubyGems üzerinde tam isim araması",
-                priority=2,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:nuget.org',
-                platform=Platform.NUGET,
-                rationale="NuGet üzerinde tam isim araması",
-                priority=2,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:packagist.org',
-                platform=Platform.PACKAGIST,
-                rationale="Packagist üzerinde tam isim araması",
-                priority=2,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:marketplace.visualstudio.com',
-                platform=Platform.VSMARKET,
-                rationale="VS Marketplace üzerinde tam isim araması",
-                priority=2,
-            ),
-        ]
-    )
-
-    # --- Oyun / medya / icerik platformlari ---
-    queries.extend(
-        [
-            SearchQuery(
-                query=f'"{fullname}" site:youtube.com',
-                platform=Platform.YOUTUBE,
-                rationale="YouTube üzerinde tam isim araması",
-                priority=2,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:myanimelist.net',
-                platform=Platform.MYANIMELIST,
-                rationale="MyAnimeList üzerinde tam isim araması",
-                priority=2,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:letterboxd.com',
-                platform=Platform.LETTERBOXD,
-                rationale="Letterboxd üzerinde tam isim araması",
-                priority=2,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:goodreads.com',
-                platform=Platform.GOODREADS,
-                rationale="Goodreads üzerinde tam isim araması",
-                priority=2,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:soundcloud.com',
-                platform=Platform.SOUNDCLOUD,
-                rationale="SoundCloud üzerinde tam isim araması",
-                priority=2,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:wattpad.com',
-                platform=Platform.WATTPAD,
-                rationale="Wattpad üzerinde tam isim araması",
-                priority=2,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:flickr.com',
-                platform=Platform.FLICKR,
-                rationale="Flickr üzerinde tam isim araması",
-                priority=2,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:musicbrainz.org',
-                platform=Platform.MUSICBRAINZ,
-                rationale="MusicBrainz üzerinde tam isim araması",
-                priority=2,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:9gag.com',
-                platform=Platform.NINEGAG,
-                rationale="9GAG üzerinde tam isim araması",
-                priority=2,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:speakerdeck.com',
-                platform=Platform.SPEAKERDECK,
-                rationale="SpeakerDeck üzerinde tam isim araması",
-                priority=2,
-            ),
-        ]
-    )
-
-    # --- Fediverse / sosyal (instance-bazli) ---
-    queries.extend(
-        [
-            SearchQuery(
-                query=f'"{fullname}" site:mastodon.social',
-                platform=Platform.MASTODON,
-                rationale="Mastodon (mastodon.social) üzerinde tam isim araması",
-                priority=2,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:pixelfed.social',
-                platform=Platform.PIXELFED,
-                rationale="Pixelfed (pixelfed.social) üzerinde tam isim araması",
-                priority=2,
-            ),
-        ]
-    )
-
-    # --- Yeni sosyal API'ler ---
-    queries.extend(
-        [
-            SearchQuery(
-                query=f'"{fullname}" site:bsky.app',
-                platform=Platform.BLUESKY,
-                rationale="Bluesky üzerinde tam isim araması",
-                priority=2,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:huggingface.co',
-                platform=Platform.HUGGINGFACE,
-                rationale="HuggingFace üzerinde tam isim araması",
-                priority=2,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:kitsu.io',
-                platform=Platform.KITSU,
-                rationale="Kitsu üzerinde tam isim araması",
-                priority=2,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" site:wordpress.com',
-                platform=Platform.WORDPRESS,
-                rationale="WordPress.com blog üzerinde tam isim araması",
-                priority=2,
-            ),
-        ]
-    )
-
-    # --- Genel web (domain-agnotic) ---
-    queries.extend(
-        [
-            SearchQuery(
-                query=f'"{fullname}" github',
-                platform=Platform.WEB,
-                rationale="Web genelinde isim ve github anahtarı araması",
-                priority=3,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" developer',
-                platform=Platform.WEB,
-                rationale="Web genelinde isim ve developer anahtarı araması",
-                priority=3,
-            ),
-            SearchQuery(
-                query=f'"{fullname}" engineer',
-                platform=Platform.WEB,
-                rationale="Web genelinde isim ve engineer anahtarı araması",
-                priority=3,
-            ),
-        ]
-    )
-
-    # --- Username varyant aramasi ---
-    if ad and soyad:
-        queries.extend(
-            [
-                SearchQuery(
-                    query=f'"{ad}{soyad}" github',
-                    platform=Platform.WEB,
-                    rationale="Birleşik ad soyad araması",
-                    priority=3,
-                ),
-                SearchQuery(
-                    query=f'"{ad}.{soyad}" github',
-                    platform=Platform.WEB,
-                    rationale="Noktalı ad soyad araması",
-                    priority=3,
-                ),
-                SearchQuery(
-                    query=f'"{ad}_{soyad}" github',
-                    platform=Platform.WEB,
-                    rationale="Alt çizgili ad soyad araması",
-                    priority=3,
-                ),
-                SearchQuery(
-                    query=f'"{ad}-{soyad}" github',
-                    platform=Platform.WEB,
-                    rationale="Tireli ad soyad araması",
-                    priority=3,
-                ),
-            ]
-        )
-
-    # --- Kullanici adi bazli aramalar (sadece ad kullanildiginda) ---
-    queries.extend(
-        [
-            SearchQuery(
-                query=f'site:tryhackme.com/p "{ad}"',
-                platform=Platform.TRYHACKME,
-                rationale="TryHackMe profil arama (isim)",
-                priority=4,
-            ),
-            SearchQuery(
-                query=f'site:hackthebox.com/profile "{ad}"',
-                platform=Platform.HACKTHEBOX,
-                rationale="HackTheBox profil arama (isim)",
-                priority=4,
-            ),
-        ]
-    )
-
-    # --- Varyantlar (username bazli) ---
-    if variants and variants.variants:
-        for v in variants.variants[:15]:
-            queries.append(
-                SearchQuery(
-                    query=f'"{v.username}" ({" OR ".join(_VARIANT_OR_TERMS)})',
-                    platform=Platform.WEB,
-                    rationale=f"Varyant kullanıcı adı araması: {v.username}",
-                    priority=4,
-                )
-            )
-
-    return QueryPlan(queries=queries[:50])
+    return QueryPlan(queries=_finalize_queries(queries))
 
 
 # ---------------------------------------------------------------------------
@@ -656,6 +487,9 @@ class QueryPlanner:
                 last_name=target.last_name,
                 hints=target.hints,
                 variants=[v.username for v in variants.variants[:10]],
+                # Faz 1 = A: handle modunda LLM isim uydurmasın.
+                kind=target.kind,
+                nickname=target.nickname,
             )
 
             # T-333: LLM erişilemezse ~90 sn beklemek yerine hızla şablona düş.

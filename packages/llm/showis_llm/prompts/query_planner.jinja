@@ -4,6 +4,8 @@ GÖREV: Verilen kişi adı, soyadı ve ipuçlarını kullanarak arama motorları
 HEDEFLER:
 Ad: {{ first_name }}
 Soyad: {{ last_name }}
+Nick (kullanıcı adı): {{ nickname }}
+Hedef türü (kind): {{ kind }}
 İpuçları: {{ hints }}
 Varyantlar: {{ variants }}
 
@@ -26,3 +28,8 @@ KURALLAR:
    kullanıcı adı varyantları priority=4.
 7. Her platform için en az bir site: sorgusu üret; isim için de "site:platform.com \"Ad Soyad\""
    ve username için de "site:platform.com \"kullanici_adi\"" sorgusu üret.
+8. Hedef türü (kind) "handle" ise **yalnızca** nick ve platform sorguları üret
+   (ör. "site:github.com \"nick\"" ve platform-bağımsız "\"nick\""). Ad/soyad
+   uydurma; verilen ad/soyad alanları boşsa tam isim tahmin etme. Nick boşsa nick
+   sorgusu üretme, yalnızca ipuçlarına dayan.
+9. Hiçbir sorgu boş olmaz ve hiçbir sorguda boş tırnak ("") bulunmaz.
