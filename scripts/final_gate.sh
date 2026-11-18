@@ -60,6 +60,10 @@ Ortam:
   GATE_SCAN_TIMEOUT    pytest icin ek sinir YOK (faulthandler pyproject'te)
   --live icin          SHOWIS_BASIC_AUTH_USER ve SHOWIS_BASIC_AUTH_PASSWORD
                        zorunlu; yoksa E2E 3. adimda 401 ile duser.
+                       Yalnizca bu iki degiskeni verin. `infra/.env` dosyasini
+                       `set -a; . ./.env` ile source ETMEYIN: USE_CELERY=1 ve
+                       konteyner adresleri host pytest'ine sizar, Celery gercek
+                       Redis'i arar ve paket dakikalarca retry'a duser.
 USAGE
 }
 
