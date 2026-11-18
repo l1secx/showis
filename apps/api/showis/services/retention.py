@@ -24,6 +24,7 @@ from showis.db.models import (
     Evidence,
     Observation,
     Scan,
+    Seed,
     Task,
 )
 from sqlalchemy import delete, select
@@ -73,16 +74,10 @@ async def purge_expired_evidence(db: AsyncSession) -> int:
 
 async def purge_old_observations(db: AsyncSession) -> int:
     """Retention penceresi disina cikan gozlemleri siler (scan -> case join)."""
-    now = datetime.now(timezone.utc)
     # Her case icin cutoff = case.created_at + retention_days
-    cases = (await db.execute(select(Case))).scalars().all()
     total = 0
-    for case in cases:
-        if case.status == "deleted" or case.deleted_at:
-            continue
-        cutoff = case.created_at + timedelta(days=case.retention_days)
-        if cutoff > now:
-            continue
+    for case in await _expired_cases(db):
+        cutoff = _as_aware(case.created_at) + timedelta(days=case.retention_days)
         # Bu case'in scan'lerine ait eski gozlemler
         scan_ids = (
             await db.execute(select(Scan.id).where(Scan.case_id == case.id))
@@ -115,29 +110,53 @@ async def purge_old_audit_logs(db: AsyncSession) -> int:
 
 #: Retention sonrasi temizlenen PII alanlari (kayit silinmez, alan maskelenir).
 TASK_PII_KEYS = ("email",)
-ENTITY_PII_KEYS = ("public_email",)
+#: `attributes["email"]` (publicapi/base + gravatar) ve `public_email` (commit yazari).
+ENTITY_PII_KEYS = ("email", "public_email")
+
+
+def _as_aware(value: datetime | None) -> datetime:
+    """Naive datetime'i UTC kabul eder (SQLite/dev ile Postgres farki).
+
+    `case.created_at` SQLite'ta naive donebilir; `now` aware oldugu icin
+    kiyas `TypeError` verirdi (Z5 N4).
+    """
+    if value is None:
+        return datetime.now(timezone.utc)
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+async def _expired_cases(db: AsyncSession) -> list[Case]:
+    """Saklama suresi dolmus (ve silinmemis) vakalar."""
+    now = datetime.now(timezone.utc)
+    cases = (await db.execute(select(Case))).scalars().all()
+    expired: list[Case] = []
+    for case in cases:
+        if case.status == "deleted" or case.deleted_at:
+            # NOT: soft-delete eklenirse bu vakalar da purge kapsamina alinmali
+            # (aksi halde PII suresiz kalir — Z5 N5).
+            continue
+        if _as_aware(case.created_at) + timedelta(days=case.retention_days) > now:
+            continue
+        expired.append(case)
+    return expired
 
 
 async def purge_expired_pii(db: AsyncSession) -> int:
     """Saklama suresi dolan vakalarda **ham e-posta** alanlarini temizler.
 
-    Z3 I2: e-posta iki yerde kaliciydi — `tasks.params["email"]` (GitHub commit
-    aramasi) ve `entities.attributes["public_email"]` (commit yazari). Vaka
-    silinene kadar yasiyordu; artik retention penceresi dolunca yalniz bu
-    anahtarlar **silinir** (kayitlar ve diger alanlar korunur).
+    Z3 I2 / Z5 I2: ham e-posta **dort** yerde kaliciydi:
+    `tasks.params["email"]` (GitHub commit aramasi),
+    `entities.attributes["public_email"]` (commit yazari),
+    `entities.attributes["email"]` (publicapi/gravatar) ve `seeds.email`
+    (vaka girisi). Retention penceresi dolunca bu alanlar **silinir**;
+    kayitlar ve diger alanlar (username, name, email_tag) korunur.
 
-    Donus: degistirilen kayit sayisi (task + entity).
+    Donus: degistirilen kayit sayisi (task + seed + entity).
     """
-    now = datetime.now(timezone.utc)
-    cases = (await db.execute(select(Case))).scalars().all()
     redacted = 0
-    for case in cases:
-        if case.status == "deleted" or case.deleted_at:
-            continue
-        cutoff = case.created_at + timedelta(days=case.retention_days)
-        if cutoff > now:
-            continue
-
+    for case in await _expired_cases(db):
         scan_ids = (
             await db.execute(select(Scan.id).where(Scan.case_id == case.id))
         ).scalars().all()
@@ -155,6 +174,17 @@ async def purge_expired_pii(db: AsyncSession) -> int:
                     # JSON mutation tracking icin yeniden atanir.
                     task.params = params
                     redacted += 1
+
+        # Seed: vaka girisi sirasinda verilen ham e-posta da temizlenir.
+        seeds = (
+            (await db.execute(select(Seed).where(Seed.case_id == case.id)))
+            .scalars()
+            .all()
+        )
+        for seed in seeds:
+            if seed.email:
+                seed.email = None
+                redacted += 1
 
         entities = (
             (await db.execute(select(Entity).where(Entity.case_id == case.id)))

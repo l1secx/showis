@@ -10,7 +10,7 @@ Showis, 6698 sayılı Kişisel Verilerin Korunması Kanunu (KVKK) ve ilgili ulus
 ## 2. Veri Sahibi Hakları ve Silme
 - **Kaskad Silme:** `DELETE /cases/{id}` çağrıldığında vaka, hedefler, toplanan ham gözlemler, kanıtlar (MinIO dahil) ve bulgular kalıcı olarak silinir.
 - **Veri Taşınabilirliği / Dışa Aktarma:** `GET /cases/{id}/export` ile veri sahibine ait tüm toplanmış veriler standart JSON formatında teslim edilebilir.
-- **Audit Kayıtları:** Sistemde gerçekleştirilen her dış sorgulama, IP ve connector bazında `audit_logs` tablosunda saklanır.
+- **Audit Kayıtları:** Tarama yaşam döngüsü olayları (`scan.start`, `scan.completed`, `scan.cancelled`) ve API aksiyonları `audit_logs`'a **tarama başına** yazılır; istek başına ayrı satır tutulmaz. İstek düzeyinde izleme süreç içi sayaçlarla (connector bazlı istek sayısı, SSE ilerleme olayları) yapılır — ayrıntı §3 "Ek kurallar".
 
 ## 3. Üçüncü Taraf İşleyiciler (dışa aktarım)
 
@@ -25,20 +25,23 @@ vakanın kimlik doğrulama görevidir; hiçbir sağlayıcıya "veri satışı" y
 | Gravatar (`gravatar.com`) | e-posta **hash'i** (MD5) | avatar/profil tespiti | Ham e-posta gönderilmez, yalnız hash |
 | Web arama sağlayıcıları (SerpAPI / **Google CSE** / DuckDuckGo / Brave — yapılandırılan) | ad-soyad, kullanıcı adı, ipucu (şehir/okul/şirket) | açık kaynak taraması | Sağlayıcı anahtarı ayarlardan gelir; anahtar yoksa ilgili görev üretilmez |
 | Adanmış profil API'leri (GitLab, Reddit, Bluesky, Mastodon, HuggingFace, Steam, npm, PyPI, DockerHub, HackerNews, Stack Overflow, Bitbucket, Codeberg, Chess, Kitsu, WordPress.com, Medium, Dev.to, LeetCode, Codeforces, SoundCloud, TryHackMe, HackTheBox) | **yalnızca kullanıcı adı** (veya API'nin zorunlu kıldığı kimlik) | kamuya açık profil/kanıt doğrulama | Her connector yalnız kendi resmî API host'una gider; kimlik doğrulama anahtarı varsa yalnız o sağlayıcıya gönderilir |
-| Site-check hedefleri (kamuya açık yüzlerce profil host'u) | **yalnızca kullanıcı adı** (URL yolunda) | kullanıcı adı varlık kontrolü | İstek sayısı mod başına bütçeyle sınırlıdır (`SHOWIS_SITECHECK_REQUEST_BUDGET`); NSFW kategorisi varsayılan olarak elenir |
+| Site-check hedefleri (kamuya açık profil host'ları; veri kaynağı **WhatsMyName** `wmn-data.json`, CC BY-SA 4.0 — bkz. `sitecheck/data/NOTICE.md`) | **yalnızca kullanıcı adı** (URL yolunda) | kullanıcı adı varlık kontrolü | İstek sayısı mod başına bütçeyle sınırlıdır (`SHOWIS_SITECHECK_REQUEST_BUDGET`); NSFW kategorisi varsayılan olarak elenir |
 | LLM sağlayıcısı (`opencode.ai`, yapılandırılmışsa) | bulgu alanları (platform, kullanıcı adı, skor dökümü, kanıt özeti) | açıklama metni üretimi | Sağlayıcı yapılandırılmamışsa deterministik yerel açıklama kullanılır; API anahtarı log'a yazılmaz |
 
 Ek kurallar:
 - **Audit kapsamı:** `audit_logs`'a istek başına değil **tarama başına** kayıt
-  yazılır (`scan.started` / `scan.completed` / `scan.cancelled` + API
+  yazılır (`scan.start` / `scan.completed` / `scan.cancelled` + API
   aksiyonları). İstek düzeyinde izleme süreç içi sayaçlarla yapılır
   (`http_requests`, connector bazlı sayaçlar, SSE ilerleme olayları); istek
-  başına DB satırı **yazılmaz** (hacim/maliyet). Gerçek dış trafik, mod
-  bütçesiyle sınırlıdır; `robots.txt` istekleri de bu bütçeden düşer.
+  başına DB satırı **yazılmaz** (hacim/maliyet). Connector HTTP istekleri mod
+  bütçesiyle sınırlıdır; `robots.txt` istekleri de bu bütçeden düşer. Tarayıcı
+  ile render (TryHackMe/HackTheBox) ayrı serviste koşar ve host başına 1 istek/sn
+  ile sınırlıdır; o trafik bu sayaçta görünmez.
 - Kanıtlar vaka saklama süresi (`retention_days`) sonunda silinir; süre dolan
   vakalarda **ham e-posta** (`tasks.params.email`,
-  `entities.attributes.public_email`) retention temizliğiyle **silinir** —
-  kayıtlar ve diğer alanlar korunur.
+  `entities.attributes.email`, `entities.attributes.public_email`,
+  `seeds.email`) retention temizliğiyle **silinir** — kayıtlar ve diğer alanlar
+  (kullanıcı adı, ad, `email_tag`) korunur.
 - E-posta adresi log'lara ve kanıt URL'lerine yazılmaz; yalnız kısa
   `email_tag` (sha256 ilk 12 hane) taşınır.
 - Sağlayıcı hataları (rate limit, 403) taramayı durdurmaz; ilgili görev "hata"

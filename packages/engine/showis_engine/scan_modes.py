@@ -89,8 +89,10 @@ _REFERENCE_SITES_PER_USERNAME = 48
 #: (`showis_connectors.sitecheck.connector.MAX_PLANNED_USERNAMES` ile hizalı;
 #: test bunların eşitliğini doğrular).
 SITECHECK_MAX_USERNAMES = 10
-#: Sitecheck istek bütçesi (connector paketi yoksa kullanılan yedek; D2).
+#: Sitecheck istek bütçesi (connector paketi yoksa kullanılan yedek; D10).
 _SITECHECK_REQUEST_BUDGET_FALLBACK = {"O1": 0, "O2": 600, "O3": 1200}
+#: Site başına ek robots.txt isteği (connector `budget.ROBOTS_FACTOR` yedeği).
+SITECHECK_ROBOTS_FACTOR = 0.3
 #: T-371: gerçek O2 taramasından (8287e0d7) türetilen görev katsayıları:
 #: 22 profil-connector × 6 kullanıcı adı = 132, sitecheck 6 + sitecheck_search 10 = 16,
 #: yavaş connector 6×2 + 2 arama = 14, arama 1, kimlik doğrulama 1 → toplam 164.
@@ -358,18 +360,46 @@ def sitecheck_primary_share(mode: str | None) -> int:
         return int(_SITECHECK_REQUEST_BUDGET_FALLBACK[normalized] * 0.80)
 
 
+def sitecheck_sites_per_username(mode: str | None, usernames: int) -> int:
+    """Kullanıcı adı başına planlanan site sayısı (robots rezervi dahil)."""
+    normalized = norm_mode(mode)
+    try:
+        from showis_connectors.sitecheck.budget import primary_site_limit
+
+        return int(primary_site_limit(normalized, usernames))
+    except Exception:  # pragma: no cover - connector paketi yoksa
+        share = int(_SITECHECK_REQUEST_BUDGET_FALLBACK[normalized] * 0.80)
+        return share // max(1, int(usernames) * 2)
+
+
+def sitecheck_robots_factor() -> float:
+    """Site başına ek robots.txt isteği çarpanı (connector ile tek kaynak)."""
+    try:
+        from showis_connectors.sitecheck.budget import ROBOTS_FACTOR
+
+        return float(ROBOTS_FACTOR)
+    except Exception:  # pragma: no cover - connector paketi yoksa
+        return SITECHECK_ROBOTS_FACTOR
+
+
 #: `sitecheck_label()` biçimi — **tek kaynak**. `scripts/e2e_acceptance.sh` 4c
 #: adımı bu ERE'yi birebir taşır; testler ikisinin aynı olduğunu doğrular
 #: (biçim değişirse test kırmızı olur, sessizce 4c boş dönmez).
-SITECHECK_LABEL_ERE = r"Site-check \(([0-9]+) site / ([0-9]+) istek\)"
+SITECHECK_LABEL_ERE = (
+    r"Site-check \(([0-9]+) site / ([0-9]+) istek, robots dahil\)"
+)
 
 
-def sitecheck_label(sites: int, requests: int) -> str:
-    """Sitecheck adım etiketi: ``Site-check (N site / M istek)``.
+def sitecheck_label(sites: int, requests: int | None = None) -> str:
+    """Sitecheck adım etiketi: ``Site-check (N site / M istek, robots dahil)``.
 
+    ``M`` = ``N x (1 + ROBOTS_FACTOR)`` yuvarlanmış (profil kontrolü + robots).
     Tek üretim noktası: e2e 4c adımı ve testler bu biçime göre ayrıştırır.
     """
-    return f"Site-check ({int(sites)} site / {int(requests)} istek)"
+    sites = max(0, int(sites))
+    if requests is None:
+        requests = int(round(sites * (1.0 + sitecheck_robots_factor())))
+    return f"Site-check ({sites} site / {int(requests)} istek, robots dahil)"
 
 
 def norm_mode(mode: str | None) -> str:
@@ -518,14 +548,16 @@ def estimate_scan(
         # D10: site sayısı "64 site" varsayımı değil, **aile** istek bütçesinden
         # türetilir; süre site başına ölçeklenir (22 sn / 48 site).
         sitecheck_requests = sitecheck_request_budget(mode)
-        sites_per_username = sitecheck_primary_share(mode) // max(1, primary_usernames)
+        sites_per_username = sitecheck_sites_per_username(
+            mode, max(1, primary_usernames)
+        )
         per_site_costs = dict(costs)
         per_site_costs["site_username"] = (
             costs["site_username"] / _REFERENCE_SITES_PER_USERNAME
         )
         seconds += add_step(
             "sitecheck",
-            sitecheck_label(sites_per_username, sitecheck_requests),
+            sitecheck_label(sites_per_username),
             site_usernames,
             "site_username",
             units=sitecheck_requests,

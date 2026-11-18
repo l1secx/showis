@@ -58,6 +58,32 @@ değişkeni). `make schemas` çalıştırıldıktan sonra `apps/web/lib/types.ts
 değişmemelidir (T-334: üretilen tipler `types.generated.ts`'e gider); ihlalde
 dosya geri alınır ve adım FAIL olur. Süre ~40 sn (build cache'li).
 
+### `--live` neyi sınar? (Z6)
+
+`--live` **kaynak ağacını değil, çalışan imajı** sınar: E2E adımları
+`http://localhost:8083` üzerindeki stack'e HTTP atar. Kaynak değiştiyse önce
+deploy edin, yoksa kabul testi eski kodda koşar:
+
+```bash
+docker compose -f infra/docker-compose.yml up -d --build   # sonra --live
+```
+
+`SHOWIS_API_TOKEN` de export edilmeli (vaka/API çağrıları); yalnız basic-auth
+değişkenleriyle 3+ adım 401 alır.
+
+### Deploy sırası (migration'lar tek sefer)
+
+`alembic upgrade head` **yalnız api** entrypoint'inde çalışır; worker/beat/web'de
+yoktur. Kolonlar hazır olmadan worker başlarsa bulgu yazımı patlar:
+
+1. `docker compose -f infra/docker-compose.yml build api`
+2. `docker compose -f infra/docker-compose.yml run --rm api alembic upgrade head`
+3. `docker compose -f infra/docker-compose.yml run --rm api alembic current`
+   → son revizyon (`0008_finding_confidence_basis`) görünmeli
+4. `docker compose -f infra/docker-compose.yml up -d worker beat web`
+
+Aktif tarama yokken yapın (migration sırasında eski imaj yazamaz).
+
 ## Uçtan uca kabul testi (tek komut)
 
 ```bash

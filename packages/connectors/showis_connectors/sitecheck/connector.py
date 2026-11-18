@@ -27,10 +27,10 @@ from showis_contracts import (
 )
 from showis_engine.http import EvidenceStore, HttpClient
 
-from .budget import primary_site_limit
+from .budget import primary_site_limit, share_budget
 from .cache import CheckCache, get_default_cache
 from .dedupe import ScanPlanRegistry, get_default_registry
-from .engine import EXISTS, SKIPPED, UsernameCheckEngine
+from .engine import BUDGET_EXCEEDED_DETAIL, EXISTS, SKIPPED, UsernameCheckEngine
 from .sites import SITES, SiteSpec
 from .wmn import sites_for_username
 
@@ -204,22 +204,30 @@ class SiteCheckConnector:
 
     @staticmethod
     def _site_limit(task: TaskSpec, mode: str | None = None) -> int:
-        """Görevdeki ``site_limit``; yoksa/geçersizse **fail-safe** tavan.
+        """Görevdeki ``site_limit``; yoksa/geçersiz/bayat değerse güvenli tavan.
 
-        Eski (limitsiz) DB görevleri için tam bütçe kullanılmaz: tavan
-        ``MAX_PLANNED_USERNAMES`` varsayımıyla birincil paydan hesaplanır
-        (Z3 C1: limitsiz görev 592 site tarıyordu).
+        * Eksik/geçersiz (eski DB görevi): ``MAX_PLANNED_USERNAMES`` varsayımıyla
+          birincil paydan hesaplanır (Z3 C1: limitsiz görev 592 site tarıyordu).
+        * **Bayat/elle verilmiş** değer pay bütçesini aşarsa kırpılır
+          (Z5-QA-04 / N3): ``min(raw, share_budget(mode, "primary"))``.
         """
+        cap = share_budget(mode, "primary")
         raw = task.params.get("site_limit")
         if raw is None:
             return primary_site_limit(mode, MAX_PLANNED_USERNAMES)
         try:
-            return int(raw)
+            value = int(raw)
         except (TypeError, ValueError):
             logger.warning(
                 "Geçersiz site_limit (%r), fail-safe limit kullanılacak", raw
             )
             return primary_site_limit(mode, MAX_PLANNED_USERNAMES)
+        if value > cap:
+            logger.warning(
+                "site_limit=%d pay butcesini (%d) asiyor; kirpildi", value, cap
+            )
+            return cap
+        return max(0, value)
 
     # ------------------------------------------------------------------
     # Run
@@ -248,6 +256,18 @@ class SiteCheckConnector:
         hits = [r for r in results if r.exists]
 
         cache_hits = sum(1 for r in results if r.from_cache)
+        #: Z3-08: butce tukendigi icin atlanan kontrol sayisi (kullaniciya gorunur).
+        budget_skipped = sum(1 for r in results if r.detail == BUDGET_EXCEEDED_DETAIL)
+        if budget_skipped:
+            logger.warning(
+                "Site-check butcesi tukendi: %s/%s icin %d kontrol atlandi "
+                "(site_limit=%s, mod=%s)",
+                self.name,
+                username,
+                budget_skipped,
+                self._site_limit(task, mode),
+                mode,
+            )
         evidence: list[Any] = []
         checks_payload: list[dict[str, Any]] = []
 
@@ -305,6 +325,8 @@ class SiteCheckConnector:
                 "checks": checks_payload,
                 "skipped": sum(1 for r in results if r.status == SKIPPED),
                 "errors": sum(1 for r in results if r.status == "error"),
+                #: butce kesmesiyle atlanan kontroller (rapor/SSE icin)
+                "budget_skipped": budget_skipped,
                 #: Onbellekten gelen (yeni ag istegi atilmayan) site sayisi
                 "cache_hits": cache_hits,
                 "network_checks": len(results) - cache_hits,

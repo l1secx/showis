@@ -228,3 +228,43 @@ async def test_gecerli_girdi_kabul_edilir_ve_normalize_edilir(client):
     assert body["target"]["first_name"] == "Kerem"
     assert body["target"]["hints"]["school"] == "ODTÜ"
     assert len(body["seeds"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_b1_eposta_seed_backend_roundtrip(client, request):
+    """B1 backend kanıtı (Z6-7): POST /cases seeds[].email → GET /cases/{id} aynı e-posta.
+
+    UI tarafı D12 gereği Playwright ile ayrı doğrulanır; burada API sözleşmesi
+    (giriş → DB → yanıt) kanıtlanır.
+    """
+    from showis.db.models import Seed as DbSeed
+    from sqlalchemy import select
+
+    payload = _case_payload()
+    payload["seeds"] = [
+        {"platform": "web", "email": "seed-eposta@example.com"},
+        {"platform": "github", "username": "kerem"},
+    ]
+    res = await client.post("/api/v1/cases", json=payload)
+    assert res.status_code == 201, res.text
+    case_id = res.json()["id"]
+
+    detail = await client.get(f"/api/v1/cases/{case_id}")
+    assert detail.status_code == 200, detail.text
+    seeds = detail.json()["seeds"]
+    assert seeds, "seed listesi bos olmamali"
+
+    by_platform = {s["platform"]: s for s in seeds}
+    assert by_platform["web"]["email"] == "seed-eposta@example.com"
+    assert by_platform["github"]["username"] == "kerem"
+
+    # DB'de de gercekten saklanmis (API yanitinin yaninda kalici kanit)
+    factory = request.getfixturevalue("session_factory")
+    async with factory() as session:
+        rows = (
+            (await session.execute(select(DbSeed).where(DbSeed.case_id == case_id)))
+            .scalars()
+            .all()
+        )
+    emails = {r.email for r in rows}
+    assert "seed-eposta@example.com" in emails

@@ -248,11 +248,15 @@ def test_aile_butcesi_env_override(monkeypatch):
     assert budget.share_budget("O3", "search") == 50
 
 
-def test_aile_butcesi_env_tarama_butcesine_kirpilir(monkeypatch):
-    """M1: env, mod profilinin max_http_requests'ini asamaz."""
+def test_aile_butcesi_env_tarama_butcesinin_yarisina_kirpilir(monkeypatch):
+    """Z5-QA-02: env, modun tarama butcesinin **yarisini** asamaz."""
     monkeypatch.setenv(BUDGET_ENV, "999999")
-    assert budget.family_budget("O2") == MODE_PROFILES["O2"]["max_http_requests"]
-    assert budget.family_budget("O3") == MODE_PROFILES["O3"]["max_http_requests"]
+    assert budget.family_budget("O1") == budget.env_ceiling("O1") == 250
+    assert budget.family_budget("O2") == budget.env_ceiling("O2") == 600
+    assert budget.family_budget("O3") == budget.env_ceiling("O3") == 1000
+    # Sitecheck tek basina tarama butcesini yiyemez (diger connector'lara yer kalir)
+    for mode in ("O1", "O2", "O3"):
+        assert budget.family_budget(mode) <= 0.5 * MODE_PROFILES[mode]["max_http_requests"]
 
 
 @pytest.mark.parametrize("value", ["abc", "-7", "  "])
@@ -262,14 +266,26 @@ def test_aile_butcesi_gecersiz_env_varsayilana_doner(monkeypatch, value):
 
 
 def test_site_limit_bolme_degismezi():
-    assert budget.site_limit_for(480, 10) == 48
-    assert budget.site_limit_for(480, 6) == 80
-    assert budget.site_limit_for(960, 10) == 96
-    assert budget.site_limit_for(600, 1) == 600
+    # Z6: robots rezervi -> pay / (1.3 x n)
+    assert budget.site_limit_for(480, 10) == 36
+    assert budget.site_limit_for(480, 6) == 61
+    assert budget.site_limit_for(960, 10) == 73
+    assert budget.site_limit_for(600, 1) == 461
     assert budget.site_limit_for(600, 0) == 600  # sifira bolme yok
     # pay < n -> 0 (n*limit <= pay degismezi korunur, Z3 M1)
     assert budget.site_limit_for(5, 10) == 0
     assert budget.site_limit_for(0, 10) == 0
+
+
+def test_planlanan_istek_robots_dahil():
+    """Z6-1: plan birimi istek; robots dahil karsilik 1.3x."""
+    assert budget.ROBOTS_FACTOR == 0.3
+    assert budget.planned_requests(0) == 0
+    assert budget.planned_requests(36) == 47
+    assert budget.planned_requests(10) == 13
+    # n x site x 1.3 <= pay (O2 birincil)
+    sites = budget.site_limit_for(480, 10)
+    assert budget.planned_requests(sites) * 10 <= 480
 
 
 def test_butce_0_istek_yok():
@@ -327,10 +343,9 @@ def test_limit_verilmezse_birincil_pay_varsayimi():
     """Limit verilmezse tek kullanici varsayimiyla **birincil pay** kullanilir."""
     _, extra = wmn.split_sites()
     available = len(SITES) + len(extra)
-    o2 = wmn.sites_for_username("alice", "O2")
-    assert len(o2) == min(budget.share_budget("O2", "primary"), available)
-    o3 = wmn.sites_for_username("alice", "O3")
-    assert len(o3) == min(budget.share_budget("O3", "primary"), available)
+    for mode in ("O2", "O3"):
+        expected = min(budget.site_limit_for(budget.share_budget(mode, "primary"), 1), available)
+        assert len(wmn.sites_for_username("alice", mode)) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -415,10 +430,10 @@ async def test_plan_birincil_payi_asmaz(mode):
     if share == 0:
         assert {t.params["site_limit"] for t in tasks} == {0}
         return
-    total = sum(t.params["site_limit"] for t in tasks)
-    assert total <= share
-    assert total >= share - len(tasks)  # bolme kalani toleransi
-    assert max(t.params["site_limit"] for t in tasks) >= 40
+    # Z6: plan **istek** birimi -> robots dahil toplam payi asamaz
+    total_requests = sum(budget.planned_requests(t.params["site_limit"]) for t in tasks)
+    assert total_requests <= share
+    assert max(t.params["site_limit"] for t in tasks) >= 30
 
 
 async def test_plan_ctx_modu_kullanilir():
@@ -619,20 +634,25 @@ async def test_aile_butcesi_tarama_seviyesinde_asmaz(mode):
     assert all("site_limit" in t.params for t in all_tasks)
     assert all(t.params["mode"] == mode for t in all_tasks)
 
-    total = sum(int(t.params["site_limit"]) for t in all_tasks)
-    assert total <= budget.family_budget(mode)
+    # Z6: plan birimi **istek** -> robots dahil toplam aile butcesini asamaz
+    total_requests = sum(budget.planned_requests(t.params["site_limit"]) for t in all_tasks)
+    assert total_requests <= budget.family_budget(mode)
     if mode != "O1":
-        # Aile butcesi tam olarak kullanilmali (paylar birbirini tamamlar)
-        assert total == budget.family_budget(mode)
+        # Payin en az %90'i kullanilmali (floor kaybi 1.3xn'den buyuk olamaz)
+        assert total_requests >= 0.9 * budget.family_budget(mode)
+        # Tarama butcesine gore en az %5 marj (Z6-1)
+        assert total_requests <= 0.95 * MODE_PROFILES[mode]["max_http_requests"]
 
     # Iki connector da kendi payini kullanir (birincil %80 / arama %20)
     if mode != "O1":
-        assert sum(t.params["site_limit"] for t in primary_tasks) == budget.share_budget(
-            mode, "primary"
+        primary_requests = sum(
+            budget.planned_requests(t.params["site_limit"]) for t in primary_tasks
         )
-        assert sum(t.params["site_limit"] for t in search_tasks) == budget.share_budget(
-            mode, "search"
+        search_requests = sum(
+            budget.planned_requests(t.params["site_limit"]) for t in search_tasks
         )
+        assert primary_requests <= budget.share_budget(mode, "primary")
+        assert search_requests <= budget.share_budget(mode, "search")
 
 
 async def test_aile_butcesi_uygulanan_site_sayilari():
@@ -661,3 +681,104 @@ async def test_aile_butcesi_uygulanan_site_sayilari():
                 str(task.params["username"]), "O2", limit
             )
             assert len(sites) <= limit
+
+
+# ---------------------------------------------------------------------------
+# Z6-2 / Z6-3 / Z6-6: env kirpma, butce kesmesi gorunurlugu, site_limit kirpma
+# ---------------------------------------------------------------------------
+
+
+async def test_env_1000_o2_toplam_planlanan_istek_600u_asmaz(monkeypatch):
+    """Z5-QA-02: env=1000 iken O2'de planlanan istek <= 600 (robots dahil)."""
+    from showis_connectors.sitecheck.search_connector import SiteCheckSearchConnector
+
+    monkeypatch.setenv(BUDGET_ENV, "1000")
+    ctx = ScanContext(
+        case_id="c1",
+        scan_id="env-1000",
+        target=Target(first_name="Test", last_name="Smoke"),
+        seeds=[Seed(platform=Platform.GITHUB, username=f"user{i}") for i in range(10)],
+    )
+    primary = SiteCheckConnector(engine=UsernameCheckEngine(http_client=FakeHttp()))
+    primary.scan_mode = "O2"
+    search = SiteCheckSearchConnector(
+        engine=UsernameCheckEngine(http_client=FakeHttp()),
+        search_provider=_StubSearchProvider(),
+    )
+    search.scan_mode = "O2"
+
+    primary_tasks = await primary.plan(ctx)
+    search_tasks = await search.plan(ctx)
+    tasks = primary_tasks + search_tasks
+    total_requests = sum(budget.planned_requests(t.params["site_limit"]) for t in tasks)
+
+    # env 0.5 x max_http_requests'e kirpilir -> O2 aile butcesi 600
+    assert budget.family_budget("O2") == 600
+    assert total_requests <= 600
+    assert total_requests <= MODE_PROFILES["O2"]["max_http_requests"]
+
+
+async def test_butce_tukenirse_budget_skipped_raporlanir(monkeypatch):
+    """Z3-08 / Z6-3: butce kesmesi sessiz degil; observation'da sayilir."""
+    specs = [
+        SiteSpec(
+            key=f"b{i}",
+            name=f"Budget {i}",
+            platform=Platform.WEB,
+            url_template=f"https://b{i}.example/{{u}}",
+            skip_robots=True,
+        )
+        for i in range(6)
+    ]
+    fake = FabricatedBudgetHttp(specs)
+    engine = UsernameCheckEngine(http_client=fake, sites=specs, concurrency=1)
+    connector = SiteCheckConnector(engine=engine, sites=specs)
+    task = connector._make_task("alice")
+
+    obs = await connector.run(task, _ctx())
+
+    data = obs[0].data
+    assert data["budget_skipped"] == 6
+    assert data["errors"] == 6
+    assert obs[0].error in ("", None), "istisna yok; gorev tamamlanir"
+
+
+class FabricatedBudgetHttp:
+    """Her istekte `BudgetExceededError` atan sahte istemci (butce tukendi)."""
+
+    user_agent = "test-ua"
+
+    def __init__(self, specs) -> None:  # noqa: ANN001
+        from showis_engine.http import BudgetExceededError
+
+        self._exc = BudgetExceededError("butce tukendi")
+
+    async def get(self, url: str, **kwargs):  # noqa: ANN001, ANN201
+        raise self._exc
+
+
+async def test_bayat_site_limit_pay_butcesine_kirpilir():
+    """Z5-QA-04 / Z6-6: DB'den gelen sisik site_limit paya kirpilir."""
+    connector = SiteCheckConnector(engine=UsernameCheckEngine(http_client=FakeHttp()))
+    task = connector._make_task("alice")
+    task.params["mode"] = "O2"
+    task.params["site_limit"] = 10_000
+
+    fake = connector.engine.http
+    fake.status = 404
+    obs = await connector.run(task, _ctx())
+
+    assert obs[0].data["site_limit"] == budget.share_budget("O2", "primary")
+    assert obs[0].data["sites_planned"] <= budget.share_budget("O2", "primary")
+    assert len(fake.calls) <= budget.share_budget("O2", "primary")
+
+
+async def test_arama_gorevlerinde_bayat_limit_arama_payina_kirpilir():
+    from showis_connectors.sitecheck.search_connector import SiteCheckSearchConnector
+
+    connector = SiteCheckSearchConnector(engine=UsernameCheckEngine(http_client=FakeHttp()))
+    task = connector._make_task("alice")
+    task.params["mode"] = "O2"
+    task.params["site_limit"] = 10_000
+
+    assert connector._site_limit(task, "O2") == budget.share_budget("O2", "search")

@@ -16,7 +16,7 @@ from typing import Any
 from urllib.parse import quote
 
 import httpx
-from showis_engine.http import HttpClient
+from showis_engine.http import BudgetExceededError, HttpClient
 
 from .cache import CheckCache
 from .sites import SITES, SiteSpec
@@ -29,6 +29,9 @@ ABSENT = "absent"
 UNKNOWN = "unknown"
 ERROR = "error"
 SKIPPED = "skipped"
+
+#: Butce kesmesiyle atlanan kontrolun `CheckResult.detail` etiketi.
+BUDGET_EXCEEDED_DETAIL = "budget_exceeded"
 
 #: T-365: URL'e konabilecek kullanici adi bicimi. Arama sonuclarindan gelen
 #: degerler guvenilmezdir: `../`, `%2f`, `?x=1`, `#`, `a@host` gibi girdiler
@@ -200,6 +203,16 @@ class UsernameCheckEngine:
                     check_robots=not spec.skip_robots,
                     follow_redirects=True,
                     max_retries=1,
+                )
+            except BudgetExceededError:
+                # Z3-08/Z6: tarama butcesi tukendi — sessizce yutulmaz; kontrol
+                # "error/budget_exceeded" olarak raporlanir (connector sayar).
+                return CheckResult(
+                    site=spec,
+                    username=username,
+                    status=ERROR,
+                    url=url,
+                    detail=BUDGET_EXCEEDED_DETAIL,
                 )
             except PermissionError:
                 return CheckResult(

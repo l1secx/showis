@@ -17,7 +17,7 @@ from showis_contracts import ScanContext, TaskSpec
 
 from showis_connectors.websearch import SearchProvider, extract_platform_from_url
 
-from .budget import search_site_limit
+from .budget import search_site_limit, share_budget
 from .connector import MAX_PLANNED_USERNAMES, SiteCheckConnector
 from .engine import normalize_username_for_url
 
@@ -87,6 +87,24 @@ class SiteCheckSearchConnector(SiteCheckConnector):
                     continue
                 tasks.append(self._make_task(ident, priority=3))
         return self._finalize(tasks, ctx)
+
+    @staticmethod
+    def _site_limit(task: TaskSpec, mode: str | None = None) -> int:
+        """Arama gorevlerinde limit **arama payina** kirpilir (Z5-QA-04).
+
+        Bayat/elle verilmis (ör. birincil payla planlanmis) bir deger arama
+        butcesini asarsa ``min(value, share_budget(mode, "search"))``.
+        """
+        cap = share_budget(mode, "search")
+        raw = task.params.get("site_limit")
+        if raw is None:
+            return search_site_limit(mode, MAX_PLANNED_USERNAMES)
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            logger.warning("Gecersiz site_limit (%r), arama payi kullanilacak", raw)
+            return search_site_limit(mode, MAX_PLANNED_USERNAMES)
+        return min(max(0, value), cap)
 
     def _finalize(self, tasks: list[TaskSpec], ctx: ScanContext) -> list[TaskSpec]:
         """Tum gorevlere mod + **arama payindan** turetilen site limitini yazar.

@@ -94,7 +94,7 @@ async def test_purge_expired_evidence_and_files(session, tmp_path):
 
 @pytest.mark.asyncio
 async def test_purge_expired_pii_eposta_alanlarini_temizler(session):
-    from showis.db.models import Entity, Scan, Task
+    from showis.db.models import Entity, Scan, Seed, Task
 
     expired = Case(
         id=str(uuid.uuid4()),
@@ -142,6 +142,14 @@ async def test_purge_expired_pii_eposta_alanlarini_temizler(session):
                 kind="commits_by_email",
                 params={"email": "eski@example.com", "email_tag": "sha256:abc"},
             ),
+            Seed(
+                id=str(uuid.uuid4()),
+                case_id=expired.id,
+                platform="github",
+                username="ghuser",
+                email="seed-eski@example.com",
+                source="manual",
+            ),
             Entity(
                 id=str(uuid.uuid4()),
                 case_id=expired.id,
@@ -151,6 +159,7 @@ async def test_purge_expired_pii_eposta_alanlarini_temizler(session):
                 attributes={
                     "username": "ghuser",
                     "public_email": "eski@example.com",
+                    "email": "attr-eski@example.com",
                     "name": "Eski Kisi",
                 },
             ),
@@ -163,22 +172,39 @@ async def test_purge_expired_pii_eposta_alanlarini_temizler(session):
                 kind="commits_by_email",
                 params={"email": "yeni@example.com", "email_tag": "sha256:def"},
             ),
+            Seed(
+                id=str(uuid.uuid4()),
+                case_id=fresh.id,
+                platform="github",
+                username="yeniuser",
+                email="seed-yeni@example.com",
+                source="manual",
+            ),
             Entity(
                 id=str(uuid.uuid4()),
                 case_id=fresh.id,
                 type="account",
                 platform="github",
                 label="yeniuser",
-                attributes={"username": "yeniuser", "public_email": "yeni@example.com"},
+                attributes={
+                    "username": "yeniuser",
+                    "public_email": "yeni@example.com",
+                    "email": "attr-yeni@example.com",
+                },
             ),
         ]
     )
     await session.commit()
 
     result = await run_retention_purge(session)
-    assert result["pii_redacted"] == 2, result
+    # 1 task + 1 seed + 1 entity = 3 kayit temizlendi
+    assert result["pii_redacted"] == 3, result
+
+    # Z5 N4: taze okuma (identity map'i bosalt) -> gercekten DB'ye yazildi mi?
+    session.expunge_all()
 
     task_rows = (await session.execute(select(Task))).scalars().all()
+    seed_rows = {s.username: s for s in (await session.execute(select(Seed))).scalars().all()}
     entities = {e.label: e for e in (await session.execute(select(Entity))).scalars().all()}
 
     # Suresi dolmus vakada ham e-posta yok, diger alanlar duruyor
@@ -186,16 +212,26 @@ async def test_purge_expired_pii_eposta_alanlarini_temizler(session):
     assert "email" not in old_task.params
     assert old_task.params["email_tag"] == "sha256:abc"
     assert "public_email" not in entities["ghuser"].attributes
+    assert "email" not in entities["ghuser"].attributes  # Z5 I2
     assert entities["ghuser"].attributes["username"] == "ghuser"
     assert entities["ghuser"].attributes["name"] == "Eski Kisi"
+    assert seed_rows["ghuser"].email is None  # Z5 I2: seeds.email
 
     # Guncel vaka etkilenmedi
     new_task = next(t for t in task_rows if t.scan_id == new_scan.id)
     assert new_task.params["email"] == "yeni@example.com"
     assert entities["yeniuser"].attributes["public_email"] == "yeni@example.com"
+    assert entities["yeniuser"].attributes["email"] == "attr-yeni@example.com"
+    assert seed_rows["yeniuser"].email == "seed-yeni@example.com"
 
     # DB'de ham e-posta kalmadi (suresi dolmus vaka icin)
     raw = str(
-        [t.params for t in task_rows] + [e.attributes for e in entities.values()]
+        [t.params for t in task_rows]
+        + [e.attributes for e in entities.values()]
+        + [s.email for s in seed_rows.values()]
     )
     assert "eski@example.com" not in raw
+    assert "seed-eski@example.com" not in raw
+    assert "attr-eski@example.com" not in raw
+    # email_tag gibi turetilmis alanlar korunur
+    assert old_task.params["email_tag"] == "sha256:abc"

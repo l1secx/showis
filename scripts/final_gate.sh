@@ -60,10 +60,27 @@ Ortam:
   GATE_SCAN_TIMEOUT    pytest icin ek sinir YOK (faulthandler pyproject'te)
   --live icin          SHOWIS_BASIC_AUTH_USER ve SHOWIS_BASIC_AUTH_PASSWORD
                        zorunlu; yoksa E2E 3. adimda 401 ile duser.
-                       Yalnizca bu iki degiskeni verin. `infra/.env` dosyasini
+                       Ayrica SHOWIS_API_TOKEN export edilmeli (vaka/API
+                       cagrilari); yoksa 3+ adimlar 401 alir.
+                       Yalnizca bu degiskenleri verin. `infra/.env` dosyasini
                        `set -a; . ./.env` ile source ETMEYIN: USE_CELERY=1 ve
                        konteyner adresleri host pytest'ine sizar, Celery gercek
                        Redis'i arar ve paket dakikalarca retry'a duser.
+
+ONEMLI — --live **calisan imaji** sinar:
+  E2E adimlari `http://localhost:8083` uzerindeki calisan stack'e gider, kaynak
+  agacina degil. Kaynak degistiyse once deploy edin:
+    docker compose -f infra/docker-compose.yml up -d --build
+  Aksi halde yeni kodun kabul testi eski imajda kosar (yanlis FAIL/gecersiz PASS).
+
+Deploy sirasi (migration'lar tek sefer, api imajinda):
+  1) api imajini build et:  docker compose -f infra/docker-compose.yml build api
+  2) migration (TEK kez):   docker compose -f infra/docker-compose.yml run --rm api alembic upgrade head
+  3) dogrula:               docker compose -f infra/docker-compose.yml run --rm api alembic current
+                            (son revizyon = 0008_finding_confidence_basis)
+  4) worker / beat / web:   docker compose -f infra/docker-compose.yml up -d worker beat web
+  Not: worker entrypoint'inde alembic YOKTUR; migration'i api adiminda bitirmeden
+  worker'i baslatmayin (kolonlar eksikken bulgu yazimi patlar).
 USAGE
 }
 

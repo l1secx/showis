@@ -194,10 +194,13 @@ def test_sitecheck_kullanici_adi_tavani_hizali():
 def test_sitecheck_label_bicimi():
     from showis_engine.scan_modes import SITECHECK_LABEL_ERE, sitecheck_label
 
-    label = sitecheck_label(80, 600)
-    assert label == "Site-check (80 site / 600 istek)"
+    # Z6-1: M = N x (1 + ROBOTS_FACTOR) (profil kontrolu + robots.txt)
+    label = sitecheck_label(80)
+    assert label == "Site-check (80 site / 104 istek, robots dahil)"
     match = re.fullmatch(SITECHECK_LABEL_ERE, label)
-    assert match and match.group(1) == "80" and match.group(2) == "600"
+    assert match and match.group(1) == "80" and match.group(2) == "104"
+    # Acik deger verilirse o kullanilir (geriye uyum)
+    assert sitecheck_label(10, 13).endswith("10 site / 13 istek, robots dahil)")
 
 
 def test_e2e_betik_a_yni_deseni_kullanir():
@@ -220,6 +223,11 @@ def test_estimate_sitecheck_etiketi_tutarli(monkeypatch):
     for mode in ("O2", "O3"):
         est = estimate_scan(_target("ODTÜ"), mode)
         step = _sitecheck_step(est)
-        assert re.fullmatch(SITECHECK_LABEL_ERE, step["label"]), step["label"]
-        # etiket aile butcesini tasir
-        assert str(est["sitecheck_requests"]) in step["label"]
+        match = re.fullmatch(SITECHECK_LABEL_ERE, step["label"])
+        assert match, step["label"]
+        sites, requests = int(match.group(1)), int(match.group(2))
+        # M = robot dahil karsilik; N > 0 ve M >= N
+        assert sites > 0 and requests >= sites
+        assert requests == round(sites * 1.3)
+        # Aile butcesi tahminde ayri alanda
+        assert est["sitecheck_requests"] > 0
