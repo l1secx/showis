@@ -30,7 +30,6 @@ class GitHubConnector:
         "list_gists",
         "list_gpg",
         "list_followers",
-        "search_commits",
         "search_repos_by_user",
     }
 
@@ -58,6 +57,11 @@ class GitHubConnector:
         target = ctx.target
 
         # 1. Direct seed searches
+        #    NOT (B2b): e-posta commit aramasi `github_email` connector'ina
+        #    tasindi — o connector GitHub token'i gerektirir (fail-closed) ve
+        #    commit yazarinin login'ini profil entity'sine cevirir. Burada
+        #    birakilsaydi ayni e-posta iki kez sorgulanir, token'siz istek
+        #    403/hiz limiti uretirdi.
         for seed in ctx.seeds:
             if seed.platform == Platform.GITHUB and seed.username:
                 tasks.append(
@@ -68,17 +72,6 @@ class GitHubConnector:
                         kind="get_user",
                         params={"username": seed.username},
                         priority=1,
-                    )
-                )
-            if seed.email:
-                tasks.append(
-                    TaskSpec(
-                        id=str(uuid.uuid4()),
-                        connector=self.name,
-                        platform=self.platform,
-                        kind="search_commits",
-                        params={"email": seed.email},
-                        priority=2,
                     )
                 )
 
@@ -231,29 +224,6 @@ class GitHubConnector:
                             url=url,
                             tier=self.tier,
                             data={"repos": data},
-                            evidence=[ev],
-                        )
-                    )
-
-            elif kind == "search_commits":
-                email = params.get("email", "")
-                url = f"{GITHUB_API_BASE}/search/commits?q=author-email:{email}"
-                resp = await self.http_client.get(url, headers=headers, check_robots=False)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    ev = self.evidence_store.store_bytes(
-                        resp.content, source_url=url, kind="json", http_status=resp.status_code
-                    )
-                    observations.append(
-                        Observation(
-                            id=obs_id,
-                            connector=self.name,
-                            platform=self.platform,
-                            kind=ObservationKind.COMMIT,
-                            subject=email,
-                            url=url,
-                            tier=self.tier,
-                            data=data,
                             evidence=[ev],
                         )
                     )

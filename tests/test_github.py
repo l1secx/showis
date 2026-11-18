@@ -84,12 +84,40 @@ async def test_github_plan(github_connector: GitHubConnector):
         ],
     )
     tasks = await github_connector.plan(ctx)
-    assert len(tasks) >= 3
+    assert len(tasks) >= 2
 
     kinds = [t.kind for t in tasks]
     assert "get_user" in kinds
-    assert "search_commits" in kinds
     assert "search_users" in kinds
+    # B2b: e-posta commit aramasi `github_email` connector'ina tasindi; burada
+    # uretilmemeli (token'siz istek 403 uretiyordu, ayrica cift sorgu oluyordu).
+    assert "search_commits" not in kinds
+
+
+@pytest.mark.asyncio
+async def test_github_plan_eposta_gorevi_uretmez(github_connector: GitHubConnector):
+    """B2b: yalniz e-posta seed'i olan ctx'te GitHub connector'ı commit aramaz."""
+    base = ScanContext(
+        case_id="c-1",
+        scan_id="s-email-1",
+        target=Target(first_name="Kerem", last_name="Boz"),
+        seeds=[],
+    )
+    with_email = ScanContext(
+        case_id="c-1",
+        scan_id="s-email-2",
+        target=Target(first_name="Kerem", last_name="Boz"),
+        seeds=[Seed(platform=Platform.GITHUB, email="kerem@example.com")],
+    )
+
+    tasks_base = await github_connector.plan(base)
+    tasks_email = await github_connector.plan(with_email)
+
+    # e-posta hicbir gorev eklemiyor: ayni gorev sayisi ve turleri
+    assert len(tasks_email) == len(tasks_base)
+    assert {t.kind for t in tasks_email} == {t.kind for t in tasks_base}
+    assert all("email" not in t.params for t in tasks_email)
+    assert "search_commits" not in github_connector.supported_kinds
 
 
 @pytest.mark.asyncio
