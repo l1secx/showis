@@ -212,6 +212,13 @@ def test_report_renders_nick_when_name_missing():
     assert "@kerem" in html and "None" not in html and "Ad Soyad:</b> <br/>" not in html
 
 
+def test_html_report_renders_nick_for_handle_only_target():
+    """HTML raporu (PDF hedef bloğundan bağımsız) handle hedefinde `@nick` yazar."""
+    data = _report_data()
+    data["target"] = _handle_target_data()
+    assert "@kerem" in render_html_report(data)
+
+
 def test_en_yuksek_bes_bulgu_siralanir():
     data = _report_data()
     # 6 bulguya cikar -> ilk 5 dondurulmeli

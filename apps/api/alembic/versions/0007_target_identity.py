@@ -13,6 +13,11 @@ Backfill: eski istemciler kullanici adini `hints` icine yaziyordu
 (`hints.nickname` / `hints.username`); bu degerler yeni `nickname` kolonuna tasinir.
 Ayni deger `hints` icinde birakilir — okuma yollari geriye donuk uyumlu kalir.
 
+Veri kaybi (downgrade): geri donuste handle-only hedeflerin `nickname` degeri ve
+`kind` bilgisi tamamen kaybolur (kolonlar dusurulur). Ayrica ad/soyad NOT NULL'a
+donerken bos satirlar '' ile doldurulur — "ad bilinmiyor" ile "ad bos string"
+ayrimi geri alinamaz. Geri donus yalnizca gelistirme ortaminda anlamlidir.
+
 """
 
 from typing import Sequence, Union

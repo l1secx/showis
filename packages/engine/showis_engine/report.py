@@ -562,9 +562,11 @@ _PDF_FRAGMENTS = {
 
 
 def render_target_block(report_data: dict[str, Any]) -> str:
-    """Hedef bloğu (PDF/HTML "Ad Soyad" satırı) — etiket tek kaynaktan.
+    """Hedef bloğu (PDF "Ad Soyad" satırı) — etiket tek kaynaktan.
 
-    Ad yoksa `@nick`, o da yoksa `-` basılır; boş satır veya `None` çıkmaz.
+    Yalnızca PDF üretiminde kullanılır; HTML raporu hedef etiketini yönetici
+    özetinden (`target_name`) alır. Ad yoksa `@nick`, o da yoksa `-` basılır;
+    boş satır veya `None` çıkmaz.
     """
     target = report_data.get("target") or {}
     return _PDF_FRAGMENTS["target"].render(

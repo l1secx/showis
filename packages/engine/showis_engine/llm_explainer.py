@@ -60,16 +60,19 @@ class FindingExplainer:
 
     @staticmethod
     def _target_info(target: Target) -> str:
-        """LLM'e giden hedef etiketi: ad varsa "Ad Soyad (@nick)", yoksa "@nick".
+        """LLM'e giden hedef etiketi — tek kaynak `Target.display_name`.
 
-        `display_name` zaten doğru yedeği verir; nick yalnızca **ad da varsa**
-        parantez içinde eklenir (handle hedefinde `@nick` iki kez yazılmaz).
+        `display_name` ad varsa "Ad Soyad", yoksa "@nick" verir; nick yalnızca
+        **ad da varsa** parantez içinde eklenir (handle hedefinde `@nick` iki
+        kez yazılmaz). Nick başındaki `@` atılır ki `@@nick` oluşmasın.
         """
-        name = f"{target.first_name} {target.last_name}".strip()
+        display = target.display_name
+        if not display:
+            return ""
         nick = (target.nickname or "").strip().lstrip("@")
-        if not name:
-            return target.display_name
-        return f"{name} (@{nick})" if nick else name
+        if display.startswith("@"):
+            return display
+        return f"{display} (@{nick})" if nick else display
 
     async def explain(self, finding: Finding, target: Target) -> str:
         """Finding için Türkçe kanıt açıklaması üretir. Skoru asla değiştirmez."""

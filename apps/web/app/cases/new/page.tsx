@@ -29,6 +29,8 @@ const PLATFORMS = [
 const DRAFT_KEY = "showis:new-case-draft";
 /** Handle modunda `Ad`/`Soyad` alanlarını açıklayan ipucu metninin kimliği. */
 const NAME_HINT_ID = "target-name-hint";
+/** Kullanıcı adı (nick) alanının uzunluk ipucunun kimliği. */
+const NICK_HINT_ID = "target-nick-hint";
 
 const EMPTY = {
   mode: "name" as TargetKind,
@@ -198,12 +200,17 @@ export default function NewCasePage() {
                     <input
                       ref={nicknameRef}
                       required
+                      minLength={3}
+                      aria-describedby={NICK_HINT_ID}
                       className="input pl-7 font-mono"
                       placeholder="abdulkeremdemir"
                       value={form.nickname}
                       onChange={(e) => set("nickname", e.target.value)}
                     />
                   </div>
+                  <span id={NICK_HINT_ID} className="mt-1 block text-[11px] text-slate-500">
+                    en az 3 karakter
+                  </span>
                 </label>
               )}
               <label className="block">
@@ -253,6 +260,7 @@ export default function NewCasePage() {
                     )}
                     <input
                       ref={nicknameRef}
+                      minLength={3}
                       className="input pl-7 font-mono"
                       placeholder="kerem"
                       value={form.nickname}

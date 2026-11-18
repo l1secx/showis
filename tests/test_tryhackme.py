@@ -79,6 +79,24 @@ async def test_thm_plan_with_seed_and_variants():
 
 
 @pytest.mark.asyncio
+async def test_thm_handle_mode_searches_nick():
+    """Handle hedefinde arama görevi nick'ten kurulur (`"<nick>" site:<platform>`)."""
+    provider = MockSearchProvider()
+    connector = TryHackMeConnector(
+        browser_client=BrowserClient(BROWSER_URL), search_provider=provider
+    )
+    ctx = ScanContext(
+        case_id="c1",
+        scan_id="s-handle-thm",
+        target=Target(kind="handle", nickname="kerem"),
+        seeds=[],
+    )
+    tasks = await connector.plan(ctx)
+    queries = [t.params.get("query") for t in tasks if t.kind == "search"]
+    assert '"kerem" site:tryhackme.com' in queries
+
+
+@pytest.mark.asyncio
 async def test_thm_fetch_profile_success():
     connector = TryHackMeConnector(
         browser_client=BrowserClient(BROWSER_URL, min_interval_per_host=0)

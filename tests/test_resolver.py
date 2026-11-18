@@ -226,6 +226,26 @@ def test_handle_exact_ignores_mismatched_handle():
     assert f.status == FindingStatus.REJECTED
 
 
+@pytest.mark.parametrize(
+    ("nickname", "entity_form"),
+    [
+        ("@kerem", "kerem"),  # nick başındaki @ eşleşmeyi engellemez
+        ("şükrü", "sukru"),  # Türkçe karakterler ortak normalizer ile katlanır
+    ],
+)
+def test_handle_exact_uses_shared_normalizer(nickname, entity_form):
+    """Nick ve entity kimliği aynı normalizer'dan geçer (tek platform -> 0.15)."""
+    f = Resolver().resolve_entity(
+        _handle_entity(label=entity_form, username=entity_form),
+        _handle_target(nickname),
+        "c",
+        "s",
+        username_platform_count=1,
+    )
+    assert f.breakdown.handle_exact == 0.15
+    assert f.status == FindingStatus.LEAD
+
+
 @pytest.mark.parametrize("nickname", ["", "   ", "@"])
 def test_empty_nickname_never_matches_handle(nickname):
     """Boş nick normalize edilince boş kalır; boş handle eşleşme sayılmaz."""

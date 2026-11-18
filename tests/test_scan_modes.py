@@ -82,3 +82,11 @@ def test_estimate_counts_handle_variants():
     assert est["tasks"] > 0
     site = next(s for s in est["steps"] if s["key"] == "sitecheck")
     assert site["tasks"] > 0
+
+
+def test_search_label_is_mode_aware():
+    """Arama adiminin etiketi hedef kimligine gore konusur (handle -> kullanici adi)."""
+    name_est = estimate_scan(_target(), "O2")
+    handle_est = estimate_scan(handle_target("kerem"), "O2")
+    assert name_est["steps"][0]["label"] == "Web araması (isim + ipuçları)"
+    assert handle_est["steps"][0]["label"] == "Web araması (kullanıcı adı + ipuçları)"

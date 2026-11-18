@@ -434,7 +434,13 @@ def estimate_scan(
 
     # setup seri kalir (varyant uretimi + planlama + ilk ag gecikmesi).
     seconds = costs["setup"]
-    seconds += add_step("search", "Web araması (isim + ipuçları)", search_tasks, "query")
+    # Handle hedefinde ad/soyad yoktur; etiket de nick'e (kullanıcı adına) konuşur.
+    search_label = (
+        "Web araması (kullanıcı adı + ipuçları)"
+        if target.kind == "handle"
+        else "Web araması (isim + ipuçları)"
+    )
+    seconds += add_step("search", search_label, search_tasks, "query")
     seconds += add_step("api", "Herkese açık API connector'ları", api_tasks, "api_task")
     if slow_tasks:
         seconds += add_step(

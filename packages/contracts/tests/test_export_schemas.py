@@ -10,11 +10,14 @@ Test edilenler:
 from __future__ import annotations
 
 import importlib.util
+import json
 import re
 from pathlib import Path
 
 import pytest
 from showis_contracts.enums import EdgeType, EntityType, FindingStatus, Platform
+from showis_contracts.findings import ConfidenceBreakdown
+from showis_contracts.tasks import Target
 
 SCRIPT = (
     Path(__file__).resolve().parents[1] / "scripts" / "export_schemas.py"
@@ -95,3 +98,16 @@ def test_generator_targets_only_generated_file() -> None:
     assert target.parent.name == "lib"
     assert target.name != "types.ts"
     assert "OTOMATİK ÜRETİLDİ" in generator.generate_typescript_definitions().splitlines()[0]
+
+
+@pytest.mark.parametrize("model", [Target, ConfidenceBreakdown])
+def test_committed_schema_matches_model(model) -> None:
+    """Commit'lenen JSON şema modelle aynı olmalı (elle düzenleme suite'i kırar).
+
+    Dosya `indent=2` ile ve sonda yeni satır olmadan yazılır; bu yüzden bayt
+    değil **ayrıştırılmış JSON** eşitliği karşılaştırılır.
+    """
+    schema_path = Path(_load_generator().SCHEMA_DIR) / f"{model.__name__}.json"
+    assert schema_path.is_file(), f"{schema_path} commit edilmemiş"
+    committed = json.loads(schema_path.read_text(encoding="utf-8"))
+    assert committed == model.model_json_schema()

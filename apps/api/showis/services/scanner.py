@@ -185,7 +185,8 @@ def _planner_query_key(text: str) -> str:
 
 def _has_search_term(text: str) -> bool:
     """Sorgu gercek bir arama terimi tasiyor mu (yalniz tirnak/operator degil)?"""
-    stripped = _QUERY_OPERATOR_RE.sub(" ", text).replace('"', " ")
+    # Cift ve tek tirnak birlikte atilir: `'' site:x.com` da bos sorgudur.
+    stripped = _QUERY_OPERATOR_RE.sub(" ", text).replace('"', " ").replace("'", " ")
     return bool(stripped.split())
 
 

@@ -69,3 +69,37 @@ def test_planner_specs_are_marked_and_sanitized(svc):
     assert specs[0].kind == "search"
     assert specs[0].platform == Platform.GITHUB
     assert specs[0].params["limit"] == PLANNER_SEARCH_LIMIT
+
+
+def test_planner_specs_o3_caps_at_twenty(svc):
+    """O3 tavani 20: 30 tekil sorgudan tam 20 gorev uretilir."""
+    plan = plan_with([f'"k{i}" site:github.com' for i in range(30)])
+    specs = svc._planner_task_specs(plan, "O3", [])
+    assert len(specs) == 20
+    assert [s.params["query"] for s in specs] == [f'"k{i}" site:github.com' for i in range(20)]
+
+
+def test_planner_specs_clamp_priority(svc):
+    """Plan priority'si 1..5 araligina kirpilir (9 -> 5, 0 -> 1)."""
+    plan = QueryPlan(
+        queries=[
+            SearchQuery(query='"a" site:x.com', platform=Platform.GITHUB, priority=9),
+            SearchQuery(query='"b" site:x.com', platform=Platform.GITHUB, priority=0),
+        ]
+    )
+    specs = svc._planner_task_specs(plan, "O2", [])
+    assert [s.priority for s in specs] == [5, 1]
+
+
+def test_planner_specs_preserve_plan_order(svc):
+    """Cok elemanli planda sira korunur: queries[i].query -> specs[i]."""
+    queries = [f'"q{i}" site:github.com' for i in range(5)]
+    specs = svc._planner_task_specs(plan_with(queries), "O3", [])
+    assert [s.params["query"] for s in specs] == queries
+
+
+def test_planner_specs_drop_single_quoted_empty_term(svc):
+    """Tek tirnakli bos terim (`'' site:y.com`) arama terimi sayilmaz."""
+    plan = plan_with(["'' site:y.com", '"a" site:x.com'])
+    specs = svc._planner_task_specs(plan, "O3", [])
+    assert [s.params["query"] for s in specs] == ['"a" site:x.com']

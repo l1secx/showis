@@ -198,3 +198,11 @@ def test_target_display_name_no_trailing_space_without_surname():
 def test_target_defaults_are_backward_compatible():
     t = Target(first_name="A", last_name="B")
     assert t.kind == "name" and t.nickname == ""
+
+
+def test_target_display_name_is_computed_not_serialized():
+    """`display_name` türetilmiş alandır: dump ve şemada görünmez."""
+    t = Target(first_name="A", last_name="B")
+    assert t.display_name == "A B"
+    assert "display_name" not in t.model_dump()
+    assert "display_name" not in Target.model_json_schema()["properties"]
