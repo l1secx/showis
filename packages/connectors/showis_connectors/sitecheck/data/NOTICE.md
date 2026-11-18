@@ -33,6 +33,7 @@ birebir kopyalanmaz: alanlar Showis'in kullanıcı-adı kontrol motoruna
 | `m_string` | `absent_regex` | `re.escape` |
 | `m_code` | `absent_statuses` | `m_code == e_code` ise boş bırakılır (kod ayırt edici değil) |
 | `cat` | `category` | WMN kategorisi platform değil, sınıflandırmadır |
+| `headers` | `headers` | Dolu ise aynen taşınır (`User-Agent`, `Accept`, `Origin`, …); kimlik bilgisi taşıyan başlık adları (`Authorization`, `Proxy-Authorization`) savunmacı olarak atılır |
 | `name` | `key` + `name` | `key` = slug; çakışmada `-2`, `-3` soneki |
 | — | `platform` | Sabit `"web"` |
 | — | `source` | Sabit `"wmn"` |
@@ -49,6 +50,10 @@ Dışlanan kayıtlar (gerekçe koddaki `_convert_record` içinde):
 
 ## Bu veriyi kullanırken
 
+- **Kategoriler filtrelenmemiştir.** WMN `cat` değerleri (NSFW dahil) olduğu gibi
+  `category` alanında durur; 37 kayıt `xx NSFW xx` kategorisindedir. Hangi
+  kategorinin taranacağı **tüketici katmanın** (tarama politikası) kararıdır, bu
+  veri dosyasının değil.
 - **Tespitler "lead"dir, kanıt değildir.** WMN verisi arşivlenmiş bir projeden
   gelir; siteler zamanla değişir (bot duvarı, alan adı ölümü, HTML değişimi).
   Sonuçlar skor kartında tek başına kimlik doğrulaması sayılmamalıdır.

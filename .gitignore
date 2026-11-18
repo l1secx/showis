@@ -64,6 +64,9 @@ Thumbs.db
 data/
 storage/
 evidence_cache/
+# A1/A1b: sitecheck paket verisi (turetilmis WMN JSON + NOTICE) surum kontrolunde
+!packages/connectors/showis_connectors/sitecheck/data/
+!packages/connectors/showis_connectors/sitecheck/data/**
 
 # yerel sirlar (T-113)
 infra/.secrets/

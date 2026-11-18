@@ -17,7 +17,8 @@
       "ambiguous": 2,
       "duplicate": 3
     },
-    "http_upgraded": 5
+    "http_upgraded": 5,
+    "headers_carried": 13
   },
   "sites": [
     {
@@ -228,7 +229,14 @@
       ],
       "category": "gaming",
       "platform": "web",
-      "source": "wmn"
+      "source": "wmn",
+      "headers": {
+        "Accept-Language": "en-US,en;q=0.5",
+        "Origin": "https://apex.tracker.gg",
+        "Referer": "https://apex.tracker.gg/",
+        "TE": "trailers",
+        "User-Agent": "Mozilla/5.0 (X11; Linux i686; rv:128.0) Gecko/20100101 Firefox/128.0"
+      }
     },
     {
       "key": "appian-community",
@@ -2412,7 +2420,10 @@
       ],
       "category": "coding",
       "platform": "web",
-      "source": "wmn"
+      "source": "wmn",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:147.0) Gecko/20100101 Firefox/147.0"
+      }
     },
     {
       "key": "github-user",
@@ -2426,7 +2437,10 @@
       ],
       "category": "coding",
       "platform": "web",
-      "source": "wmn"
+      "source": "wmn",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:147.0) Gecko/20100101 Firefox/147.0"
+      }
     },
     {
       "key": "gitlab",
@@ -2464,7 +2478,10 @@
       "absent_statuses": [],
       "category": "coding",
       "platform": "web",
-      "source": "wmn"
+      "source": "wmn",
+      "headers": {
+        "User-Agent": "curl/8.4.0"
+      }
     },
     {
       "key": "gnome-shell-extensions",
@@ -4168,7 +4185,10 @@
       "absent_statuses": [],
       "category": "news",
       "platform": "web",
-      "source": "wmn"
+      "source": "wmn",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:147.0) Gecko/20100101 Firefox/147.0"
+      }
     },
     {
       "key": "metacritic",
@@ -5032,7 +5052,10 @@
       ],
       "category": "blog",
       "platform": "web",
-      "source": "wmn"
+      "source": "wmn",
+      "headers": {
+        "Accept": "application/json"
+      }
     },
     {
       "key": "parler",
@@ -6254,7 +6277,10 @@
       ],
       "category": "xx NSFW xx",
       "platform": "web",
-      "source": "wmn"
+      "source": "wmn",
+      "headers": {
+        "Cookie": "accept_rules=true;"
+      }
     },
     {
       "key": "shutterstock",
@@ -7682,7 +7708,13 @@
       ],
       "category": "misc",
       "platform": "web",
-      "source": "wmn"
+      "source": "wmn",
+      "headers": {
+        "Accept-Language": "en-US",
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:127.0) Gecko/20100101 Firefox/127.0",
+        "X-Tool": "vt-ui-main",
+        "X-VT-Anti-Abuse-Header": "MTAxOTFwMDcxOTEtWkc5dWRDQmlaU0JsZG2scy5xNzE4Mjc1NDI0LjUzMw=="
+      }
     },
     {
       "key": "visnesscard",
@@ -7722,7 +7754,10 @@
       ],
       "category": "social",
       "platform": "web",
-      "source": "wmn"
+      "source": "wmn",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (X11; Linux i686; rv:125.0) Gecko/20100101 Firefox/125.0"
+      }
     },
     {
       "key": "vkl-world-mastodon-instance",
@@ -7790,7 +7825,10 @@
       ],
       "category": "social",
       "platform": "web",
-      "source": "wmn"
+      "source": "wmn",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0"
+      }
     },
     {
       "key": "vsetop",
@@ -7944,7 +7982,10 @@
       ],
       "category": "social",
       "platform": "web",
-      "source": "wmn"
+      "source": "wmn",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0"
+      }
     },
     {
       "key": "weblate",
@@ -8408,7 +8449,10 @@
       ],
       "category": "xx NSFW xx",
       "platform": "web",
-      "source": "wmn"
+      "source": "wmn",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0"
+      }
     },
     {
       "key": "zenn",
@@ -8490,7 +8534,10 @@
       ],
       "category": "social",
       "platform": "web",
-      "source": "wmn"
+      "source": "wmn",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0"
+      }
     },
     {
       "key": "zoomitir",

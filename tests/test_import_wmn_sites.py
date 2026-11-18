@@ -151,6 +151,113 @@ def test_alan_eslemesi(fixture_doc):
     }
 
 
+# ---------------------------------------------------------------------------
+# A1b: headers tasima
+# ---------------------------------------------------------------------------
+
+
+def test_headers_aynen_tasinir():
+    doc = {
+        "sites": [
+            _record(
+                name="Header Site",
+                headers={
+                    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64)",
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "Origin": "https://header.example",
+                    "Referer": "https://header.example/",
+                    "X-Tool": "vt-ui-main",
+                },
+            )
+        ]
+    }
+    site = wmn.convert(doc).sites[0]
+    assert site["headers"] == {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64)",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Origin": "https://header.example",
+        "Referer": "https://header.example/",
+        "X-Tool": "vt-ui-main",
+    }
+
+
+def test_headers_yoksa_alan_yazilmaz():
+    doc = {"sites": [_record(name="No Header Site")]}
+    site = wmn.convert(doc).sites[0]
+    assert "headers" not in site
+
+    # bos sozluk de alan uretmemeli
+    doc = {"sites": [_record(name="Empty Header Site", headers={})]}
+    assert "headers" not in wmn.convert(doc).sites[0]
+
+
+def test_kimlik_basliklari_aktarilmaz():
+    doc = {
+        "sites": [
+            _record(
+                name="Secret Site",
+                headers={
+                    "Authorization": "Bearer gizli",
+                    "proxy-authorization": "Basic gizli",
+                    "User-Agent": "ok",
+                },
+            )
+        ]
+    }
+    site = wmn.convert(doc).sites[0]
+    assert site["headers"] == {"User-Agent": "ok"}
+
+
+def test_headers_sayaci_ve_dogrulama(fixture_doc):
+    fixture_doc["sites"][0]["headers"] = {"Accept": "text/html"}
+    doc, result = wmn.build_document(fixture_doc)
+    assert doc["_generated"]["headers_carried"] == 1
+    assert result.headers_carried == 1
+    assert wmn.validate_sites(doc["sites"]) == []
+
+
+def test_validate_headers_hatalari():
+    base = {
+        "key": "h",
+        "url_template": "https://h.example/{u}",
+        "expect_status": 200,
+        "present_regex": None,
+        "absent_regex": "x",
+        "absent_statuses": [404],
+    }
+    assert any("headers" in i for i in wmn.validate_sites([{**base, "headers": {}}]))
+    assert any(
+        "headers" in i for i in wmn.validate_sites([{**base, "headers": {"A": 1}}])
+    )
+    assert any(
+        "kimlik" in i
+        for i in wmn.validate_sites([{**base, "headers": {"Authorization": "x"}}])
+    )
+
+
+# ---------------------------------------------------------------------------
+# A1b: kategori / NSFW korunumu
+# ---------------------------------------------------------------------------
+
+
+def test_nsfw_kategorisi_filtrelenmez():
+    doc = {
+        "sites": [
+            _record(name="Nsfw Site", cat="xx NSFW xx"),
+            _record(name="Safe Site", cat="social", uri_check="https://safe.example/{account}"),
+        ]
+    }
+    sites = wmn.convert(doc).sites
+    assert [s["category"] for s in sites] == ["xx NSFW xx", "social"]
+
+
+def test_kategori_yoksa_misc():
+    doc = {"sites": [_record(name="No Cat Site", cat="")]}
+    assert wmn.convert(doc).sites[0]["category"] == "misc"
+
+
 def test_m_code_e_code_ile_ayniysa_absent_statuses_bos():
     doc = {"sites": [_record(name="Same Code", m_code=200, m_string="missing page")]}
     site = wmn.convert(doc).sites[0]
@@ -266,6 +373,21 @@ def test_uretilen_dosya_tutarlidir():
     assert wmn.validate_sites(data["sites"]) == []
     assert data["_generated"]["kept"] == len(data["sites"])
     assert len(data["sites"]) >= 300
+    # A1b: depodaki dosya kaynakla birebir ayni olmali (deterministik uretim)
+    if not REAL_SOURCE.exists():
+        pytest.skip(f"gercek WMN kaynagi yok: {REAL_SOURCE}")
+    source = json.loads(REAL_SOURCE.read_text(encoding="utf-8"))
+    expected, _ = wmn.build_document(source)
+    assert data == expected
+
+
+def test_uretim_deterministik():
+    if not REAL_SOURCE.exists():
+        pytest.skip(f"gercek WMN kaynagi yok: {REAL_SOURCE}")
+    source = json.loads(REAL_SOURCE.read_text(encoding="utf-8"))
+    first, _ = wmn.build_document(source)
+    second, _ = wmn.build_document(source)
+    assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
 
 
 def test_gercek_veri_kept_esigi():
@@ -278,3 +400,53 @@ def test_gercek_veri_kept_esigi():
     assert wmn.validate_sites(result.sites) == []
     # dislama sayaclari toplami toplam kayit sayisini asmamali
     assert result.kept + sum(result.excluded.values()) == result.sites_total
+
+
+def test_gercek_veri_headers_tasinir():
+    """A1b: kaynakta headers'i olan tutulan kayitlar ciktiya tasinmali."""
+    if not REAL_SOURCE.exists():
+        pytest.skip(f"gercek WMN kaynagi yok: {REAL_SOURCE}")
+    source = json.loads(REAL_SOURCE.read_text(encoding="utf-8"))
+    result = wmn.convert(source)
+    with_headers = [s for s in result.sites if "headers" in s]
+    assert result.headers_carried == len(with_headers) > 0
+    # kaynakta headers blogu olmayan kayit ciktiya headers eklemez
+    names = {s["name"] for s in with_headers}
+    assert "Apex Legends" in names
+    for site in with_headers:
+        assert site["headers"]
+        assert all(isinstance(v, str) for v in site["headers"].values())
+        assert not {n.lower() for n in site["headers"]} & wmn.SENSITIVE_HEADERS
+
+
+def test_gercek_veri_nsfw_kategorisi_korunur():
+    """A1b: NSFW kayitlari veride kalir; kategori filtrelenmez."""
+    if not REAL_SOURCE.exists():
+        pytest.skip(f"gercek WMN kaynagi yok: {REAL_SOURCE}")
+    source = json.loads(REAL_SOURCE.read_text(encoding="utf-8"))
+    result = wmn.convert(source)
+
+    nsfw = [s for s in result.sites if s["category"] == "xx NSFW xx"]
+    assert nsfw, "NSFW kayitlari cikarilmamali"
+    for site in nsfw:
+        assert site["category"] == "xx NSFW xx"
+
+    # NSFW oldugu icin dislanan kayit olmamali: her NSFW dislamasi standart
+    # gerekcelerden biriyle aciklanabilir (kategori filtresi YOK).
+    nsfw_names = {
+        (r.get("name") or "").strip()
+        for r in source["sites"]
+        if (r.get("cat") or "").strip() == "xx NSFW xx"
+    }
+    allowed = {"invalid", "post", "protected", "ambiguous"}
+    for name, reason in result.dropped:
+        if name in nsfw_names:
+            assert reason in allowed or reason.startswith("duplicate:"), (
+                f"{name}: beklenmeyen dislama nedeni {reason}"
+            )
+
+    nsfw_records = [r for r in source["sites"] if (r.get("cat") or "").strip() == "xx NSFW xx"]
+    dropped_nsfw = [d for d in result.dropped if d[0] in nsfw_names]
+    assert len(nsfw) == len(nsfw_records) - len(dropped_nsfw)
+
+

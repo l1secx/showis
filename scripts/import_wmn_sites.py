@@ -19,6 +19,16 @@ Donusum kurallari (bkz. docs/superpowers/specs/2026-11-18-osint-depth-design.md 
     cat                    -> category; platform = "web"
     name                   -> key (slug; cakisma -> -2, -3 ...)
 
+Ek kurallar:
+
+* ``headers`` dolu ise cikti kaydina **aynen** tasinir (``"headers": {...}``);
+  bos/yok ise alan yazilmaz. Istek bicimlendiren basliklar (``User-Agent``,
+  ``Accept``, ``Origin``, ...) da aktarilir; yalnizca kimlik bilgisi tasiyan
+  baslik adlari (``Authorization``, ``Proxy-Authorization``) savunmaci olarak
+  atilir — kaynak veride boyle bir baslik yok.
+* Kategoriler **filtrelenmez**: ``cat`` degeri (``xx NSFW xx`` dahil) korunur.
+  Tarama politikasi (orn. NSFW dislama) tuketici katmanin isidir.
+
 Ek guvenlik kurallari (motorun siniflandirma sirasina uyar):
 
 * ``m_code == e_code`` ise kod ayirt edici degildir -> ``absent_statuses``
@@ -61,6 +71,9 @@ WMN_PROJECT_URL = "https://github.com/WebBreacher/WhatsMyName"
 
 #: Bu koruma katmanlarina takilan siteler dislanir: motor bot-duvari asamaz.
 BLOCKED_PROTECTIONS = frozenset({"cloudflare", "captcha", "ddos-guard", "anubis"})
+
+#: Kimlik bilgisi tasiyabilecek istek basliklari: kaynaktan aktarilmaz.
+SENSITIVE_HEADERS = frozenset({"authorization", "proxy-authorization"})
 
 #: Cikti zarfinda yer alan lisans blogu (BY-SA 4.0 zorunlu atif alanlari).
 LICENSE_BLOCK: dict[str, Any] = {
@@ -113,6 +126,24 @@ def _blocked_protection(record: Mapping[str, Any]) -> bool:
     return bool(values & BLOCKED_PROTECTIONS)
 
 
+def _headers(record: Mapping[str, Any]) -> dict[str, str] | None:
+    """WMN ``headers`` blogunu oldugu gibi dondurur (bos ise ``None``).
+
+    Istek bicimlendiren basliklar (``User-Agent``, ``Accept``, ``Origin``,
+    ``Referer``, ...) korunur; yalnizca kimlik bilgisi tasiyan baslik adlari
+    (``SENSITIVE_HEADERS``) savunmaci olarak atilir.
+    """
+    raw = record.get("headers")
+    if not isinstance(raw, Mapping):
+        return None
+    headers = {
+        str(name): str(value)
+        for name, value in raw.items()
+        if str(name).strip() and str(name).strip().lower() not in SENSITIVE_HEADERS
+    }
+    return headers or None
+
+
 # ---------------------------------------------------------------------------
 # Donusum
 # ---------------------------------------------------------------------------
@@ -133,6 +164,8 @@ class ConversionResult:
     )
     sites_total: int = 0
     http_upgraded: int = 0
+    #: baslik blogu tasinan tutulan kayit sayisi
+    headers_carried: int = 0
     #: dislanan kayitlar: (ad, neden)
     dropped: list[tuple[str, str]] = field(default_factory=list)
 
@@ -191,6 +224,9 @@ def _convert_record(record: Mapping[str, Any]) -> tuple[dict[str, Any] | None, s
         "platform": "web",
         "source": "wmn",
     }
+    headers = _headers(record)
+    if headers is not None:
+        site["headers"] = headers
     return site, None
 
 
@@ -236,6 +272,8 @@ def convert(wmn: Mapping[str, Any]) -> ConversionResult:
             suffix += 1
         used_keys.add(key)
 
+        if "headers" in site:
+            result.headers_carried += 1
         result.sites.append({"key": key, **site})
 
     result.http_upgraded = http_upgraded
@@ -288,6 +326,18 @@ def validate_sites(sites: list[Mapping[str, Any]]) -> list[str]:
             isinstance(s, int) and not isinstance(s, bool) for s in statuses
         ):
             issues.append(f"{key}: absent_statuses int listesi degil ({statuses!r})")
+
+        if "headers" in site:
+            headers = site["headers"]
+            if not isinstance(headers, dict) or not headers:
+                issues.append(f"{key}: headers bos veya nesne degil ({headers!r})")
+            elif not all(
+                isinstance(name, str) and isinstance(value, str)
+                for name, value in headers.items()
+            ):
+                issues.append(f"{key}: headers anahtar/degerleri string degil")
+            elif {n.lower() for n in headers} & SENSITIVE_HEADERS:
+                issues.append(f"{key}: headers kimlik bilgisi basligi iceriyor")
     return issues
 
 
@@ -309,6 +359,7 @@ def build_document(
             "kept": result.kept,
             "excluded": dict(result.excluded),
             "http_upgraded": result.http_upgraded,
+            "headers_carried": result.headers_carried,
         },
         "sites": result.sites,
     }
@@ -405,6 +456,7 @@ def main(argv: list[str] | None = None) -> int:
         f"duplicate={excluded['duplicate']}"
     )
     print(f"http->https : {result.http_upgraded}")
+    print(f"baslik      : {result.headers_carried} kayitta 'headers' blogu tasindi")
     return 0
 
 
