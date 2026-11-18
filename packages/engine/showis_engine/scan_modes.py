@@ -411,7 +411,9 @@ def estimate_scan(
     api_usernames = min(variant_cap(mode), len(variants))
 
     hint_count = sum(1 for k in ("school", "city", "company") if str(hints.get(k) or "").strip())
-    search_tasks = 1 + hint_count
+    # Phase 2 planner sorgulari da gercek arama gorevi olur (O1=0, O2=8, O3=20);
+    # tahmin bunlari saymazsa web aramasi adimi moda gore 8/20 gorev eksik cikar.
+    search_tasks = 1 + hint_count + planner_cap(mode)
     api_tasks = api_usernames * _API_CONNECTORS
     # O1'de yavas connector'lar (sitecheck/render/tryhackme/hackthebox) hic planlanmaz.
     slow_allowed = norm_mode(mode) != "O1"

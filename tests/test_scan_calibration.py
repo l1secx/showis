@@ -34,6 +34,7 @@ from showis_engine.scan_modes import (
     estimate_scan,
     load_calibration,
     norm_mode,
+    planner_cap,
     reset_calibration_cache,
     scan_concurrency,
     site_count,
@@ -70,7 +71,8 @@ def _legacy_estimate(target: Target, mode: str = "O2") -> int:
     hint_count = sum(
         1 for k in ("school", "city", "company") if str(hints.get(k) or "").strip()
     )
-    search_tasks = 1 + hint_count
+    # Tahminle ayni: Phase 2 planner sorgulari da arama gorevi (O1=0, O2=8, O3=20).
+    search_tasks = 1 + hint_count + planner_cap(mode)
     api_tasks = api_usernames * _API_CONNECTORS
     slow_allowed = norm_mode(mode) != "O1"
     slow_tasks = (
@@ -643,10 +645,16 @@ def test_host_limiter_env_sinirlari_kirpilir(monkeypatch):
 # T-371: istek/görev tahmini gerçek ölçümle hizalı
 # ---------------------------------------------------------------------------
 
-#: Referans canlı ölçüm (O2, 64 site, 6 kullanıcı adı, hedef "Test Smoke")
-REF_WALL_SECONDS = 362
-REF_TASKS = 164
-REF_REQUESTS = 1176
+#: Referans canlı ölçüm (O2, 64 site, 6 kullanıcı adı, hedef "Test Smoke").
+#: T-371 ölçümü: 362 sn / 164 görev / 1176 istek — bu ölçüm **Phase 2 planner
+#: sorguları gerçek arama görevi olmadan** alındı (planda tek arama vardı).
+#: Planner sorguları artık `websearch` görevi olarak koşuyor (O2 tavanı 8), yani
+#: aynı tarama +8 görev ve +8 istek yapar: 8 × 30 sn arama, ölçülen etkin
+#: paralellik 3 (calibration.json `concurrency_observed` 3.14) ile ~+80 sn duvar
+#: saati ekler. Güncel (daha doğru) referans: 442 sn / 172 görev / 1184 istek.
+REF_WALL_SECONDS = 442
+REF_TASKS = 172
+REF_REQUESTS = 1184
 
 
 def _smoke_target() -> Target:

@@ -34,6 +34,27 @@ def test_planner_specs_respect_mode_cap(svc):
     assert svc._planner_task_specs(plan, "O1", []) == []
 
 
+def test_planner_specs_cap_applies_after_filtering(svc):
+    """Tavan **filtreden sonra** uygulanır: elenen ilk 3 girdi yer kaplamaz.
+
+    Aksi halde `queries[:cap]` ile ilk 8 eleman alinir, 3'u elenince 5 gorev
+    uretilir; oysa planda 8 gecerli sorgu daha var.
+    """
+    valid = [f'"v{i}" site:github.com' for i in range(10)]
+    dropped = [
+        valid[0],  # tekrar: asagida ayni sorgu geçerli olarak var
+        '"" site:y.com',  # arama terimi yok
+        "password site:z.com",  # finalize_query -> PolicyViolationError
+    ]
+    plan = plan_with(dropped + valid)
+
+    specs = svc._planner_task_specs(plan, "O2", [])
+
+    assert len(specs) == 8
+    # Sirayla: ilk 8 gecerli sorgu (9. ve 10. tavana takilir)
+    assert [s.params["query"] for s in specs] == valid[:8]
+
+
 def test_planner_specs_dedupe_and_drop_empty(svc):
     plan = plan_with(
         [

@@ -58,6 +58,8 @@ Cikis kodlari:
 Ortam:
   PYTHON, RUFF, MYPY   ikili yollarini degistirir (varsayilan: .venv/bin/...)
   GATE_SCAN_TIMEOUT    pytest icin ek sinir YOK (faulthandler pyproject'te)
+  --live icin          SHOWIS_BASIC_AUTH_USER ve SHOWIS_BASIC_AUTH_PASSWORD
+                       zorunlu; yoksa E2E 3. adimda 401 ile duser.
 USAGE
 }
 

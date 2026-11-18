@@ -357,7 +357,11 @@ const FINDING_FILTERS: { value: FindingFilter; label: string; hint: string }[] =
   { value: "all", label: "Tümü", hint: "Reddedilenler gizliyken kalan tüm bulgular" },
   { value: "confirmed", label: "Onaylanan", hint: "Güven skoru ≥ 0.80" },
   { value: "candidate", label: "Aday", hint: "Güven skoru 0.50 – 0.79" },
-  { value: "lead", label: "İz", hint: "İpucu (lead): isim/okul benzerliği olan, doğrulanmamış sonuç" },
+  {
+    value: "lead",
+    label: "İz",
+    hint: "İpucu (lead): isim/okul benzerliği veya birebir kullanıcı adı eşleşmesi olan, doğrulanmamış sonuç",
+  },
   { value: "rejected", label: "Reddedilen", hint: "Güven skoru < 0.50 ve anlamlı sinyal yok" },
 ];
 
@@ -366,6 +370,10 @@ const SIGNAL_META: Record<string, { label: string; hint: string }> = {
   username_exact_match: {
     label: "Kullanıcı adı eşleşmesi",
     hint: "Aynı kullanıcı adı en az 2 platformda (0.30)",
+  },
+  handle_exact: {
+    label: "Hedef kullanıcı adı eşleşmesi",
+    hint: "Tek platformda birebir kullanıcı adı eşleşmesi (0.15)",
   },
   name_similarity: {
     label: "İsim benzerliği",
@@ -681,7 +689,8 @@ function FindingCard({
           )}
           {isLead && (
             <p className="mt-1 text-[11px] text-amber-300/80">
-              İpucu: isim/okul benzerliği var, tek kaynak — doğrulanmadı.
+              İpucu: isim/okul benzerliği ya da birebir kullanıcı adı eşleşmesi var, tek kaynak —
+              doğrulanmadı.
             </p>
           )}
           {f.status === "rejected" && (

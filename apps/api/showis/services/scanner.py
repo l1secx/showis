@@ -269,8 +269,9 @@ class ScannerService:
     ) -> list[TaskSpec]:
         """QueryPlan'i gercek arama gorevlerine cevirir (tavanli + tekillestirilmis).
 
-        * Plana **sirayla** bakilir, en fazla ``planner_cap(mode)`` sorgu alinir
-          (O1=0 -> hic gorev uretilmez).
+        * Plana **sirayla** bakilir; tavan (``planner_cap(mode)``) **filtreden
+          sonra** uygulanir: elenen sorgular yer kaplamaz, tavan yalnizca gecerli
+          gorev sayisini sinirlar (O1=0 -> hic gorev uretilmez).
         * Her sorgu :func:`finalize_query` kapisindan gecer; bos/cok kisa
           (``ValueError``) veya yasak desen (``PolicyViolationError``) iceren
           sorgu atlanir, kalanlar yasar.
@@ -284,7 +285,9 @@ class ScannerService:
             return []
         seen = {_planner_query_key(text) for text in existing_queries}
         specs: list[TaskSpec] = []
-        for q in query_plan.queries[:cap]:
+        for q in query_plan.queries:
+            if len(specs) >= cap:
+                break
             try:
                 query = finalize_query(q.query)
             except (ValueError, PolicyViolationError):

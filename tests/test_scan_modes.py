@@ -54,11 +54,22 @@ def test_estimate_okul_ipucu_sorgu_sayisini_artirir():
     assert schooled["steps"][0]["tasks"] == plain["steps"][0]["tasks"] + 1
 
 
+@pytest.mark.parametrize("mode", ["O1", "O2", "O3"])
+def test_estimate_counts_planner_search_tasks(mode):
+    """Phase 2 planner sorguları arama adımında sayılır (O1=0, O2=8, O3=20)."""
+    est = estimate_scan(_target(), mode)
+    assert est["steps"][0]["key"] == "search"
+    assert est["steps"][0]["tasks"] == 1 + planner_cap(mode)
+
+
 def test_o2_gercek_olcume_yakin_tahmin(monkeypatch):
     """Canlı O2 ölçümü (T-371: 362 sn / 164 görev / 1176 istek) ±%25 içinde kalmalı.
 
     Eski 604-657 sn'lik referans 48 site + 18 connector + LLM beklemesi dönemine
     aitti; T-333 (LLM hızlı fallback) ve T-357 (64 site) sonrası model güncellendi.
+    Ölçüm Phase 2 planner aramalarından önce alındı; planner sorguları artık arama
+    görevi olarak koştuğu için üst sınıf korunurken tahmin ~+80 sn büyüdü
+    (bkz. `test_estimate_counts_planner_search_tasks`).
     """
     monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY", raising=False)
     est = estimate_scan(_target("ODTÜ"), "O2")
