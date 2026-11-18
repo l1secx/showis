@@ -257,19 +257,40 @@ def test_butce_0_istek_yok():
 # ---------------------------------------------------------------------------
 
 
-def test_limit_elle_yazilanlari_korur():
-    limit = 40
+def test_wmn_payi_ve_toplam_limit():
+    """E1: limit, elle yazilmis ile WMN arasinda paylasilir (WMN >= 20)."""
+    _, extra = wmn.split_sites()
+    for limit in (40, 60, 100, 200):
+        sites = wmn.sites_for_username("alice", "O2", limit)
+        manual = [s for s in sites if not s.category]
+        wmn_part = [s for s in sites if s.category]
+        assert len(sites) == limit, (limit, len(sites))
+        assert len(wmn_part) >= min(20, len(extra)), (limit, len(wmn_part))
+        assert len(manual) > 0
+        assert manual == [s for s in SITES if s in manual][: len(manual)]
+
+
+def test_wmn_payi_ondan_fazla_kullanici_adinda_da_var():
+    """A2b'de n=10 -> site_limit=60 idi ve WMN payi 0'a dusuyordu (E1 duzeltmesi)."""
+    limit = 60
     sites = wmn.sites_for_username("alice", "O2", limit)
+    manual = [s for s in sites if not s.category]
+    wmn_part = [s for s in sites if s.category]
+
     assert len(sites) == limit
-    assert [s.key for s in sites] == [s.key for s in SITES[:limit]]
+    assert len(wmn_part) == 20
+    assert len(manual) == 40
+    assert len(manual) + len(wmn_part) == limit
 
 
 def test_limit_manual_ustunde_wmn_ekler():
     limit = len(SITES) + 30
     sites = wmn.sites_for_username("alice", "O2", limit)
+    manual = [s for s in sites if not s.category]
     assert len(sites) == limit
-    assert [s.key for s in sites[: len(SITES)]] == [s.key for s in SITES]
-    assert all(wmn.is_wmn(s) for s in sites[len(SITES) :])
+    # elle yazilmis spec'ler basta ve korunur (limit yettigi kadar)
+    assert [s.key for s in sites[: len(manual)]] == [s.key for s in SITES][: len(manual)]
+    assert all(s.category for s in sites[len(manual) :])
 
 
 def test_limit_mevcut_sayidan_buyukse_tumunu_dondurur():

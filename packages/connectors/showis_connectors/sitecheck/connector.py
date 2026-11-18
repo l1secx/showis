@@ -71,6 +71,9 @@ class SiteCheckConnector:
         #: secimi (WMN) devre disi kalir; davranis degismez.
         self._explicit_sites = sites is not None
         self.max_usernames = max_usernames
+        #: Tarama modu (scanner plan oncesinde atar: O1/O2/O3). None -> ctx/O2.
+        #: Istek butcesi bu moda gore secilir (D2).
+        self.scan_mode: str | None = None
         self.max_evidence_per_task = max_evidence_per_task
         #: Tarama bazli plan tekilleştirme (sitecheck + sitecheck_search).
         self.plan_registry = (

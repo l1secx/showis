@@ -273,6 +273,23 @@ def merged_sites() -> list[SiteSpec]:
 # ---------------------------------------------------------------------------
 
 
+def _wmn_share(total_limit: int, available_wmn: int, manual_count: int) -> int:
+    """Site limiti icinde WMN'e ayrilan pay (E1).
+
+    Kural: ``max(20, limit // 3)``, WMN listesi veya limitin kendisi kadar
+    kirpilir. Boylece elle yazilmis kuratorlu siteler silinmez (limit >= 40
+    olan gercek taramalarda en az ``limit - wmn_share`` site kalir) ve WMN
+    kapsamasi tamamen sifirlanmaz.
+    """
+    if total_limit <= 0 or available_wmn <= 0 or manual_count <= 0:
+        return 0
+    share = max(20, total_limit // 3)
+    # Cok kucuk limitlerde (env ile dusurulurse) kuratorlu siteler yaridan aza
+    # inmesin; gercek modlarda (limit >= 60) bu kirpma devreye girmez.
+    share = min(share, max(0, total_limit - min(manual_count, total_limit // 2)))
+    return min(share, available_wmn, total_limit)
+
+
 def sites_for_username(
     username: str,
     mode: str | None = None,
@@ -282,7 +299,9 @@ def sites_for_username(
 
     * ``limit`` = bu kullanici adi icin **toplam** site tavani (elle yazilmis
       dahil). Verilmezse mod butcesinden turetilir (tek kullanici adi varsayimi).
-    * Elle yazilmis ``SITES`` once gelir; kalan yer WMN dilimiyle doldurulur.
+    * Limit, elle yazilmis ile WMN arasinda **paylastirilir**: WMN payi
+      ``max(20, limit // 3)`` (``_wmn_share``); kalan yer elle yazilmis
+      sitelere ayrilir.
     * WMN dilimi ``sha1(username)`` offset'i ile dondurulur: ayni ad -> ayni
       dilim (deterministik), farkli adlar -> farkli dilimler (round-robin).
     * ``limit == 0`` (orn. O1 butcesi) -> bos liste; istek atilmaz.
@@ -291,13 +310,14 @@ def sites_for_username(
     total_limit = request_budget_for_mode(mode) if limit is None else int(limit)
     if total_limit <= 0:
         return []
-    if total_limit <= len(manual):
-        return manual[:total_limit]
 
-    wmn_count = min(total_limit - len(manual), len(extra))
-    if wmn_count <= 0:
-        return manual
+    share = _wmn_share(total_limit, len(extra), len(manual))
+    manual_take = min(len(manual), max(0, total_limit - share))
+    wmn_take = min(total_limit - manual_take, len(extra))
+    if wmn_take <= 0:
+        return manual[:manual_take]
+
     digest = hashlib.sha1(str(username or "").encode("utf-8")).hexdigest()
     offset = int(digest, 16) % len(extra)
-    rotated = [extra[(offset + i) % len(extra)] for i in range(wmn_count)]
-    return manual + rotated
+    rotated = [extra[(offset + i) % len(extra)] for i in range(wmn_take)]
+    return manual[:manual_take] + rotated

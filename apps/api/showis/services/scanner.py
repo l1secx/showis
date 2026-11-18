@@ -438,6 +438,11 @@ class ScannerService:
         # Varyant sayisi da moda gore sinirlanir; aksi halde O1 de dakikalarca surer.
         cap = variant_cap(scan.mode)
         for conn in self.connectors:
+            # E1: sitecheck gibi connector'lar modu plan asamasinda bilmeli
+            # (istek butcesi O2=600 / O3=1200); aksi halde O3 taramasi O2
+            # butcesiyle planlanir ve kapasite bosa gider.
+            if hasattr(conn, "scan_mode"):
+                conn.scan_mode = scan.mode
             if hasattr(conn, "max_variant_tasks"):
                 conn.max_variant_tasks = min(conn.max_variant_tasks, cap)
 
@@ -1259,6 +1264,8 @@ class ScannerService:
                 # T-326/T-301: sahte/atil hesap sinyali DB'de kalici (0004 migration).
                 authenticity=finding.authenticity,
                 authenticity_reasons=finding.authenticity_reasons or [],
+                # D8/C1: CONFIRMED gerekcesi (0008 migration) — "neden CONFIRMED".
+                confidence_basis=finding.confidence_basis or "",
             )
             # SEC-15: kullanicinin confirmed/rejected karari yeniden taramada
             # EZILMEZ. Karar varsa (verified_at dolu veya status candidate degil)
@@ -1276,6 +1283,7 @@ class ScannerService:
                 # Kullanici karari korunur; kanit sinyalleri (skor gibi) guncellenir.
                 existing.authenticity = db_finding.authenticity
                 existing.authenticity_reasons = db_finding.authenticity_reasons
+                existing.confidence_basis = db_finding.confidence_basis
             else:
                 existing.scan_id = db_finding.scan_id
                 existing.entity_id = db_finding.entity_id
@@ -1287,6 +1295,7 @@ class ScannerService:
                 existing.breakdown = db_finding.breakdown
                 existing.explanation = db_finding.explanation
                 existing.evidence_ids = db_finding.evidence_ids
+                existing.confidence_basis = db_finding.confidence_basis
             if notify:
                 await event_broadcaster.broadcast(
                     scan.id,

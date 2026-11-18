@@ -185,6 +185,7 @@ export interface Finding {
   evidence_ids?: string[];
   verified_by?: string | null;
   verified_at?: string | null;
+  confidence_basis?: string;
   authenticity?: number | null;
   authenticity_reasons?: string[];
 }

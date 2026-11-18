@@ -1007,6 +1007,8 @@ async def get_case_findings(
             # T-327: sahte/spam (authenticity) sinyali — eski istemciler icin ek alan
             "authenticity": f.authenticity,
             "authenticity_reasons": f.authenticity_reasons,
+            # D8/C1: CONFIRMED gerekcesi (cross_link | commit_email | avatar | weak)
+            "confidence_basis": f.confidence_basis,
         }
         for f in findings
     ]
@@ -1113,6 +1115,8 @@ async def export_case(
                 # T-327: authenticity alanlari export'ta da yer alir
                 "authenticity": f.authenticity,
                 "authenticity_reasons": f.authenticity_reasons,
+                # D8/C1: CONFIRMED gerekcesi (export'ta da)
+                "confidence_basis": f.confidence_basis,
             }
             for f in findings
         ],
