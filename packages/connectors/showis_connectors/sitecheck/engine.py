@@ -194,6 +194,8 @@ class UsernameCheckEngine:
             try:
                 resp = await self.http.get(
                     url,
+                    # Site'ya ozgu basliklar (WMN `headers`) gercekten uygulanir;
+                    # HttpClient varsayilan UA'yi bunlarla ezer.
                     headers=spec.headers or None,
                     check_robots=not spec.skip_robots,
                     follow_redirects=True,

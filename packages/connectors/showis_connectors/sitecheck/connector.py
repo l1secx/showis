@@ -31,6 +31,7 @@ from .cache import CheckCache, get_default_cache
 from .dedupe import ScanPlanRegistry, get_default_registry
 from .engine import EXISTS, SKIPPED, UsernameCheckEngine
 from .sites import SITES, SiteSpec
+from .wmn import sites_for_username
 
 logger = logging.getLogger("showis.sitecheck.connector")
 
@@ -61,6 +62,9 @@ class SiteCheckConnector:
         )
         self.evidence_store = evidence_store or EvidenceStore()
         self.sites = sites if sites is not None else SITES
+        #: Testler/acik cagrilar kendi listesini verdiyse mod bazli site
+        #: secimi (WMN) devre disi kalir; davranis degismez.
+        self._explicit_sites = sites is not None
         self.max_usernames = max_usernames
         self.max_evidence_per_task = max_evidence_per_task
         #: Tarama bazli plan tekilleştirme (sitecheck + sitecheck_search).
@@ -132,6 +136,25 @@ class SiteCheckConnector:
             return str(seed.username).strip().lstrip("@")
         return None
 
+    @staticmethod
+    def _scan_mode(task: TaskSpec, ctx: ScanContext) -> str:
+        """Tarama modu: ``task.params["mode"]`` > ``ctx.mode`` > ``"O2"``."""
+        param_mode = str(task.params.get("mode") or "").strip()
+        if param_mode:
+            return param_mode
+        ctx_mode = str(getattr(ctx, "mode", "") or "").strip()
+        return ctx_mode or "O2"
+
+    def _targets(self, username: str, task: TaskSpec, ctx: ScanContext) -> list[SiteSpec]:
+        """Bu kullanıcı adı için taranacak siteler (mod tavanı + rotasyon).
+
+        ``sites=`` ile açık liste verilmişse (testler, elle çağrılar) o liste
+        kullanılır — WMN dilimi devreye girmez.
+        """
+        if self._explicit_sites:
+            return self.sites
+        return sites_for_username(username, self._scan_mode(task, ctx))
+
     # ------------------------------------------------------------------
     # Run
     # ------------------------------------------------------------------
@@ -152,9 +175,12 @@ class SiteCheckConnector:
                 )
             ]
 
-        results = await self.engine.check_username(username, self.sites)
+        mode = self._scan_mode(task, ctx)
+        targets = self._targets(username, task, ctx)
+        results = await self.engine.check_username(username, targets)
 
         hits = [r for r in results if r.exists]
+
         cache_hits = sum(1 for r in results if r.from_cache)
         evidence: list[Any] = []
         checks_payload: list[dict[str, Any]] = []
@@ -204,6 +230,9 @@ class SiteCheckConnector:
             data={
                 "username": username,
                 "total_sites": len(results),
+                #: mod bazli plan: hangi modda kaç site tarandı (butce kaniti)
+                "scan_mode": mode,
+                "sites_planned": len(targets),
                 "hits": len(hits),
                 "checks": checks_payload,
                 "skipped": sum(1 for r in results if r.status == SKIPPED),
