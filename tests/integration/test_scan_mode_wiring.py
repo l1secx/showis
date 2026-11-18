@@ -120,7 +120,7 @@ async def test_scanner_connectora_scan_mode_atar(db_factory, mode):
 
 async def test_scanner_sitecheck_butcesi_moda_gore_planlanir(db_factory, monkeypatch):
     """Uctan uca: O3 taramasinda sitecheck plani O3 butcesini (1200) kullanir."""
-    from showis_connectors.sitecheck import wmn
+    from showis_connectors.sitecheck import budget
     from showis_connectors.sitecheck.connector import SiteCheckConnector
     from showis_connectors.sitecheck.engine import UsernameCheckEngine
 
@@ -151,6 +151,8 @@ async def test_scanner_sitecheck_butcesi_moda_gore_planlanir(db_factory, monkeyp
     limit = limits.pop()
     n = len(rows)
     assert n <= 10
-    assert limit == wmn.SITECHECK_REQUEST_BUDGET["O3"] // n
-    assert n * limit <= wmn.SITECHECK_REQUEST_BUDGET["O3"]
+    # D10: birincil connector aile butcesinin %80'ini kullanir
+    assert limit == budget.primary_site_limit("O3", n)
+    assert n * limit <= budget.share_budget("O3", "primary")
+    assert n * limit <= budget.family_budget("O3")
     assert all(row.params.get("mode") == "O3" for row in rows)

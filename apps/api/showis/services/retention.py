@@ -17,7 +17,15 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from showis.db.models import AuditLog, Case, Evidence, Observation, Scan
+from showis.db.models import (
+    AuditLog,
+    Case,
+    Entity,
+    Evidence,
+    Observation,
+    Scan,
+    Task,
+)
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -105,14 +113,78 @@ async def purge_old_audit_logs(db: AsyncSession) -> int:
     return count
 
 
+#: Retention sonrasi temizlenen PII alanlari (kayit silinmez, alan maskelenir).
+TASK_PII_KEYS = ("email",)
+ENTITY_PII_KEYS = ("public_email",)
+
+
+async def purge_expired_pii(db: AsyncSession) -> int:
+    """Saklama suresi dolan vakalarda **ham e-posta** alanlarini temizler.
+
+    Z3 I2: e-posta iki yerde kaliciydi — `tasks.params["email"]` (GitHub commit
+    aramasi) ve `entities.attributes["public_email"]` (commit yazari). Vaka
+    silinene kadar yasiyordu; artik retention penceresi dolunca yalniz bu
+    anahtarlar **silinir** (kayitlar ve diger alanlar korunur).
+
+    Donus: degistirilen kayit sayisi (task + entity).
+    """
+    now = datetime.now(timezone.utc)
+    cases = (await db.execute(select(Case))).scalars().all()
+    redacted = 0
+    for case in cases:
+        if case.status == "deleted" or case.deleted_at:
+            continue
+        cutoff = case.created_at + timedelta(days=case.retention_days)
+        if cutoff > now:
+            continue
+
+        scan_ids = (
+            await db.execute(select(Scan.id).where(Scan.case_id == case.id))
+        ).scalars().all()
+        if scan_ids:
+            tasks = (
+                (await db.execute(select(Task).where(Task.scan_id.in_(scan_ids))))
+                .scalars()
+                .all()
+            )
+            for task in tasks:
+                params = dict(task.params or {})
+                if any(key in params for key in TASK_PII_KEYS):
+                    for key in TASK_PII_KEYS:
+                        params.pop(key, None)
+                    # JSON mutation tracking icin yeniden atanir.
+                    task.params = params
+                    redacted += 1
+
+        entities = (
+            (await db.execute(select(Entity).where(Entity.case_id == case.id)))
+            .scalars()
+            .all()
+        )
+        for entity in entities:
+            attributes = dict(entity.attributes or {})
+            if any(key in attributes for key in ENTITY_PII_KEYS):
+                for key in ENTITY_PII_KEYS:
+                    attributes.pop(key, None)
+                entity.attributes = attributes
+                redacted += 1
+
+    await db.commit()
+    if redacted:
+        logger.info("Retention: %d kayittan ham e-posta alani temizlendi.", redacted)
+    return redacted
+
+
 async def run_retention_purge(db: AsyncSession) -> dict[str, Any]:
     """Tum retention politikalarini tek seferde calistirir."""
     evidence_deleted = await purge_expired_evidence(db)
     observations_deleted = await purge_old_observations(db)
+    pii_redacted = await purge_expired_pii(db)
     audit_deleted = await purge_old_audit_logs(db)
     return {
         "evidence_deleted": evidence_deleted,
         "observations_deleted": observations_deleted,
+        "pii_redacted": pii_redacted,
         "audit_deleted": audit_deleted,
         "ran_at": datetime.now(timezone.utc).isoformat(),
     }

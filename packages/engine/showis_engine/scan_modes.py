@@ -332,18 +332,44 @@ def site_count() -> int:
 
 
 def sitecheck_request_budget(mode: str | None) -> int:
-    """Moda göre sitecheck **istek** bütçesi (D2; env ile ezilebilir).
+    """Moda göre sitecheck **aile** istek bütçesi (D10; env ile ezilebilir).
 
-    Connector paketi yoksa sabit yedeğe düşer; tahmin hiçbir zaman
-    connector'ın uygulayacağı bütçeyi aşan bir sayı üretmemeli.
+    `sitecheck` + `sitecheck_search` bu tek bütçeyi paylaşır (80/20). Connector
+    paketi yoksa sabit yedeğe düşer; tahmin hiçbir zaman connector'ın
+    uygulayacağı bütçeyi aşan bir sayı üretmemeli.
     """
     normalized = norm_mode(mode)
     try:  # tembel import: engine -> connector bagimliligi yok
-        from showis_connectors.sitecheck.wmn import request_budget_for_mode
+        from showis_connectors.sitecheck.budget import family_budget
 
-        return int(request_budget_for_mode(normalized))
+        return int(family_budget(normalized))
     except Exception:  # pragma: no cover - connector paketi yoksa
         return _SITECHECK_REQUEST_BUDGET_FALLBACK[normalized]
+
+
+def sitecheck_primary_share(mode: str | None) -> int:
+    """Aile bütçesinin birincil connector payı (tahminde site sayısı için)."""
+    normalized = norm_mode(mode)
+    try:
+        from showis_connectors.sitecheck.budget import share_budget
+
+        return int(share_budget(normalized, "primary"))
+    except Exception:  # pragma: no cover - connector paketi yoksa
+        return int(_SITECHECK_REQUEST_BUDGET_FALLBACK[normalized] * 0.80)
+
+
+#: `sitecheck_label()` biçimi — **tek kaynak**. `scripts/e2e_acceptance.sh` 4c
+#: adımı bu ERE'yi birebir taşır; testler ikisinin aynı olduğunu doğrular
+#: (biçim değişirse test kırmızı olur, sessizce 4c boş dönmez).
+SITECHECK_LABEL_ERE = r"Site-check \(([0-9]+) site / ([0-9]+) istek\)"
+
+
+def sitecheck_label(sites: int, requests: int) -> str:
+    """Sitecheck adım etiketi: ``Site-check (N site / M istek)``.
+
+    Tek üretim noktası: e2e 4c adımı ve testler bu biçime göre ayrıştırır.
+    """
+    return f"Site-check ({int(sites)} site / {int(requests)} istek)"
 
 
 def norm_mode(mode: str | None) -> str:
@@ -447,10 +473,10 @@ def estimate_scan(
         if slow_allowed
         else 0
     )
-    site_usernames = min(profile["usernames"], len(variants), SITECHECK_MAX_USERNAMES)
-    if site_usernames:
-        # `sitecheck_search` ayrıca aramadan bulduğu kimlikleri planlar (dedupe sonrası)
-        site_usernames += _SITECHECK_SEARCH_USERNAMES
+    primary_usernames = min(profile["usernames"], len(variants), SITECHECK_MAX_USERNAMES)
+    search_usernames = _SITECHECK_SEARCH_USERNAMES if primary_usernames else 0
+    #: Sitecheck adımının görev sayısı (iki connector: birincil + arama)
+    site_usernames = primary_usernames + search_usernames
 
     steps: list[dict[str, Any]] = []
 
@@ -489,16 +515,17 @@ def estimate_scan(
         )
 
     if site_usernames:
-        # A2b/I5: site sayısı artık "64 site" varsayımı değil, modun istek
-        # bütçesinden türetilir; süre site başına ölçeklenir (22 sn / 48 site).
+        # D10: site sayısı "64 site" varsayımı değil, **aile** istek bütçesinden
+        # türetilir; süre site başına ölçeklenir (22 sn / 48 site).
         sitecheck_requests = sitecheck_request_budget(mode)
+        sites_per_username = sitecheck_primary_share(mode) // max(1, primary_usernames)
         per_site_costs = dict(costs)
         per_site_costs["site_username"] = (
             costs["site_username"] / _REFERENCE_SITES_PER_USERNAME
         )
         seconds += add_step(
             "sitecheck",
-            f"Site-check ({site_usernames} kullanıcı adı, ~{sitecheck_requests} istek)",
+            sitecheck_label(sites_per_username, sitecheck_requests),
             site_usernames,
             "site_username",
             units=sitecheck_requests,
@@ -519,14 +546,9 @@ def estimate_scan(
     # Entity/finding yazimi tek DB yazari uzerinden seri kalir.
     seconds += tasks * costs["entity"]
 
-    # Site basina istekler: ana sitecheck butcesi + sitecheck_search'un
-    # (kapsam disi, ayni tarama butcesini paylasir) kendi site istekleri.
-    if site_usernames:
-        site_requests = sitecheck_requests
-        if slow_allowed:
-            site_requests += _SITECHECK_SEARCH_USERNAMES * site_count()
-    else:
-        site_requests = 0
+    # Site basina istekler: sitecheck **ailesi** (birincil + arama) tek butceyi
+    # paylasir; ikinci bir `search × site_count()` terimi YOK (D10, Z3-10).
+    site_requests = sitecheck_requests if site_usernames else 0
 
     # Tarama-geneli butce baglayicidir: kapi fazlasini keser (fail-closed).
     # Tahmin, gercekte olacak seyi soylemeli -> butceyle kirpilir; kirpilmamis

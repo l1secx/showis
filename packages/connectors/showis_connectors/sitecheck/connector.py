@@ -27,17 +27,17 @@ from showis_contracts import (
 )
 from showis_engine.http import EvidenceStore, HttpClient
 
+from .budget import primary_site_limit
 from .cache import CheckCache, get_default_cache
 from .dedupe import ScanPlanRegistry, get_default_registry
 from .engine import EXISTS, SKIPPED, UsernameCheckEngine
 from .sites import SITES, SiteSpec
-from .wmn import site_limit_for, sites_for_username
+from .wmn import sites_for_username
 
 logger = logging.getLogger("showis.sitecheck.connector")
 
-#: Sitecheck planinin uretecegi en fazla kullanici adi (D2: butce korumasi).
-#: Tavan olmadan site basina limit 60'in altina duser ve elle yazilmis
-#: kapsam bile kesilir.
+#: Sitecheck planinin uretecegi en fazla kullanici adi (D10: butce korumasi).
+#: Tavan olmadan site basina limit dusuk kalir ve elle yazilmis kapsam kesilir.
 MAX_PLANNED_USERNAMES = 10
 
 
@@ -160,9 +160,10 @@ class SiteCheckConnector:
             if len(tasks) > before:
                 budget -= 1
 
-        # D2: istek butcesi kullanici adi sayisina bolunur -> gorev basina site
-        # limiti. n x site_limit <= butce (bolme kalani kadar sapma).
-        site_limit = site_limit_for(len(tasks), mode)
+        # D10: AILE butcesinin birincil payi kullanici adi sayisina bolunur ->
+        # gorev basina site limiti. n x site_limit <= pay (arama connector'i
+        # ayni aileden %20'lik payi kullanir; toplam aile butcesini asmaz).
+        site_limit = primary_site_limit(mode, len(tasks))
         for task in tasks:
             task.params["mode"] = mode
             task.params["site_limit"] = site_limit
@@ -198,21 +199,27 @@ class SiteCheckConnector:
         """
         if self._explicit_sites:
             return self.sites
-        return sites_for_username(
-            username, self._scan_mode(task, ctx), self._site_limit(task)
-        )
+        mode = self._scan_mode(task, ctx)
+        return sites_for_username(username, mode, self._site_limit(task, mode))
 
     @staticmethod
-    def _site_limit(task: TaskSpec) -> int | None:
-        """Görevdeki ``site_limit`` (yoksa/geçersizse ``None`` → mod bütçesi)."""
+    def _site_limit(task: TaskSpec, mode: str | None = None) -> int:
+        """Görevdeki ``site_limit``; yoksa/geçersizse **fail-safe** tavan.
+
+        Eski (limitsiz) DB görevleri için tam bütçe kullanılmaz: tavan
+        ``MAX_PLANNED_USERNAMES`` varsayımıyla birincil paydan hesaplanır
+        (Z3 C1: limitsiz görev 592 site tarıyordu).
+        """
         raw = task.params.get("site_limit")
         if raw is None:
-            return None
+            return primary_site_limit(mode, MAX_PLANNED_USERNAMES)
         try:
             return int(raw)
         except (TypeError, ValueError):
-            logger.warning("Geçersiz site_limit (%r), mod bütçesi kullanılacak", raw)
-            return None
+            logger.warning(
+                "Geçersiz site_limit (%r), fail-safe limit kullanılacak", raw
+            )
+            return primary_site_limit(mode, MAX_PLANNED_USERNAMES)
 
     # ------------------------------------------------------------------
     # Run
@@ -293,7 +300,7 @@ class SiteCheckConnector:
                 "scan_mode": mode,
                 "sites_planned": len(targets),
                 #: plan aşamasında bütçeden türetilen kullanıcı adı başına site tavanı
-                "site_limit": self._site_limit(task),
+                "site_limit": self._site_limit(task, mode),
                 "hits": len(hits),
                 "checks": checks_payload,
                 "skipped": sum(1 for r in results if r.status == SKIPPED),

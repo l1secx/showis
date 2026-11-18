@@ -17,7 +17,8 @@ from showis_contracts import ScanContext, TaskSpec
 
 from showis_connectors.websearch import SearchProvider, extract_platform_from_url
 
-from .connector import SiteCheckConnector
+from .budget import search_site_limit
+from .connector import MAX_PLANNED_USERNAMES, SiteCheckConnector
 from .engine import normalize_username_for_url
 
 logger = logging.getLogger("showis.sitecheck.search")
@@ -47,7 +48,7 @@ class SiteCheckSearchConnector(SiteCheckConnector):
     async def plan(self, ctx: ScanContext) -> list[TaskSpec]:
         tasks = await super().plan(ctx)
         if not self.search_provider:
-            return tasks
+            return self._finalize(tasks, ctx)
 
         fullname = f"{ctx.target.first_name} {ctx.target.last_name}".strip()
         # Handle hedefinde ad/soyad yoktur: arama sorgusu nick'ten kurulur.
@@ -57,7 +58,7 @@ class SiteCheckSearchConnector(SiteCheckConnector):
         nick = sanitize_hint((ctx.target.nickname or "").strip().lstrip("@"))
         subject = fullname or nick
         if not subject:
-            return tasks
+            return self._finalize(tasks, ctx)
 
         seen = {str(t.params.get("username") or "") for t in tasks}
         try:
@@ -67,9 +68,13 @@ class SiteCheckSearchConnector(SiteCheckConnector):
             )
         except Exception as exc:
             logger.warning("Arama sağlayıcısı başarısız oldu: %s", exc)
-            return tasks
+            return self._finalize(tasks, ctx)
 
         for hit in hits:
+            # D10: arama kaynakli kullanici adlari da plan tavanina tabi
+            # (aksi halde n buyur, limit kuculur ve butce asilir).
+            if len(tasks) >= MAX_PLANNED_USERNAMES:
+                break
             _, ident = extract_platform_from_url(hit.url)
             # T-365: arama sonucu kimligi guvenilmez — URL'e konamayacak adlar
             # gorev uretmeden elenir (tek yerden: normalize_username_for_url).
@@ -81,4 +86,27 @@ class SiteCheckSearchConnector(SiteCheckConnector):
                 if not self.plan_registry.claim(ctx.scan_id, ident, self.name):
                     continue
                 tasks.append(self._make_task(ident, priority=3))
+        return self._finalize(tasks, ctx)
+
+    def _finalize(self, tasks: list[TaskSpec], ctx: ScanContext) -> list[TaskSpec]:
+        """Tum gorevlere mod + **arama payindan** turetilen site limitini yazar.
+
+        Z3 C1: bu connector kendi payini kullanmali; limitsiz gorev tum mod
+        butcesini (592 site) tariyordu. Aile toplami = birincil %80 + arama %20
+        <= `SITECHECK_FAMILY_BUDGET`.
+        """
+        mode = self._resolve_plan_mode(ctx)
+        site_limit = search_site_limit(mode, len(tasks))
+        for task in tasks:
+            task.params["mode"] = mode
+            task.params["site_limit"] = site_limit
+        if tasks:
+            logger.info(
+                "Site-check arama plani: %s modu, %d kullanıcı adı × %d site "
+                "(aile butcesinin arama payi)",
+                mode,
+                len(tasks),
+                site_limit,
+            )
         return tasks
+

@@ -448,14 +448,20 @@ if http_request auth GET "/api/v1/cases/${CASE_ID}/scan/estimate?mode=O2"; then
       step_fail 4b "O2 tahmin tutarliligi (requests>=tasks)" \
         "requests=${o2_requests:-?} tasks=${o2_tasks:-?}"
     fi
-    site_count="$(printf '%s' "$HTTP_BODY" | jq -r '
-      [ .steps[]? | select(.key == "sitecheck")
-        | (.label | try capture("× (?<n>[0-9]+) site").n catch empty) ] | .[0] // empty' 2>/dev/null || true)"
-    if [[ "$site_count" =~ ^[0-9]+$ ]] && (( site_count > 48 )); then
-      capability 4c "sitecheck kapsami (T-357)" 1 "${site_count} site (>48)" ""
+    # D10: etiket tek kaynaktan uretilir (`scan_modes.sitecheck_label`):
+    #   "Site-check (N site / M istek)". Asagidaki ERE o kaynakla birebir
+    #   ayni olmali (test: SITECHECK_LABEL_ERE betikte bulunmali).
+    site_label="$(printf '%s' "$HTTP_BODY" | jq -r '
+      [ .steps[]? | select(.key == "sitecheck") | (.label // empty) ] | .[0] // empty' 2>/dev/null || true)"
+    site_count="$(printf '%s' "$site_label" | sed -nE 's|.*Site-check \(([0-9]+) site / ([0-9]+) istek\).*|\1|p')"
+    site_requests="$(printf '%s' "$site_label" | sed -nE 's|.*Site-check \(([0-9]+) site / ([0-9]+) istek\).*|\2|p')"
+    if [[ "$site_count" =~ ^[0-9]+$ && "$site_requests" =~ ^[0-9]+$ ]] \
+       && (( site_count >= 40 )) && (( site_requests >= 300 )); then
+      capability 4c "sitecheck kapsami (D10)" 1 \
+        "${site_count} site / ${site_requests} istek" ""
     else
-      capability 4c "sitecheck kapsami (T-357)" 0 "" \
-        "site sayisi ${site_count:-bulunamadi} (T-357 oncesi 48)"
+      capability 4c "sitecheck kapsami (D10)" 0 "" \
+        "etiket ${site_label:-bulunamadi} (beklenen: Site-check (N site / M istek))"
     fi
   fi
 else

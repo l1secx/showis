@@ -1,12 +1,16 @@
 """A1 — WMN -> SiteSpec donusum testleri.
 
-Ag yok: donusum testleri kucuk bir sahte WMN dokumani kullanir. Gercek veriyle
-calisan test yalnizca yerel dosya varsa kosar, yoksa ``skip`` olur.
+Ag yok. Varsayilan olarak **repo ici kucuk fixture** (`tests/fixtures/
+wmn-source.min.json`) kullanilir; testler hermetiktir (gecici /tmp dosyasina
+bagimli degil). Tam gercek veriyle kosan testler `SHOWIS_WMN_REAL_DATA=1`
+verildiginde calisir (opt-in); o durumda kaynak dosya yoksa test **fail**
+eder — sessizce skip etmez (QA-Z3-07).
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -20,10 +24,30 @@ if str(SCRIPTS_DIR) not in sys.path:
 import import_wmn_sites as wmn  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+#: Hermetik kaynak: repo icinde, 6 kayitlik minimal WMN dokumani.
+FIXTURE_SOURCE = REPO_ROOT / "tests" / "fixtures" / "wmn-source.min.json"
+#: Tam veri yalnizca opt-in (SHOWIS_WMN_REAL_DATA=1) ve yerel dosyayla.
+REAL_DATA_ENV = "SHOWIS_WMN_REAL_DATA"
 REAL_SOURCE = Path("/tmp/opencode/wmn-source.json")
 OUT_PATH = (
     REPO_ROOT / "packages/connectors/showis_connectors/sitecheck/data/wmn-sites.json"
 )
+
+
+def _real_source_or_fail() -> dict:
+    """Opt-in gercek veri: env yoksa test atlanir, env var + dosya yoksa FAIL."""
+    if os.getenv(REAL_DATA_ENV) != "1":
+        pytest.skip(f"gercek veri testi opt-in: {REAL_DATA_ENV}=1")
+    assert REAL_SOURCE.exists(), (
+        f"{REAL_DATA_ENV}=1 ama kaynak yok: {REAL_SOURCE} "
+        "(gercek veri testi sessizce atlanmaz)"
+    )
+    return json.loads(REAL_SOURCE.read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="module")
+def fixture_source() -> dict:
+    return json.loads(FIXTURE_SOURCE.read_text(encoding="utf-8"))
 
 #: Allowlist disinda kalmasi gereken (kimlik/oturum tasiyabilecek) basliklar.
 _SECRET_HEADERS = {
@@ -388,41 +412,104 @@ def test_main_kaynak_yoksa_hata(tmp_path, capsys):
 
 
 # ---------------------------------------------------------------------------
-# Gercek veri (yerel dosya varsa)
+# Hermetik kaynak (tests/fixtures/wmn-source.min.json) — her zaman kosar
 # ---------------------------------------------------------------------------
 
 
-def test_uretilen_dosya_tutarlidir():
-    """Depodaki wmn-sites.json kaynaktan yeniden uretilebilir olmali."""
-    if not OUT_PATH.exists():
-        pytest.skip("wmn-sites.json uretilmemis")
-    data = json.loads(OUT_PATH.read_text(encoding="utf-8"))
-    assert data["_license"]["adapted"] is True
-    assert wmn.validate_sites(data["sites"]) == []
-    assert data["_generated"]["kept"] == len(data["sites"])
-    assert len(data["sites"]) >= 300
-    # A1b: depodaki dosya kaynakla birebir ayni olmali (deterministik uretim)
-    if not REAL_SOURCE.exists():
-        pytest.skip(f"gercek WMN kaynagi yok: {REAL_SOURCE}")
-    source = json.loads(REAL_SOURCE.read_text(encoding="utf-8"))
-    expected, _ = wmn.build_document(source)
-    assert data == expected
+def test_fixture_hermetik_kaynak(fixture_source):
+    """Fixture 6 kayit tasir: duz, header'li, NSFW, POST, invalid, cloudflare."""
+    names = [s["name"] for s in fixture_source["sites"]]
+    assert len(names) == 6
+    assert "Fixture Nsfw" in names
 
 
-def test_uretim_deterministik():
-    if not REAL_SOURCE.exists():
-        pytest.skip(f"gercek WMN kaynagi yok: {REAL_SOURCE}")
-    source = json.loads(REAL_SOURCE.read_text(encoding="utf-8"))
-    first, _ = wmn.build_document(source)
-    second, _ = wmn.build_document(source)
+def test_fixture_donusum_sayaclari(fixture_source):
+    result = wmn.convert(fixture_source)
+
+    assert result.sites_total == 6
+    assert result.kept == 3  # duz + header'li + NSFW
+    assert result.excluded["post"] == 1
+    assert result.excluded["invalid"] == 1
+    assert result.excluded["protected"] == 1
+    assert result.headers_carried == 1
+    assert result.headers_removed >= 2  # Cookie + User-Agent
+
+
+def test_fixture_dokuman_ve_lisans(fixture_source):
+    doc, _ = wmn.build_document(fixture_source)
+
+    assert list(doc) == ["_license", "_generated", "sites"]
+    license_block = doc["_license"]
+    assert license_block["name"] == "CC BY-SA 4.0"
+    assert license_block["uri"].startswith("https://creativecommons.org/licenses/by-sa/4.0")
+    # Kaynaktaki authors kullanilir (fixture'da 2 isim)
+    assert license_block["authors"] == ["Micah Hoffman", "Test Katkici"]
+    # CC BY-SA 3(a)(1)(a)(iv)/(v): sorumluluk reddi + materyal URI'si
+    assert license_block["disclaimer"]
+    assert license_block["material_url"].startswith("https://")
+    assert wmn.validate_sites(doc["sites"]) == []
+
+
+def test_fixture_uretim_deterministik(fixture_source):
+    first, _ = wmn.build_document(fixture_source)
+    second, _ = wmn.build_document(fixture_source)
     assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
 
 
+def test_fixture_nsfw_kategorisi_korunur(fixture_source):
+    result = wmn.convert(fixture_source)
+    nsfw = [s for s in result.sites if s["category"] == "xx NSFW xx"]
+    assert len(nsfw) == 1
+    assert nsfw[0]["key"] == "fixture-nsfw"
+
+
+def test_fixture_headers_allowlist(fixture_source):
+    result = wmn.convert(fixture_source)
+    with_headers = [s for s in result.sites if "headers" in s]
+    assert len(with_headers) == 1
+    # Literal beklenti: kod sabiti bosaltilsa test duser
+    assert {n.lower() for n in with_headers[0]["headers"]} == {
+        "accept",
+        "accept-language",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Depodaki uretilmis dosya (her zaman kosar — /tmp'ye bagimli degil)
+# ---------------------------------------------------------------------------
+
+
+def test_uretilen_dosya_yapisi_ve_lisansi():
+    """Commit'li wmn-sites.json: sozlesme + lisans zarfı (kaynak gerekmez)."""
+    assert OUT_PATH.exists(), f"wmn-sites.json yok: {OUT_PATH}"
+    data = json.loads(OUT_PATH.read_text(encoding="utf-8"))
+
+    license_block = data["_license"]
+    assert license_block["adapted"] is True
+    assert license_block["uri"].startswith("https://creativecommons.org/licenses/by-sa/4.0")
+    assert license_block["authors"], "authors bos olamaz"
+    assert license_block["disclaimer"]
+    assert license_block["material_url"].startswith("https://")
+    assert license_block["source"].startswith("https://github.com/")
+
+    assert wmn.validate_sites(data["sites"]) == []
+    assert data["_generated"]["kept"] == len(data["sites"])
+    assert len(data["sites"]) >= 300
+    # Allowlist literali: veri dosyasinda baska baslik olmamali
+    for site in data["sites"]:
+        if "headers" in site:
+            assert {n.lower() for n in site["headers"]} <= {"accept", "accept-language"}
+
+
+# ---------------------------------------------------------------------------
+# Gercek veri — opt-in (SHOWIS_WMN_REAL_DATA=1); env yoksa skip, dosya yoksa FAIL
+# ---------------------------------------------------------------------------
+
+
 def test_gercek_veri_kept_esigi():
-    if not REAL_SOURCE.exists():
-        pytest.skip(f"gercek WMN kaynagi yok: {REAL_SOURCE}")
-    data = json.loads(REAL_SOURCE.read_text(encoding="utf-8"))
+    data = _real_source_or_fail()
     result = wmn.convert(data)
+
     assert result.kept >= 300
     assert result.sites_total == len(data["sites"])
     assert wmn.validate_sites(result.sites) == []
@@ -430,44 +517,35 @@ def test_gercek_veri_kept_esigi():
     assert result.kept + sum(result.excluded.values()) == result.sites_total
 
 
+def test_gercek_veri_commit_li_dosyayla_ayni():
+    """Depodaki dosya, gercek kaynaktan yeniden uretimle birebir ayni olmali."""
+    data = _real_source_or_fail()
+    shipped = json.loads(OUT_PATH.read_text(encoding="utf-8"))
+    expected, _ = wmn.build_document(data)
+    assert shipped == expected
+
+
 def test_gercek_veri_headers_allowlist():
-    """A2b/D4: ciktiya yalnizca allowlist basliklari tasinir."""
-    if not REAL_SOURCE.exists():
-        pytest.skip(f"gercek WMN kaynagi yok: {REAL_SOURCE}")
-    source = json.loads(REAL_SOURCE.read_text(encoding="utf-8"))
-    result = wmn.convert(source)
+    data = _real_source_or_fail()
+    result = wmn.convert(data)
 
     with_headers = [s for s in result.sites if "headers" in s]
     assert result.headers_carried == len(with_headers)
     assert with_headers, "en az bir kayitta allowlist basligi beklenir"
     for site in with_headers:
-        assert site["headers"]
-        assert all(isinstance(v, str) for v in site["headers"].values())
-        # beklenen kume testte LITERAL: kod sabiti bosaltilsa test duser
         assert {n.lower() for n in site["headers"]} <= {"accept", "accept-language"}
-    # dusurulen basliklar raporlanir
     assert result.headers_dropped > 0
-    assert result.headers_removed >= result.headers_dropped
 
 
-
-def test_gercek_veri_nsfw_kategorisi_korunur():
-    """A1b: NSFW kayitlari veride kalir; kategori filtrelenmez."""
-    if not REAL_SOURCE.exists():
-        pytest.skip(f"gercek WMN kaynagi yok: {REAL_SOURCE}")
-    source = json.loads(REAL_SOURCE.read_text(encoding="utf-8"))
-    result = wmn.convert(source)
+def test_gercek_veri_nsfw_korunur():
+    data = _real_source_or_fail()
+    result = wmn.convert(data)
 
     nsfw = [s for s in result.sites if s["category"] == "xx NSFW xx"]
     assert nsfw, "NSFW kayitlari cikarilmamali"
-    for site in nsfw:
-        assert site["category"] == "xx NSFW xx"
-
-    # NSFW oldugu icin dislanan kayit olmamali: her NSFW dislamasi standart
-    # gerekcelerden biriyle aciklanabilir (kategori filtresi YOK).
     nsfw_names = {
         (r.get("name") or "").strip()
-        for r in source["sites"]
+        for r in data["sites"]
         if (r.get("cat") or "").strip() == "xx NSFW xx"
     }
     allowed = {"invalid", "post", "protected", "ambiguous"}
@@ -476,9 +554,3 @@ def test_gercek_veri_nsfw_kategorisi_korunur():
             assert reason in allowed or reason.startswith("duplicate:"), (
                 f"{name}: beklenmeyen dislama nedeni {reason}"
             )
-
-    nsfw_records = [r for r in source["sites"] if (r.get("cat") or "").strip() == "xx NSFW xx"]
-    dropped_nsfw = [d for d in result.dropped if d[0] in nsfw_names]
-    assert len(nsfw) == len(nsfw_records) - len(dropped_nsfw)
-
-

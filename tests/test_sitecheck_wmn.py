@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import httpx
 import pytest
-from showis_connectors.sitecheck import wmn
+from showis_connectors.sitecheck import budget, wmn
 from showis_connectors.sitecheck.connector import (
     MAX_PLANNED_USERNAMES,
     SiteCheckConnector,
@@ -18,7 +18,7 @@ from showis_connectors.sitecheck.sites import SITES, SiteSpec
 from showis_contracts import Platform, ScanContext, Seed, Target
 from showis_engine.scan_modes import MODE_PROFILES, SITECHECK_MAX_USERNAMES
 
-BUDGET_ENV = wmn.REQUEST_BUDGET_ENV
+BUDGET_ENV = budget.REQUEST_BUDGET_ENV
 NSFW_ENV = wmn.ALLOW_NSFW_ENV
 
 
@@ -212,40 +212,64 @@ def test_allow_nsfw_falsey(monkeypatch, value):
 
 
 # ---------------------------------------------------------------------------
-# Istek butcesi (D2)
+# Aile istek butcesi (D10)
 # ---------------------------------------------------------------------------
 
 
-def test_istek_butcesi_sabitleri():
-    assert wmn.SITECHECK_REQUEST_BUDGET == {"O1": 0, "O2": 600, "O3": 1200}
+def test_aile_butcesi_sabitleri():
+    assert budget.SITECHECK_FAMILY_BUDGET == {"O1": 0, "O2": 600, "O3": 1200}
+    assert budget.PRIMARY_SHARE == 0.80
+    assert budget.SEARCH_SHARE == 0.20
 
 
-def test_istek_butcesi_mod_normalize():
-    assert wmn.request_budget_for_mode("derin") == 1200
-    assert wmn.request_budget_for_mode("hizli") == 0
-    assert wmn.request_budget_for_mode(None) == 600
-    assert wmn.request_budget_for_mode("bilinmeyen") == 600
+def test_aile_butcesi_mod_normalize():
+    assert budget.family_budget("derin") == 1200
+    assert budget.family_budget("hizli") == 0
+    assert budget.family_budget(None) == 600
+    assert budget.family_budget("bilinmeyen") == 600
 
 
-def test_istek_butcesi_env_override(monkeypatch):
+def test_aile_paylari():
+    # O2: 600 -> 480 + 120 ; O3: 1200 -> 960 + 240
+    assert budget.share_budget("O2", "primary") == 480
+    assert budget.share_budget("O2", "search") == 120
+    assert budget.share_budget("O3", "primary") == 960
+    assert budget.share_budget("O3", "search") == 240
+    assert budget.share_budget("O1", "primary") == 0
+    assert budget.share_budget("O2", "primary") + budget.share_budget(
+        "O2", "search"
+    ) == budget.family_budget("O2")
+
+
+def test_aile_butcesi_env_override(monkeypatch):
     monkeypatch.setenv(BUDGET_ENV, "250")
-    assert wmn.request_budget_for_mode("O3") == 250
-    assert wmn.site_limit_for(5, "O3") == 50
+    assert budget.family_budget("O3") == 250
+    assert budget.share_budget("O3", "primary") == 200
+    assert budget.share_budget("O3", "search") == 50
+
+
+def test_aile_butcesi_env_tarama_butcesine_kirpilir(monkeypatch):
+    """M1: env, mod profilinin max_http_requests'ini asamaz."""
+    monkeypatch.setenv(BUDGET_ENV, "999999")
+    assert budget.family_budget("O2") == MODE_PROFILES["O2"]["max_http_requests"]
+    assert budget.family_budget("O3") == MODE_PROFILES["O3"]["max_http_requests"]
 
 
 @pytest.mark.parametrize("value", ["abc", "-7", "  "])
-def test_istek_butcesi_gecersiz_env_varsayilana_doner(monkeypatch, value):
+def test_aile_butcesi_gecersiz_env_varsayilana_doner(monkeypatch, value):
     monkeypatch.setenv(BUDGET_ENV, value)
-    assert wmn.request_budget_for_mode("O2") == 600
+    assert budget.family_budget("O2") == 600
 
 
-def test_site_limit_bolme():
-    assert wmn.site_limit_for(10, "O2") == 60
-    assert wmn.site_limit_for(6, "O2") == 100
-    assert wmn.site_limit_for(10, "O3") == 120
-    assert wmn.site_limit_for(1, "O2") == 600
-    assert wmn.site_limit_for(0, "O2") == 600  # sifira bolme yok
-    assert wmn.site_limit_for(5, "O1") == 0
+def test_site_limit_bolme_degismezi():
+    assert budget.site_limit_for(480, 10) == 48
+    assert budget.site_limit_for(480, 6) == 80
+    assert budget.site_limit_for(960, 10) == 96
+    assert budget.site_limit_for(600, 1) == 600
+    assert budget.site_limit_for(600, 0) == 600  # sifira bolme yok
+    # pay < n -> 0 (n*limit <= pay degismezi korunur, Z3 M1)
+    assert budget.site_limit_for(5, 10) == 0
+    assert budget.site_limit_for(0, 10) == 0
 
 
 def test_butce_0_istek_yok():
@@ -299,12 +323,14 @@ def test_limit_mevcut_sayidan_buyukse_tumunu_dondurur():
     assert len(sites) == len(SITES) + len(extra)
 
 
-def test_limit_verilmezse_mod_butcesi_tek_kullanici_varsayimi():
+def test_limit_verilmezse_birincil_pay_varsayimi():
+    """Limit verilmezse tek kullanici varsayimiyla **birincil pay** kullanilir."""
     _, extra = wmn.split_sites()
+    available = len(SITES) + len(extra)
     o2 = wmn.sites_for_username("alice", "O2")
-    assert len(o2) == min(wmn.SITECHECK_REQUEST_BUDGET["O2"], len(SITES) + len(extra))
+    assert len(o2) == min(budget.share_budget("O2", "primary"), available)
     o3 = wmn.sites_for_username("alice", "O3")
-    assert len(o3) == min(wmn.SITECHECK_REQUEST_BUDGET["O3"], len(SITES) + len(extra))
+    assert len(o3) == min(budget.share_budget("O3", "primary"), available)
 
 
 # ---------------------------------------------------------------------------
@@ -372,23 +398,27 @@ async def test_plan_site_limit_ve_mod_yazar():
 
     assert len(tasks) == 10
     assert {t.params["mode"] for t in tasks} == {"O2"}
-    assert {t.params["site_limit"] for t in tasks} == {600 // 10}
+    # D10: birincil connector aile butcesinin %80'ini kullanir
+    assert {t.params["site_limit"] for t in tasks} == {
+        budget.primary_site_limit("O2", len(tasks))
+    }
 
 
-@pytest.mark.parametrize("mode,budget", [("O1", 0), ("O2", 600), ("O3", 1200)])
-async def test_plan_toplam_istek_butcesini_asmaz(mode, budget):
+@pytest.mark.parametrize("mode", ["O1", "O2", "O3"])
+async def test_plan_birincil_payi_asmaz(mode):
     connector = SiteCheckConnector(engine=UsernameCheckEngine(http_client=FakeHttp()))
     connector.scan_mode = mode
 
     tasks = await connector.plan(_plan_ctx(10, scan_id=f"plan-{mode}"))
 
-    if budget == 0:
+    share = budget.share_budget(mode, "primary")
+    if share == 0:
         assert {t.params["site_limit"] for t in tasks} == {0}
         return
     total = sum(t.params["site_limit"] for t in tasks)
-    assert total <= budget + len(tasks)  # bolme kalani toleransi
-    assert total >= budget - len(tasks)
-    assert max(t.params["site_limit"] for t in tasks) >= 60
+    assert total <= share
+    assert total >= share - len(tasks)  # bolme kalani toleransi
+    assert max(t.params["site_limit"] for t in tasks) >= 40
 
 
 async def test_plan_ctx_modu_kullanilir():
@@ -397,7 +427,9 @@ async def test_plan_ctx_modu_kullanilir():
 
     tasks = await connector.plan(_ctx("O3"))
     assert tasks and tasks[0].params["mode"] == "O3"
-    assert tasks[0].params["site_limit"] == 1200 // len(tasks)
+    assert tasks[0].params["site_limit"] == budget.primary_site_limit(
+        "O3", len(tasks)
+    )
 
     connector2 = SiteCheckConnector(engine=UsernameCheckEngine(http_client=FakeHttp()))
     tasks2 = await connector2.plan(_plan_ctx(1, scan_id="varsayilan"))
@@ -491,17 +523,33 @@ async def test_connector_run_site_limit_uygular():
     assert len(fake.calls) == 70
 
 
-async def test_connector_run_limit_yoksa_mod_butcesi():
+async def test_connector_run_limit_yoksa_fail_safe_tavan():
+    """Z3 C1: limitsiz (eski) gorev tam butceyi degil, fail-safe tavani kullanir."""
     fake = FakeHttp(status=404)
     connector = SiteCheckConnector(
         engine=UsernameCheckEngine(http_client=fake, concurrency=8)
     )
     task = connector._make_task("alice")  # site_limit yok
+    task.params["mode"] = "O2"
+
+    obs = await connector.run(task, _ctx())
+
+    assert obs[0].data["site_limit"] == budget.primary_site_limit(
+        "O2", MAX_PLANNED_USERNAMES
+    )
+    assert obs[0].data["sites_planned"] == obs[0].data["site_limit"]
+
+
+async def test_connector_run_limit_yoksa_o1_istek_atmaz():
+    fake = FakeHttp(status=404)
+    connector = SiteCheckConnector(
+        engine=UsernameCheckEngine(http_client=fake, concurrency=8)
+    )
+    task = connector._make_task("alice")
     task.params["mode"] = "O1"
 
     obs = await connector.run(task, _ctx())
 
-    assert obs[0].data["site_limit"] is None
     assert obs[0].data["sites_planned"] == 0
     assert fake.calls == []
 
@@ -520,6 +568,96 @@ async def test_connector_uctan_uca_butce_asilmaz():
     for task in tasks:
         await connector.run(task, ctx)
 
-    assert planned <= wmn.SITECHECK_REQUEST_BUDGET["O2"] + len(tasks)
+    assert planned <= budget.share_budget("O2", "primary") + len(tasks)
     assert len(fake.calls) == planned
     assert len(fake.calls) <= MODE_PROFILES["O2"]["max_http_requests"]
+
+
+# ---------------------------------------------------------------------------
+# Z4-1 (D10): tarama seviyesinde aile butcesi — iki connector birlikte
+# ---------------------------------------------------------------------------
+
+
+class _StubSearchProvider:
+    """Arama saglayicisi yerine gecen, 30 sentetik URL donduren stub."""
+
+    async def search(self, query: str, limit: int = 10, site=None):  # noqa: ANN001
+        class _Hit:
+            def __init__(self, i: int) -> None:
+                self.url = f"https://ornek{i}.example/user"
+
+        return [_Hit(i) for i in range(30)]
+
+
+@pytest.mark.parametrize("mode", ["O1", "O2", "O3"])
+async def test_aile_butcesi_tarama_seviyesinde_asmaz(mode):
+    """Z4 C1: sitecheck + sitecheck_search toplam planlanan istek <= aile butcesi."""
+    from showis_connectors.sitecheck.search_connector import SiteCheckSearchConnector
+
+    ctx = ScanContext(
+        case_id="c1",
+        scan_id=f"family-{mode}",
+        target=Target(first_name="Test", last_name="Smoke"),
+        seeds=[
+            Seed(platform=Platform.GITHUB, username=f"user{i}") for i in range(10)
+        ],
+    )
+    primary = SiteCheckConnector(engine=UsernameCheckEngine(http_client=FakeHttp()))
+    primary.scan_mode = mode
+    search = SiteCheckSearchConnector(
+        engine=UsernameCheckEngine(http_client=FakeHttp()),
+        search_provider=_StubSearchProvider(),
+    )
+    search.scan_mode = mode
+
+    primary_tasks = await primary.plan(ctx)
+    search_tasks = await search.plan(ctx)
+    all_tasks = primary_tasks + search_tasks
+
+    assert all_tasks, "en az bir gorev planlanmali"
+    # Tek bir limitsiz gorev kalmamali (Z3 C1'in kok nedeni)
+    assert all("site_limit" in t.params for t in all_tasks)
+    assert all(t.params["mode"] == mode for t in all_tasks)
+
+    total = sum(int(t.params["site_limit"]) for t in all_tasks)
+    assert total <= budget.family_budget(mode)
+    if mode != "O1":
+        # Aile butcesi tam olarak kullanilmali (paylar birbirini tamamlar)
+        assert total == budget.family_budget(mode)
+
+    # Iki connector da kendi payini kullanir (birincil %80 / arama %20)
+    if mode != "O1":
+        assert sum(t.params["site_limit"] for t in primary_tasks) == budget.share_budget(
+            mode, "primary"
+        )
+        assert sum(t.params["site_limit"] for t in search_tasks) == budget.share_budget(
+            mode, "search"
+        )
+
+
+async def test_aile_butcesi_uygulanan_site_sayilari():
+    """Plan limitleri gercekten o kadar site tarar (limit <= gercek liste)."""
+    from showis_connectors.sitecheck.search_connector import SiteCheckSearchConnector
+
+    ctx = ScanContext(
+        case_id="c1",
+        scan_id="family-run",
+        target=Target(first_name="Test", last_name="Smoke"),
+        seeds=[Seed(platform=Platform.GITHUB, username=f"user{i}") for i in range(10)],
+    )
+    connector = SiteCheckConnector(engine=UsernameCheckEngine(http_client=FakeHttp()))
+    connector.scan_mode = "O2"
+    search = SiteCheckSearchConnector(
+        engine=UsernameCheckEngine(http_client=FakeHttp()),
+        search_provider=_StubSearchProvider(),
+    )
+    search.scan_mode = "O2"
+
+    for conn in (connector, search):
+        tasks = await conn.plan(ctx)
+        limit = tasks[0].params["site_limit"]
+        for task in tasks:
+            sites = wmn.sites_for_username(
+                str(task.params["username"]), "O2", limit
+            )
+            assert len(sites) <= limit

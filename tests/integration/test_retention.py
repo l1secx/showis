@@ -85,3 +85,117 @@ async def test_purge_expired_evidence_and_files(session, tmp_path):
     remaining = (await session.execute(select(Evidence))).scalars().all()
     assert len(remaining) == 1
     assert remaining[0].id == ev_new.id
+
+
+# ---------------------------------------------------------------------------
+# Z4-4: retention sonrasi ham e-posta temizligi (tasks.params / entities.attributes)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_purge_expired_pii_eposta_alanlarini_temizler(session):
+    from showis.db.models import Entity, Scan, Task
+
+    expired = Case(
+        id=str(uuid.uuid4()),
+        name="expired",
+        purpose="p",
+        legal_basis="self_check",
+        retention_days=1,
+        created_at=datetime.now(timezone.utc) - timedelta(days=5),
+    )
+    fresh = Case(
+        id=str(uuid.uuid4()),
+        name="fresh",
+        purpose="p",
+        legal_basis="self_check",
+        retention_days=30,
+    )
+    session.add_all([expired, fresh])
+    await session.flush()
+
+    old_scan = Scan(
+        id=str(uuid.uuid4()),
+        case_id=expired.id,
+        mode="O2",
+        status="completed",
+        budget={},
+    )
+    new_scan = Scan(
+        id=str(uuid.uuid4()),
+        case_id=fresh.id,
+        mode="O2",
+        status="completed",
+        budget={},
+    )
+    session.add_all([old_scan, new_scan])
+    await session.flush()
+
+    session.add_all(
+        [
+            # Suresi dolmus vaka: e-posta her iki yerde de var
+            Task(
+                id=str(uuid.uuid4()),
+                scan_id=old_scan.id,
+                connector="github_email",
+                platform="github",
+                kind="commits_by_email",
+                params={"email": "eski@example.com", "email_tag": "sha256:abc"},
+            ),
+            Entity(
+                id=str(uuid.uuid4()),
+                case_id=expired.id,
+                type="account",
+                platform="github",
+                label="ghuser",
+                attributes={
+                    "username": "ghuser",
+                    "public_email": "eski@example.com",
+                    "name": "Eski Kisi",
+                },
+            ),
+            # Guncel vaka: dokunulmamali
+            Task(
+                id=str(uuid.uuid4()),
+                scan_id=new_scan.id,
+                connector="github_email",
+                platform="github",
+                kind="commits_by_email",
+                params={"email": "yeni@example.com", "email_tag": "sha256:def"},
+            ),
+            Entity(
+                id=str(uuid.uuid4()),
+                case_id=fresh.id,
+                type="account",
+                platform="github",
+                label="yeniuser",
+                attributes={"username": "yeniuser", "public_email": "yeni@example.com"},
+            ),
+        ]
+    )
+    await session.commit()
+
+    result = await run_retention_purge(session)
+    assert result["pii_redacted"] == 2, result
+
+    task_rows = (await session.execute(select(Task))).scalars().all()
+    entities = {e.label: e for e in (await session.execute(select(Entity))).scalars().all()}
+
+    # Suresi dolmus vakada ham e-posta yok, diger alanlar duruyor
+    old_task = next(t for t in task_rows if t.scan_id == old_scan.id)
+    assert "email" not in old_task.params
+    assert old_task.params["email_tag"] == "sha256:abc"
+    assert "public_email" not in entities["ghuser"].attributes
+    assert entities["ghuser"].attributes["username"] == "ghuser"
+    assert entities["ghuser"].attributes["name"] == "Eski Kisi"
+
+    # Guncel vaka etkilenmedi
+    new_task = next(t for t in task_rows if t.scan_id == new_scan.id)
+    assert new_task.params["email"] == "yeni@example.com"
+    assert entities["yeniuser"].attributes["public_email"] == "yeni@example.com"
+
+    # DB'de ham e-posta kalmadi (suresi dolmus vaka icin)
+    raw = str(
+        [t.params for t in task_rows] + [e.attributes for e in entities.values()]
+    )
+    assert "eski@example.com" not in raw

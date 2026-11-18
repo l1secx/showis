@@ -10,16 +10,16 @@ from urllib.parse import urlparse
 
 import pytest
 import respx
+from showis_connectors.sitecheck.budget import SITECHECK_FAMILY_BUDGET
 from showis_connectors.sitecheck.engine import (
     ABSENT,
     EXISTS,
     UsernameCheckEngine,
 )
 from showis_connectors.sitecheck.sites import SITES, SITES_BY_KEY, SiteSpec
-from showis_connectors.sitecheck.wmn import SITECHECK_REQUEST_BUDGET
 from showis_contracts import Platform, Target
 from showis_engine.http import HttpClient
-from showis_engine.scan_modes import estimate_scan, site_count
+from showis_engine.scan_modes import SITECHECK_LABEL_ERE, estimate_scan, site_count
 
 # ---------------------------------------------------------------------------
 # Statik doğrulama (her spec için ayrı test → 52 test)
@@ -99,15 +99,16 @@ def test_validate_sites_statik_temiz():
 
 
 def test_tahmin_site_sayisi_listeden_turetilir(monkeypatch):
-    """A2b: tahmin artik "64 site" varsayimi degil, modun istek butcesini yansitir."""
+    """D10: tahmin "64 site" varsayimi degil, aile butcesini ve etiketi yansitir."""
     monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY", raising=False)
     monkeypatch.delenv("SHOWIS_SITECHECK_REQUEST_BUDGET", raising=False)
     target = Target(first_name="Kerem", last_name="Boz", hints={"school": "ODTÜ"})
     est = estimate_scan(target, "O2", calibration_path="/tmp/olmayan-kalibrasyon.json")
     sitecheck = next(step for step in est["steps"] if step["key"] == "sitecheck")
-    assert str(est["sitecheck_requests"]) in sitecheck["label"]
-    assert est["sitecheck_requests"] == SITECHECK_REQUEST_BUDGET["O2"]
-    # butce, butun sitecheck kullanicilarinin toplamindan kucuk veya esit olmali
+    assert est["sitecheck_requests"] == SITECHECK_FAMILY_BUDGET["O2"]
+    # etiket tek kaynaktan: "Site-check (N site / M istek)"
+    assert re.fullmatch(SITECHECK_LABEL_ERE, sitecheck["label"])
+    # aile butcesi, tum sitecheck gorevlerinin tavanindan kucuk/esit
     assert est["sitecheck_requests"] <= sitecheck["tasks"] * len(SITES)
 
 

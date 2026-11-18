@@ -94,7 +94,8 @@ _KIND_COST: dict[str, str] = {
     "search_and_check": "site_username",
     "check_username": "site_username",
     "search_users": "identifier_task",
-    "search_commits": "identifier_task",
+    # NOT (Z4/7): `search_commits` kaldirildi — GitHub connector'i artik e-posta
+    # commit aramasi planlamiyor (sahibi `github_email`).
     "render": "rendered_task",
     "fetch_profile": "api_task",
     "get_user": "api_task",

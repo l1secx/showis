@@ -679,12 +679,32 @@ def test_gorev_sayisi_gercek_olcume_yakin(monkeypatch):
     assert est["tasks"] == REF_TASKS, f"görev {est['tasks']} (beklenen {REF_TASKS})"
 
 
-def test_istek_sayisi_gercek_olcume_yuzde_yirmi_icinde(monkeypatch):
+def test_istek_sayisi_modeli_tutarli_ve_butce_icinde(monkeypatch):
+    """Z3-03: test **kirpilmamis** `requests_raw` uzerinden olcer (tautoloji yok).
+
+    `requests` artik mod butcesiyle kirpildigi icin `min(raw, budget)` testi
+    hep gecerdi. Burada model tutarliligi ve butce güvencesi ayri ayri
+    dogrulanir; gercek olcum referansi (REF_REQUESTS) A3 canli kosusunda
+    yenilenecek (aile butcesi sonrasi model kuculdu).
+    """
     monkeypatch.delenv("SHOWIS_ESTIMATE_ROBOTS_FACTOR", raising=False)
     monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY", raising=False)
+    monkeypatch.delenv("SHOWIS_SITECHECK_REQUEST_BUDGET", raising=False)
     est = estimate_scan(_smoke_target(), "O2")
-    deviation = abs(est["requests"] - REF_REQUESTS) / REF_REQUESTS
-    assert deviation <= 0.20, f"istek {est['requests']} vs {REF_REQUESTS} (%{deviation*100:.0f})"
+
+    mode_budget = MODE_PROFILES["O2"]["max_http_requests"]
+    # 1) Butce güvencesi (ham deger butceyi asmamali)
+    assert est["requests_raw"] <= mode_budget, est["requests_raw"]
+    assert est["requests"] == est["requests_raw"]
+    assert est["requests_capped"] is False
+    # 2) Model tutarliligi: istek = gorev + site istekleri * faktor
+    assert est["requests_raw"] == round(
+        est["tasks"] + est["site_requests"] * est["site_request_factor"]
+    )
+    # 3) Sitecheck ailesi tek kalem (D10): ikinci bir arama terimi yok
+    assert est["site_requests"] == est["sitecheck_requests"]
+    # 4) Eski canli olcumle kiyas: yeni model daha kucuk olmali (aile butcesi)
+    assert est["requests_raw"] <= REF_REQUESTS
 
 
 def test_sure_tahmini_gercek_olcume_yuzde_yirmi_icinde(monkeypatch):
@@ -700,9 +720,9 @@ def test_site_basina_istek_faktoru_env_ile_ayarlanir(monkeypatch):
     base = estimate_scan(_smoke_target(), "O2")
     monkeypatch.setenv("SHOWIS_ESTIMATE_ROBOTS_FACTOR", "2.0")
     doubled = estimate_scan(_smoke_target(), "O2")
-    # A2b: istek = gorev + site istekleri × faktor; sayim `site_requests`'ten.
-    # `requests` tarama butcesiyle kirpildigi icin kirpilmamis deger kullanilir.
-    assert base["requests_capped"] is True
+    # D10: istek = gorev + site istekleri × faktor; sayim `requests_raw`'dan
+    # (kirpilmis `requests` ile kiyaslamak tautoloji olurdu — Z3-03).
+    assert base["requests_capped"] is False
     assert doubled["requests_raw"] - base["requests_raw"] == pytest.approx(
         base["site_requests"], rel=0.01
     )

@@ -1,5 +1,8 @@
 """Tarama modu profilleri ve sure tahmini testleri."""
 
+import re
+from pathlib import Path
+
 import pytest
 from showis_contracts import Target
 from showis_engine.scan_modes import (
@@ -11,6 +14,8 @@ from showis_engine.scan_modes import (
     skipped_connectors,
     task_allowed,
 )
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _target(school: str | None = None) -> Target:
@@ -179,3 +184,42 @@ def test_sitecheck_kullanici_adi_tavani_hizali():
     from showis_engine.scan_modes import SITECHECK_MAX_USERNAMES
 
     assert SITECHECK_MAX_USERNAMES == MAX_PLANNED_USERNAMES == 10
+
+
+# ---------------------------------------------------------------------------
+# Z4-2 (D10): sitecheck etiketi tek kaynaktan + e2e 4c ayni deseni kullanir
+# ---------------------------------------------------------------------------
+
+
+def test_sitecheck_label_bicimi():
+    from showis_engine.scan_modes import SITECHECK_LABEL_ERE, sitecheck_label
+
+    label = sitecheck_label(80, 600)
+    assert label == "Site-check (80 site / 600 istek)"
+    match = re.fullmatch(SITECHECK_LABEL_ERE, label)
+    assert match and match.group(1) == "80" and match.group(2) == "600"
+
+
+def test_e2e_betik_a_yni_deseni_kullanir():
+    """Desen tek kaynaktan: e2e 4c adimi `SITECHECK_LABEL_ERE`'yi birebir tasimali."""
+    from showis_engine.scan_modes import SITECHECK_LABEL_ERE
+
+    script = (REPO_ROOT / "scripts" / "e2e_acceptance.sh").read_text(encoding="utf-8")
+    assert SITECHECK_LABEL_ERE in script, (
+        "e2e_acceptance.sh 4c adimi SITECHECK_LABEL_ERE ile ayni deseni kullanmali"
+    )
+    # Eski (bozuk) desen kalinti olarak durmamali
+    assert "× (?<n>[0-9]+) site" not in script
+
+
+def test_estimate_sitecheck_etiketi_tutarli(monkeypatch):
+    monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY", raising=False)
+    monkeypatch.delenv("SHOWIS_SITECHECK_REQUEST_BUDGET", raising=False)
+    from showis_engine.scan_modes import SITECHECK_LABEL_ERE
+
+    for mode in ("O2", "O3"):
+        est = estimate_scan(_target("ODTÜ"), mode)
+        step = _sitecheck_step(est)
+        assert re.fullmatch(SITECHECK_LABEL_ERE, step["label"]), step["label"]
+        # etiket aile butcesini tasir
+        assert str(est["sitecheck_requests"]) in step["label"]

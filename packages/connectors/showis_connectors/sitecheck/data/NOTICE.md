@@ -14,11 +14,17 @@ içeriği **CC BY-SA 4.0** koşullarına tabidir.
 | Lisans | Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0) |
 | Lisans URI | <https://creativecommons.org/licenses/by-sa/4.0/> |
 | Lisans metni | <https://creativecommons.org/licenses/by-sa/4.0/legalcode> · yerel kopya: `LICENSES/CC-BY-SA-4.0.txt` |
+| Materyal URI | <https://raw.githubusercontent.com/WebBreacher/WhatsMyName/main/wmn-data.json> |
 | Değişiklik | Evet — "adapted" (site kayıtları Showis `SiteSpec` şemasına dönüştürüldü) |
+| Sorumluluk reddi | "Provided as-is, without warranties of any kind" — üst veri güncel/doğru olmayabilir |
 
 Bu atıf alanları **veri dosyasının kendisinde** de vardır (`_license` bloğu: `name`,
-`uri`, `source`, `copyright`, `authors`, `adapted`, `note`) — dosya tek başına
-dolaşsa bile CC BY-SA §3(a) karşılanır.
+`uri`, `source`, `material_url`, `copyright`, `authors`, `adapted`, `disclaimer`,
+`note`). Böylece JSON tek başına dolaşsa da CC BY-SA §3(a)(1)(a)(iii)-(v) alanları
+(eser, lisans, lisans URI'si, sorumluluk reddi, materyal URI'si) taşınır; **tek
+başına yeterlilik iddiası** ise sınırlıdır: atıf metninin okunabilir hâli ve
+dönüşüm gerekçeleri bu `NOTICE.md` dosyasındadır, ürün dokümantasyonunda da
+(ör. `docs/legal/privacy.md`) veri kaynağı belirtilmelidir.
 
 Katkıda bulunan WMN yazarları (kaynak dosyanın `authors` alanı): 3xp0rt,
 AlexisPradoOficial, funnyzak, jschibberges, mbiesiad, Micah Hoffman, mtedholm,

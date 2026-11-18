@@ -83,6 +83,13 @@ LICENSE_NAME = "CC BY-SA 4.0"
 LICENSE_URI = "https://creativecommons.org/licenses/by-sa/4.0/"
 LICENSE_COPYRIGHT = "Copyright (C) 2015-2026 Micah Hoffman"
 LICENSE_NOTE = "Derived from wmn-data.json; converted to Showis SiteSpec JSON."
+#: CC BY-SA §3(a)(1)(a)(iv): sorumluluk reddi bildirimi.
+LICENSE_DISCLAIMER = (
+    "Provided as-is, without warranties of any kind; upstream data may be "
+    "stale or inaccurate. See NOTICE.md for attribution and provenance."
+)
+#: §3(a)(1)(a)(v): materyalin (ham veri dosyasinin) URI'si.
+LICENSE_MATERIAL_URL = WMN_JSON_URL
 
 
 # ---------------------------------------------------------------------------
@@ -365,7 +372,8 @@ def license_block(wmn: Mapping[str, Any] | None = None) -> dict[str, Any]:
 
     ``authors`` kaynaktaki ``authors`` listesinden gelir; yoksa telif satirina
     duser. Veri dosyasi tek basina dolasabilmeli: lisans adi + URI + kaynak +
-    telif + katkida bulunanlar + degisiklik bildirimi hep burada.
+    **materyal URI'si** + telif + katkida bulunanlar + degisiklik bildirimi +
+    **sorumluluk reddi** hep burada (CC BY-SA §3(a)(1)(a)(iii)-(v)).
     """
     raw_authors = (wmn or {}).get("authors")
     authors = [
@@ -377,9 +385,11 @@ def license_block(wmn: Mapping[str, Any] | None = None) -> dict[str, Any]:
         "name": LICENSE_NAME,
         "uri": LICENSE_URI,
         "source": WMN_PROJECT_URL,
+        "material_url": LICENSE_MATERIAL_URL,
         "copyright": LICENSE_COPYRIGHT,
         "authors": authors or [LICENSE_COPYRIGHT],
         "adapted": True,
+        "disclaimer": LICENSE_DISCLAIMER,
         "note": LICENSE_NOTE,
     }
 

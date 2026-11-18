@@ -58,8 +58,12 @@ Bugün `Seed.email` var ama (a) UI'da alan yok, (b) yalnız Gravatar hash'liyor,
    token yoksa görev üretilmez (fail-closed). Commit'in yazar login'i → profil entity'si.
 3. **Keybase — düzeltme (D9):** Keybase `user/lookup` API'si e-posta ile arama **desteklemiyor**
    (yalnız `usernames`, `domain`, `twitter`, `github`, `reddit`, `hackernews`, `key_fingerprint`).
-   Bu yüzden Keybase'e e-posta değil **GitHub kullanıcı adı** pivotu eklenir (`?github=<login>`),
-   bu da e-posta→commit→login→Keybase proof zincirini tamamlar.
+   Bu yüzden Keybase'e e-posta değil **GitHub kullanıcı adı** pivotu eklenir (`?github=<login>`).
+   **D11 (kapsam daraltması):** pivot yalnız **GitHub seed'i** verildiğinde planlanır; e-posta
+   seed'inden gelen login'ler aynı taramada yeniden planlanmaz (tek plan turu). Yani
+   e-posta→commit→login→Keybase zinciri **otomatik olarak tamamlanmaz**; kullanıcı GitHub
+   kullanıcı adını seed olarak verirse Keybase proof'u doğrulanır. Dinamik ikinci plan turu
+   gelecek işidir.
 4. **Kapsam dışı (gerekçeli):** parola-sıfırlama uçlarıyla hesap yoklama (ToS/etki),
    breach/telefon verisi (veri satın alma işi), Keybase e-posta (API'de yok).
 

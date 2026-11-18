@@ -379,11 +379,12 @@ async def test_contextvar_istek_sayaci_gorevler_arasinda_izole():
             router.get(f"https://iso{index}.example.com/b").respond(200, text="ok")
         results = await asyncio.gather(*(worker(index) for index in range(3)))
 
-    # Her gorev yalnizca kendi 2 istegini sayar (global sayac paralelde bozulurdu)
-    assert [count for count, _ in results] == [2, 2, 2]
-    assert [first for _, first in results] == [1, 1, 1]
+    # Z4/I1: robots.txt de sayilir -> her gorev 1 robots + 2 sayfa = 3 istek.
+    # (Kapsam yine gorev basina izole: global sayac paralelde bozulurdu.)
+    assert [count for count, _ in results] == [3, 3, 3]
+    assert [first for _, first in results] == [2, 2, 2]
     # Geriye donuk uyumlu surec geneli sayac toplami korur
-    assert requests_made() - before_total == 6
+    assert requests_made() - before_total == 9
 
 
 @pytest.mark.asyncio
@@ -402,8 +403,8 @@ async def test_paralel_http_istekleri_gorev_basina_sayilir(session_factory, monk
     scan = await _load_scan(session_factory, scan_id)
     assert scan.status == "completed"
     assert scan.stats["executed_tasks"] == 6
-    # 6 gorev x 2 istek = 12 (robots.txt sayilmaz)
-    assert scan.stats["http_requests"] == 12
+    # Z4/I1: 6 gorev x (1 robots + 2 sayfa) = 18
+    assert scan.stats["http_requests"] == 18
 
 
 # ---------------------------------------------------------------------------
@@ -562,7 +563,10 @@ async def test_butce_guard_istek_atmadan_keser(session_factory, monkeypatch):
     with respx.mock(assert_all_called=False) as router:
         routes = []
         for index in range(connector.task_count):
-            router.get(f"https://site{index}.example.com/robots.txt").respond(404)
+            # Z4/I1: robots.txt istegi de butceden duser -> sayima dahil.
+            routes.append(
+                router.get(f"https://site{index}.example.com/robots.txt").respond(404)
+            )
             routes.append(
                 router.get(f"https://site{index}.example.com/p1").respond(200, text="ok")
             )

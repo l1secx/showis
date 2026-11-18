@@ -251,6 +251,11 @@ class RobotsCache:
             robots_url = f"{origin}/robots.txt"
             rp = RobotFileParser()
             try:
+                # Z3 I1: robots.txt de **dis trafiktir** — tarama butcesinden
+                # dusulur (aksi halde gercek istek sayisi sayilanin ~2 kati
+                # olabiliyordu) ve istek sayacina yazilir (stats/SSE tutarli).
+                _consume_request_budget()
+                _record_request()
                 async with httpx.AsyncClient(
                     timeout=5.0, headers={"User-Agent": self.user_agent}
                 ) as client:
@@ -259,6 +264,9 @@ class RobotsCache:
                         rp.parse(resp.text.splitlines())
                     else:
                         rp.parse(["User-agent: *", "Allow: /"])
+            except BudgetExceededError:
+                # Butce bitti: robots bilinmiyor -> istek atilmaz (fail-closed).
+                raise
             except Exception:
                 rp.parse(["User-agent: *", "Allow: /"])
             self._parsers[origin] = rp

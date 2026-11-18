@@ -31,8 +31,9 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from showis_contracts import Platform
-from showis_engine.scan_modes import norm_mode
 
+from .budget import share_budget
+from .budget import site_limit_for as _site_limit_for
 from .sites import SITES, SiteSpec
 
 logger = logging.getLogger("showis.sitecheck.wmn")
@@ -50,12 +51,6 @@ WMN_SOURCE_NOTE = "wmn"
 #: Kimlik/oturum tasiyabilecek basliklar (``Cookie``, ``Authorization``,
 #: ``X-*``, ``Referer``) hicbir kosulda tasinmaz.
 ALLOWED_HEADERS = frozenset({"accept", "accept-language"})
-
-#: Mod basina sitecheck **istek** butcesi (D2). 0 = WMN/sitecheck kapali.
-SITECHECK_REQUEST_BUDGET: dict[str, int] = {"O1": 0, "O2": 600, "O3": 1200}
-
-#: Env ile mod butcesini ezme (gecersiz/negatif deger -> mod varsayilani).
-REQUEST_BUDGET_ENV = "SHOWIS_SITECHECK_REQUEST_BUDGET"
 
 #: NSFW kategorisini taramaya dahil etme anahtari.
 ALLOW_NSFW_ENV = "SHOWIS_SITECHECK_ALLOW_NSFW"
@@ -198,40 +193,6 @@ def is_nsfw(spec: SiteSpec) -> bool:
     return spec_category(spec) == NSFW_CATEGORY
 
 
-def request_budget_for_mode(mode: str | None) -> int:
-    """Moda gore sitecheck istek butcesi (env ile ezilebilir).
-
-    Gecersiz/negatif env degeri mod varsayilanina doner (fail-safe).
-    """
-    raw = (os.getenv(REQUEST_BUDGET_ENV) or "").strip()
-    if raw:
-        try:
-            value = int(raw, 10)
-        except ValueError:
-            logger.warning(
-                "%s gecersiz (%r); mod varsayilani kullanilacak", REQUEST_BUDGET_ENV, raw
-            )
-        else:
-            if value >= 0:
-                return value
-            logger.warning(
-                "%s negatif (%d); mod varsayilani kullanilacak", REQUEST_BUDGET_ENV, value
-            )
-    return SITECHECK_REQUEST_BUDGET[norm_mode(mode)]
-
-
-def site_limit_for(usernames: int, mode: str | None) -> int:
-    """Kullanici adi basina site limiti (``budget // n``, en az 1).
-
-    ``n`` planlanan sitecheck kullanici adi sayisidir; boylece
-    ``n x site_limit <= budget`` garanti edilir (bolme kalani kadar sapma).
-    """
-    budget = request_budget_for_mode(mode)
-    if budget <= 0:
-        return 0
-    return max(1, budget // max(1, int(usernames)))
-
-
 # ---------------------------------------------------------------------------
 # Birlestirme
 # ---------------------------------------------------------------------------
@@ -307,7 +268,11 @@ def sites_for_username(
     * ``limit == 0`` (orn. O1 butcesi) -> bos liste; istek atilmaz.
     """
     manual, extra = split_sites()
-    total_limit = request_budget_for_mode(mode) if limit is None else int(limit)
+    total_limit = (
+        _site_limit_for(share_budget(mode, "primary"), 1)
+        if limit is None
+        else int(limit)
+    )
     if total_limit <= 0:
         return []
 
