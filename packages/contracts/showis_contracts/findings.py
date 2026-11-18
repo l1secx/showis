@@ -34,6 +34,12 @@ class Finding(BaseModel):
     evidence_ids: list[str] = Field(default_factory=list)
     verified_by: str | None = None
     verified_at: datetime | None = None
+    #: CONFIRMED kararının dayandığı **bağımsız doğrulama** sinyali (C1):
+    #: `"cross_link"` | `"commit_email"` | `"avatar"` | `"weak"` (hiçbiri yok).
+    #: Birden fazla varsa öncelik: cross_link > commit_email > avatar.
+    #: Skoru DEĞİŞTİRMEZ; yalnız gerekçeyi taşır ve `breakdown.total` ile tutarlıdır.
+    #: Boş dize = alan eklenmeden önce üretilmiş kayıtlar (geriye uyum).
+    confidence_basis: str = ""
     #: Sahte/atıl hesap sinyali (0..1; 1 = güvenilir/canlı profil).
     #: Güven skoruna (`score`) DAHİL EDİLMEZ; ayrı bir sinyaldir (ROADMAP 4.1).
     authenticity: float | None = None

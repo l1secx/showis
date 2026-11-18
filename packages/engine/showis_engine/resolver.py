@@ -12,6 +12,69 @@ from showis_contracts import (
 from showis_engine.authenticity import compute_authenticity
 from showis_engine.variants import normalize_turkish
 
+#: CONFIRMED için gereken skor eşiği (değişmedi).
+CONFIRMED_SCORE_THRESHOLD = 0.80
+#: CANDIDATE için gereken skor eşiği (değişmedi).
+CANDIDATE_SCORE_THRESHOLD = 0.50
+
+#: Bağımsız doğrulama sinyali etiketleri (`Finding.confidence_basis`).
+BASIS_CROSS_LINK = "cross_link"
+BASIS_COMMIT_EMAIL = "commit_email"
+BASIS_AVATAR = "avatar"
+BASIS_WEAK = "weak"
+
+#: Öncelik sırası: yukarıdakiler önce gelir (C1 kuralı).
+_BASIS_PRIORITY = (
+    (BASIS_CROSS_LINK, lambda b: b.cross_link),
+    (BASIS_COMMIT_EMAIL, lambda b: b.commit_email_or_pgp),
+    (BASIS_AVATAR, lambda b: b.avatar_exact_hash),
+)
+
+
+def compute_confidence_basis(breakdown: ConfidenceBreakdown) -> str:
+    """Bağımsız doğrulama sinyalini tek etikete indirger.
+
+    Bu üç sinyal (cross_link, commit_email_or_pgp, avatar_exact_hash) hedefin
+    profilinde **bizzat gözlemlenen** bağlantı/kanıt türleridir. `username` ve
+    `bio` benzerliği tek başına kimlik kanıtı sayılmaz -> `"weak"`.
+
+    Öncelik: cross_link > commit_email > avatar > weak. Skoru etkilemez.
+    """
+    for basis, value in _BASIS_PRIORITY:
+        if value(breakdown) > 0:
+            return basis
+    return BASIS_WEAK
+
+
+def classify_status(
+    total_score: float,
+    breakdown: ConfidenceBreakdown,
+    *,
+    has_contradiction: bool,
+) -> FindingStatus:
+    """Skor + bağımsız doğrulama sinyalinden bulgu statüsünü üretir (C1 kuralı).
+
+    Kural (spec 2026-11-18-osint-depth-design §C):
+    - **CONFIRMED**: `total_score >= 0.80` **ve** en az bir bağımsız doğrulama
+      sinyali (`cross_link` | `commit_email_or_pgp` | `avatar_exact_hash`).
+    - Skor >= 0.80 ama bağımsız sinyal yok -> **CANDIDATE** (REJECTED değil).
+    - 0.50-0.79 -> **CANDIDATE** (değişmedi).
+    - İsim/okul/handle benzerliği olan düşük skorlar -> **LEAD** (değişmedi).
+    - Gerisi -> **REJECTED**.
+    """
+    basis = compute_confidence_basis(breakdown)
+    if total_score >= CONFIRMED_SCORE_THRESHOLD and basis != BASIS_WEAK:
+        return FindingStatus.CONFIRMED
+    if total_score >= CANDIDATE_SCORE_THRESHOLD:
+        return FindingStatus.CANDIDATE
+    if not has_contradiction and (
+        breakdown.name_similarity > 0
+        or breakdown.bio_location_company > 0
+        or breakdown.handle_exact > 0
+    ):
+        return FindingStatus.LEAD
+    return FindingStatus.REJECTED
+
 
 def calculate_name_similarity(target_fullname: str, candidate_name: str | None) -> float:
     """Ad-soyad benzerliğini hesaplar (≥0.92 -> 0.20 tam puan, altı lineer)."""
@@ -71,6 +134,15 @@ class Resolver:
         has_contradiction: bool = False,
         authenticity_score: float | None = None,
     ) -> Finding:
+        """Aday entity'yi hedefle karşılaştırıp skor, statü ve kanıt gerekçesi üretir.
+
+        Skor formülü ve eşikler spec'te sabittir; C1 ile yalnız **CONFIRMED**'a
+        ek koşul geldi: `total_score >= 0.80` **ve** en az bir bağımsız doğrulama
+        sinyali (`cross_link` | `commit_email_or_pgp` | `avatar_exact_hash`).
+        Bağımsız sinyal yoksa skor >= 0.80 olsa bile statü CANDIDATE'tir ve
+        `confidence_basis` `"weak"` olur. Skor, CANDIDATE eşiği (0.50), LEAD
+        koşulu ve ağırlıklar değişmedi; `confidence_basis` skoru değiştirmez.
+        """
         breakdown = ConfidenceBreakdown()
         attrs = entity.attributes
 
@@ -171,20 +243,15 @@ class Resolver:
             auth_score = auth.score
         auth_reasons = list(auth.reasons)
 
-        # Status threshold: >=0.80 CONFIRMED, 0.50-0.79 CANDIDATE,
-        # isim/okul/handle benzerligi olan dusuk skorlar LEAD (ipucu), gerisi REJECTED.
-        if total_score >= 0.80:
-            status = FindingStatus.CONFIRMED
-        elif total_score >= 0.50:
-            status = FindingStatus.CANDIDATE
-        elif not has_contradiction and (
-            breakdown.name_similarity > 0
-            or breakdown.bio_location_company > 0
-            or breakdown.handle_exact > 0
-        ):
-            status = FindingStatus.LEAD
-        else:
-            status = FindingStatus.REJECTED
+        # Status threshold: >=0.80 AYRICA bagimsiz dogrulama sinyali gerektirir
+        # (cross_link | commit_email_or_pgp | avatar_exact_hash) -> CONFIRMED.
+        # Skor >=0.80 ama sinyal yoksa CANDIDATE (REJECTED degil): username/bio
+        # benzerligi tek basina kimlik kaniti sayilmaz. 0.50-0.79 CANDIDATE,
+        # isim/okul/handle benzerligi olan dusuk skorlar LEAD, gerisi REJECTED.
+        confidence_basis = compute_confidence_basis(breakdown)
+        status = classify_status(
+            total_score, breakdown, has_contradiction=has_contradiction
+        )
 
         return Finding(
             id=make_finding_id(entity.id),
@@ -199,6 +266,7 @@ class Resolver:
             breakdown=breakdown,
             explanation="",
             evidence_ids=entity.evidence_ids,
+            confidence_basis=confidence_basis,
             authenticity=auth_score,
             authenticity_reasons=auth_reasons,
         )
