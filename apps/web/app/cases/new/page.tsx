@@ -17,7 +17,20 @@ interface SeedRow {
   platform: string;
   username: string;
   url: string;
+  email: string;
 }
+
+/**
+ * Hızlı istemci kontrolü: boş değilse `@` ve `.` içermeli.
+ * Yalnız anlık geri bildirim içindir; asıl doğrulama backend'dedir (`SeedInput.email`).
+ */
+const emailLooksInvalid = (value: string) => {
+  const v = value.trim();
+  return v !== "" && !(v.includes("@") && v.includes("."));
+};
+
+/** Seed satırı e-posta ipucunun kimliği (satır başına ayrı). */
+const seedEmailHintId = (index: number) => `seed-email-hint-${index}`;
 
 const PLATFORMS = [
   "github", "gitlab", "reddit", "keybase", "steam", "devto",
@@ -63,7 +76,9 @@ export default function NewCasePage() {
       return EMPTY;
     }
   });
-  const [seeds, setSeeds] = useState<SeedRow[]>([{ platform: "github", username: "", url: "" }]);
+  const [seeds, setSeeds] = useState<SeedRow[]>([
+    { platform: "github", username: "", url: "", email: "" },
+  ]);
   const [autoScan, setAutoScan] = useState(true);
   const [scanMode, setScanMode] = useState("O2");
 
@@ -93,13 +108,35 @@ export default function NewCasePage() {
     e.preventDefault();
     setSaving(true);
     setError(null);
+
+    // Form `noValidate`: e-posta biçimi hatalıyken submit kilitlenmesin (asıl doğrulama
+    // backend'de). Bu yüzden tarayıcının eskiden yaptığı zorunlu alan kontrolleri burada.
+    const nickname = form.nickname.trim().replace(/^@/, "").trim();
+    if (mode === "handle" && nickname.length < 3) {
+      setError("Kullanıcı adı en az 3 karakter olmalı.");
+      nicknameRef.current?.focus();
+      setSaving(false);
+      return;
+    }
+    if (mode === "name" && !form.first_name.trim()) {
+      setError("Ad zorunlu.");
+      firstNameRef.current?.focus();
+      setSaving(false);
+      return;
+    }
+    if (mode === "name" && form.nickname.trim() && nickname.length < 3) {
+      setError("Nick en az 3 karakter olmalı.");
+      nicknameRef.current?.focus();
+      setSaving(false);
+      return;
+    }
+
     try {
       const hints: Record<string, string> = {};
       if (form.city) hints.city = form.city.trim();
       if (form.company) hints.company = form.company.trim();
       if (form.school) hints.school = form.school.trim();
 
-      const nickname = form.nickname.trim().replace(/^@/, "").trim();
       const fullname = `${form.first_name} ${form.last_name}`.trim();
       const label = mode === "handle" ? `@${nickname || "hedef"}` : fullname || "Hedef";
       const res = await api.createCase({
@@ -116,8 +153,13 @@ export default function NewCasePage() {
           hints,
         },
         seeds: seeds
-          .filter((s) => s.username || s.url)
-          .map((s) => ({ platform: s.platform, username: s.username || null, url: s.url || null })),
+          .filter((s) => s.username || s.url || s.email)
+          .map((s) => ({
+            platform: s.platform,
+            username: s.username || null,
+            url: s.url || null,
+            email: s.email.trim() || null,
+          })),
       });
 
       window.sessionStorage.removeItem(DRAFT_KEY);
@@ -140,7 +182,7 @@ export default function NewCasePage() {
         <span className="text-slate-300">Yeni vaka</span>
       </div>
 
-      <form onSubmit={submit} className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+      <form onSubmit={submit} noValidate className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="space-y-5 lg:col-span-2">
           <section className="card p-5">
             <div className="flex items-center gap-2">
@@ -385,43 +427,73 @@ export default function NewCasePage() {
               Seed hesaplar <span className="font-normal text-slate-500">(opsiyonel)</span>
             </summary>
             <div className="mt-4 space-y-3">
-              {seeds.map((s, i) => (
-                <div key={i} className="grid grid-cols-3 items-end gap-3">
-                  <label className="block">
-                    <span className="label">Platform</span>
-                    <select
-                      className="input"
-                      value={s.platform}
-                      onChange={(e) => updateSeed(i, "platform", e.target.value)}
-                    >
-                      {PLATFORMS.map((p) => (
-                        <option key={p} value={p}>
-                          {p}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="block">
-                    <span className="label">Kullanıcı adı</span>
-                    <input
-                      className="input"
-                      value={s.username}
-                      onChange={(e) => updateSeed(i, "username", e.target.value)}
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="label">URL</span>
-                    <input
-                      className="input"
-                      value={s.url}
-                      onChange={(e) => updateSeed(i, "url", e.target.value)}
-                    />
-                  </label>
-                </div>
-              ))}
+              {seeds.map((s, i) => {
+                const emailInvalid = emailLooksInvalid(s.email);
+                return (
+                  <div key={i} className="grid grid-cols-2 items-end gap-3 lg:grid-cols-4">
+                    <label className="block">
+                      <span className="label">Platform</span>
+                      <select
+                        className="input"
+                        value={s.platform}
+                        onChange={(e) => updateSeed(i, "platform", e.target.value)}
+                      >
+                        {PLATFORMS.map((p) => (
+                          <option key={p} value={p}>
+                            {p}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className="label">Kullanıcı adı</span>
+                      <input
+                        className="input"
+                        value={s.username}
+                        onChange={(e) => updateSeed(i, "username", e.target.value)}
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="label">URL</span>
+                      <input
+                        className="input"
+                        value={s.url}
+                        onChange={(e) => updateSeed(i, "url", e.target.value)}
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="label">E-posta</span>
+                      <input
+                        type="email"
+                        autoComplete="email"
+                        className="input"
+                        placeholder="ornek@alan.com"
+                        value={s.email}
+                        aria-invalid={emailInvalid || undefined}
+                        aria-describedby={emailInvalid ? seedEmailHintId(i) : undefined}
+                        onChange={(e) => updateSeed(i, "email", e.target.value)}
+                      />
+                      {emailInvalid && (
+                        <span
+                          id={seedEmailHintId(i)}
+                          role="alert"
+                          className="mt-1 block text-[11px] text-red-400"
+                        >
+                          E-posta biçimi geçersiz
+                        </span>
+                      )}
+                    </label>
+                  </div>
+                );
+              })}
               <button
                 type="button"
-                onClick={() => setSeeds((s) => [...s, { platform: "github", username: "", url: "" }])}
+                onClick={() =>
+                  setSeeds((s) => [
+                    ...s,
+                    { platform: "github", username: "", url: "", email: "" },
+                  ])
+                }
                 className="btn-ghost btn-sm"
               >
                 + Seed ekle
