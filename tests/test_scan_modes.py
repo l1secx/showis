@@ -3,6 +3,7 @@
 import pytest
 from showis_contracts import Target
 from showis_engine.scan_modes import (
+    MODE_PROFILES,
     budget_for_mode,
     estimate_scan,
     norm_mode,
@@ -101,3 +102,80 @@ def test_search_label_is_mode_aware():
     handle_est = estimate_scan(handle_target("kerem"), "O2")
     assert name_est["steps"][0]["label"] == "Web araması (isim + ipuçları)"
     assert handle_est["steps"][0]["label"] == "Web araması (kullanıcı adı + ipuçları)"
+
+
+# ---------------------------------------------------------------------------
+# A2b (D2/I5): sitecheck istek butcesi + site basina maliyet
+# ---------------------------------------------------------------------------
+
+
+def _sitecheck_step(est):
+    return next(s for s in est["steps"] if s["key"] == "sitecheck")
+
+
+@pytest.mark.parametrize("mode,budget", [("O1", 0), ("O2", 600), ("O3", 1200)])
+def test_sitecheck_istek_butcesi_tahmine_yansir(monkeypatch, mode, budget):
+    monkeypatch.delenv("SHOWIS_SITECHECK_REQUEST_BUDGET", raising=False)
+    monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY", raising=False)
+    est = estimate_scan(_target(), mode)
+
+    assert est["sitecheck_requests"] == budget
+    assert est["site_requests"] >= budget
+    if budget:
+        assert _sitecheck_step(est)["tasks"] > 0
+    else:
+        assert "sitecheck" not in {s["key"] for s in est["steps"]}
+
+
+@pytest.mark.parametrize("mode", ["O1", "O2", "O3"])
+def test_istek_tahmini_mod_butcesini_asmaz(monkeypatch, mode):
+    """A2b: tahmin edilen istek sayisi mod butcesini gecemez (kapi keser)."""
+    monkeypatch.delenv("SHOWIS_SITECHECK_REQUEST_BUDGET", raising=False)
+    monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY", raising=False)
+    est = estimate_scan(_target(), mode)
+
+    assert est["requests"] <= MODE_PROFILES[norm_mode(mode)]["max_http_requests"]
+    assert est["requests"] == min(
+        est["requests_raw"], MODE_PROFILES[norm_mode(mode)]["max_http_requests"]
+    )
+
+
+def test_sitecheck_env_butcesi_tahmini_dusurur(monkeypatch):
+    monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY", raising=False)
+    monkeypatch.delenv("SHOWIS_SITECHECK_REQUEST_BUDGET", raising=False)
+    base = estimate_scan(_target(), "O2")
+    monkeypatch.setenv("SHOWIS_SITECHECK_REQUEST_BUDGET", "300")
+    kucuk = estimate_scan(_target(), "O2")
+
+    assert kucuk["sitecheck_requests"] == 300
+    assert kucuk["seconds"] < base["seconds"]
+    assert _sitecheck_step(kucuk)["seconds"] == pytest.approx(
+        _sitecheck_step(base)["seconds"] / 2, rel=1e-2
+    )
+
+
+def test_sitecheck_suresi_site_basina_olceklenir(monkeypatch):
+    """Sure site sayisiyla olceklenir; 'kullanici adi × 22 sn' degil."""
+    monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY", raising=False)
+    monkeypatch.delenv("SHOWIS_SITECHECK_REQUEST_BUDGET", raising=False)
+    est = estimate_scan(_target(), "O2")
+    step = _sitecheck_step(est)
+
+    from showis_engine.scan_modes import _COST, _REFERENCE_SITES_PER_USERNAME
+
+    expected = (
+        est["sitecheck_requests"]
+        * (_COST["site_username"] / _REFERENCE_SITES_PER_USERNAME)
+        / est["effective_concurrency"]
+    )
+    assert step["seconds"] == pytest.approx(expected, rel=1e-3)
+    # 48-site referansi korunur: 600 istek ≈ 12.5 "eski kullanici adi" maliyeti
+    assert step["seconds"] > est["sitecheck_requests"] * 0.4 / est["effective_concurrency"]
+
+
+def test_sitecheck_kullanici_adi_tavani_hizali():
+    """Estimate ve connector ayni tavanı kullanmali (drift korumasi)."""
+    from showis_connectors.sitecheck.connector import MAX_PLANNED_USERNAMES
+    from showis_engine.scan_modes import SITECHECK_MAX_USERNAMES
+
+    assert SITECHECK_MAX_USERNAMES == MAX_PLANNED_USERNAMES == 10

@@ -12,8 +12,13 @@ içeriği **CC BY-SA 4.0** koşullarına tabidir.
 | Proje | <https://github.com/WebBreacher/WhatsMyName> |
 | Telif | Copyright (C) 2015-2026 Micah Hoffman |
 | Lisans | Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0) |
+| Lisans URI | <https://creativecommons.org/licenses/by-sa/4.0/> |
 | Lisans metni | <https://creativecommons.org/licenses/by-sa/4.0/legalcode> · yerel kopya: `LICENSES/CC-BY-SA-4.0.txt` |
 | Değişiklik | Evet — "adapted" (site kayıtları Showis `SiteSpec` şemasına dönüştürüldü) |
+
+Bu atıf alanları **veri dosyasının kendisinde** de vardır (`_license` bloğu: `name`,
+`uri`, `source`, `copyright`, `authors`, `adapted`, `note`) — dosya tek başına
+dolaşsa bile CC BY-SA §3(a) karşılanır.
 
 Katkıda bulunan WMN yazarları (kaynak dosyanın `authors` alanı): 3xp0rt,
 AlexisPradoOficial, funnyzak, jschibberges, mbiesiad, Micah Hoffman, mtedholm,
@@ -32,8 +37,8 @@ birebir kopyalanmaz: alanlar Showis'in kullanıcı-adı kontrol motoruna
 | `e_string` | `present_regex` | `re.escape` — WMN değeri düz metin (literal) alt dizedir |
 | `m_string` | `absent_regex` | `re.escape` |
 | `m_code` | `absent_statuses` | `m_code == e_code` ise boş bırakılır (kod ayırt edici değil) |
-| `cat` | `category` | WMN kategorisi platform değil, sınıflandırmadır |
-| `headers` | `headers` | Dolu ise aynen taşınır (`User-Agent`, `Accept`, `Origin`, …); kimlik bilgisi taşıyan başlık adları (`Authorization`, `Proxy-Authorization`) savunmacı olarak atılır |
+| `cat` | `category` | WMN kategorisi platform değil, sınıflandırmadır; `SiteSpec.category` alanına yazılır |
+| `headers` | `headers` | **Allowlist**: yalnız `Accept` ve `Accept-Language` taşınır. `Cookie`, `Authorization`, `X-*`, `Referer`, `User-Agent` gibi başlıklar **hiçbir zaman** aktarılmaz (fail-closed); düşürülenler `_generated.headers_dropped` / `headers_removed` sayaçlarında raporlanır |
 | `name` | `key` + `name` | `key` = slug; çakışmada `-2`, `-3` soneki |
 | — | `platform` | Sabit `"web"` |
 | — | `source` | Sabit `"wmn"` |
@@ -54,6 +59,10 @@ Dışlanan kayıtlar (gerekçe koddaki `_convert_record` içinde):
   `category` alanında durur; 37 kayıt `xx NSFW xx` kategorisindedir. Hangi
   kategorinin taranacağı **tüketici katmanın** (tarama politikası) kararıdır, bu
   veri dosyasının değil.
+- **Veri akışı:** bu veri taranınca hedefin kullanıcı adı yüzlerce üçüncü taraf
+  host'a iletilir. Bu yüzden tarama **istek bütçesiyle** sınırlıdır
+  (`sitecheck` için `O2=600`, `O3=1200` istek; `SHOWIS_SITECHECK_REQUEST_BUDGET`
+  ile ayarlanır) ve NSFW kategorisi varsayılan olarak elenir.
 - **Tespitler "lead"dir, kanıt değildir.** WMN verisi arşivlenmiş bir projeden
   gelir; siteler zamanla değişir (bot duvarı, alan adı ölümü, HTML değişimi).
   Sonuçlar skor kartında tek başına kimlik doğrulaması sayılmamalıdır.

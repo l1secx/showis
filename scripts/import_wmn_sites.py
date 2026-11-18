@@ -21,11 +21,10 @@ Donusum kurallari (bkz. docs/superpowers/specs/2026-11-18-osint-depth-design.md 
 
 Ek kurallar:
 
-* ``headers`` dolu ise cikti kaydina **aynen** tasinir (``"headers": {...}``);
-  bos/yok ise alan yazilmaz. Istek bicimlendiren basliklar (``User-Agent``,
-  ``Accept``, ``Origin``, ...) da aktarilir; yalnizca kimlik bilgisi tasiyan
-  baslik adlari (``Authorization``, ``Proxy-Authorization``) savunmaci olarak
-  atilir — kaynak veride boyle bir baslik yok.
+* ``headers`` yalnizca **allowlist**'teki adlarla tasinir (``Accept``,
+  ``Accept-Language``); digerleri (``Cookie``, ``Authorization``, ``X-*``,
+  ``Referer``, ``User-Agent``) dusurulur ve ``_generated.headers_dropped``
+  sayacinda raporlanir (D4: fail-closed).
 * Kategoriler **filtrelenmez**: ``cat`` degeri (``xx NSFW xx`` dahil) korunur.
   Tarama politikasi (orn. NSFW dislama) tuketici katmanin isidir.
 
@@ -72,17 +71,18 @@ WMN_PROJECT_URL = "https://github.com/WebBreacher/WhatsMyName"
 #: Bu koruma katmanlarina takilan siteler dislanir: motor bot-duvari asamaz.
 BLOCKED_PROTECTIONS = frozenset({"cloudflare", "captcha", "ddos-guard", "anubis"})
 
-#: Kimlik bilgisi tasiyabilecek istek basliklari: kaynaktan aktarilmaz.
-SENSITIVE_HEADERS = frozenset({"authorization", "proxy-authorization"})
+#: D4 — tasinabilecek istek basliklari (allowlist). Disi **hicbir** baslik
+#: aktarilmaz; boylece upstream'e eklenen bir oturum cerezi/anahtari sessizce
+#: ucuncu tarafa gitmez (fail-closed). ``Cookie``/``Authorization``/``X-*``
+#: bu yuzden hicbir zaman ciktiya yazilmaz.
+ALLOWED_HEADERS = frozenset({"accept", "accept-language"})
 
-#: Cikti zarfinda yer alan lisans blogu (BY-SA 4.0 zorunlu atif alanlari).
-LICENSE_BLOCK: dict[str, Any] = {
-    "name": "CC BY-SA 4.0",
-    "source": WMN_PROJECT_URL,
-    "copyright": "Copyright (C) 2015-2026 Micah Hoffman",
-    "adapted": True,
-    "note": "Derived from wmn-data.json; converted to Showis SiteSpec JSON.",
-}
+#: CC BY-SA 4.0 zorunlu atif alanlari (§3(a)): lisans adi, URI, kaynak,
+#: telif, katkida bulunanlar, degisiklik bildirimi.
+LICENSE_NAME = "CC BY-SA 4.0"
+LICENSE_URI = "https://creativecommons.org/licenses/by-sa/4.0/"
+LICENSE_COPYRIGHT = "Copyright (C) 2015-2026 Micah Hoffman"
+LICENSE_NOTE = "Derived from wmn-data.json; converted to Showis SiteSpec JSON."
 
 
 # ---------------------------------------------------------------------------
@@ -126,22 +126,26 @@ def _blocked_protection(record: Mapping[str, Any]) -> bool:
     return bool(values & BLOCKED_PROTECTIONS)
 
 
-def _headers(record: Mapping[str, Any]) -> dict[str, str] | None:
-    """WMN ``headers`` blogunu oldugu gibi dondurur (bos ise ``None``).
+def _headers(record: Mapping[str, Any]) -> tuple[dict[str, str], int]:
+    """Kayittaki basliklari allowlist'ten gecirir.
 
-    Istek bicimlendiren basliklar (``User-Agent``, ``Accept``, ``Origin``,
-    ``Referer``, ...) korunur; yalnizca kimlik bilgisi tasiyan baslik adlari
-    (``SENSITIVE_HEADERS``) savunmaci olarak atilir.
+    Donus: ``(tasinan_basliklar, dusurulen_sayi)``. Dusurulen sayi > 0 ise
+    kayit en az bir baslik kaybetmistir (sayac icin).
     """
     raw = record.get("headers")
     if not isinstance(raw, Mapping):
-        return None
-    headers = {
-        str(name): str(value)
-        for name, value in raw.items()
-        if str(name).strip() and str(name).strip().lower() not in SENSITIVE_HEADERS
-    }
-    return headers or None
+        return {}, 0
+    kept: dict[str, str] = {}
+    dropped = 0
+    for name, value in raw.items():
+        text_name = str(name).strip()
+        if not text_name:
+            continue
+        if text_name.lower() in ALLOWED_HEADERS and str(value):
+            kept[text_name] = str(value)
+        else:
+            dropped += 1
+    return kept, dropped
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +170,10 @@ class ConversionResult:
     http_upgraded: int = 0
     #: baslik blogu tasinan tutulan kayit sayisi
     headers_carried: int = 0
+    #: en az bir basligi allowlist disi oldugu icin dusurulen tutulan kayit sayisi
+    headers_dropped: int = 0
+    #: dusurulen toplam baslik sayisi
+    headers_removed: int = 0
     #: dislanan kayitlar: (ad, neden)
     dropped: list[tuple[str, str]] = field(default_factory=list)
 
@@ -224,9 +232,6 @@ def _convert_record(record: Mapping[str, Any]) -> tuple[dict[str, Any] | None, s
         "platform": "web",
         "source": "wmn",
     }
-    headers = _headers(record)
-    if headers is not None:
-        site["headers"] = headers
     return site, None
 
 
@@ -272,8 +277,13 @@ def convert(wmn: Mapping[str, Any]) -> ConversionResult:
             suffix += 1
         used_keys.add(key)
 
-        if "headers" in site:
+        headers, dropped_headers = _headers(record)
+        if headers:
+            site["headers"] = headers
             result.headers_carried += 1
+        if dropped_headers:
+            result.headers_dropped += 1
+            result.headers_removed += dropped_headers
         result.sites.append({"key": key, **site})
 
     result.http_upgraded = http_upgraded
@@ -336,8 +346,12 @@ def validate_sites(sites: list[Mapping[str, Any]]) -> list[str]:
                 for name, value in headers.items()
             ):
                 issues.append(f"{key}: headers anahtar/degerleri string degil")
-            elif {n.lower() for n in headers} & SENSITIVE_HEADERS:
-                issues.append(f"{key}: headers kimlik bilgisi basligi iceriyor")
+            else:
+                extra = {n.lower() for n in headers} - ALLOWED_HEADERS
+                if extra:
+                    issues.append(
+                        f"{key}: headers allowlist disi baslik iceriyor ({sorted(extra)})"
+                    )
     return issues
 
 
@@ -346,13 +360,37 @@ def validate_sites(sites: list[Mapping[str, Any]]) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+def license_block(wmn: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """``_license`` zarfini uretir (D5 / CC BY-SA §3(a)).
+
+    ``authors`` kaynaktaki ``authors`` listesinden gelir; yoksa telif satirina
+    duser. Veri dosyasi tek basina dolasabilmeli: lisans adi + URI + kaynak +
+    telif + katkida bulunanlar + degisiklik bildirimi hep burada.
+    """
+    raw_authors = (wmn or {}).get("authors")
+    authors = [
+        str(item).strip()
+        for item in (raw_authors if isinstance(raw_authors, list) else [])
+        if str(item).strip()
+    ]
+    return {
+        "name": LICENSE_NAME,
+        "uri": LICENSE_URI,
+        "source": WMN_PROJECT_URL,
+        "copyright": LICENSE_COPYRIGHT,
+        "authors": authors or [LICENSE_COPYRIGHT],
+        "adapted": True,
+        "note": LICENSE_NOTE,
+    }
+
+
 def build_document(
     wmn: Mapping[str, Any], *, source_label: str = "wmn-data.json"
 ) -> tuple[dict[str, Any], ConversionResult]:
     """Cikti zarfini (``_license`` / ``_generated`` / ``sites``) uretir."""
     result = convert(wmn)
     document = {
-        "_license": dict(LICENSE_BLOCK),
+        "_license": license_block(wmn),
         "_generated": {
             "from": source_label,
             "sites_total": result.sites_total,
@@ -360,6 +398,9 @@ def build_document(
             "excluded": dict(result.excluded),
             "http_upgraded": result.http_upgraded,
             "headers_carried": result.headers_carried,
+            "headers_dropped": result.headers_dropped,
+            "headers_removed": result.headers_removed,
+            "header_allowlist": sorted(ALLOWED_HEADERS),
         },
         "sites": result.sites,
     }
@@ -456,7 +497,10 @@ def main(argv: list[str] | None = None) -> int:
         f"duplicate={excluded['duplicate']}"
     )
     print(f"http->https : {result.http_upgraded}")
-    print(f"baslik      : {result.headers_carried} kayitta 'headers' blogu tasindi")
+    print(
+        f"baslik      : {result.headers_carried} kayitta allowlist basligi tasindi"
+        f" ({result.headers_dropped} kayit, {result.headers_removed} baslik dusuruldu)"
+    )
     return 0
 
 

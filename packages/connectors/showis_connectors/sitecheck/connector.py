@@ -31,9 +31,14 @@ from .cache import CheckCache, get_default_cache
 from .dedupe import ScanPlanRegistry, get_default_registry
 from .engine import EXISTS, SKIPPED, UsernameCheckEngine
 from .sites import SITES, SiteSpec
-from .wmn import sites_for_username
+from .wmn import site_limit_for, sites_for_username
 
 logger = logging.getLogger("showis.sitecheck.connector")
+
+#: Sitecheck planinin uretecegi en fazla kullanici adi (D2: butce korumasi).
+#: Tavan olmadan site basina limit 60'in altina duser ve elle yazilmis
+#: kapsam bile kesilir.
+MAX_PLANNED_USERNAMES = 10
 
 
 class SiteCheckConnector:
@@ -86,13 +91,37 @@ class SiteCheckConnector:
             priority=priority,
         )
 
+    @staticmethod
+    def _plan_mode(ctx: ScanContext) -> str:
+        """Planlama modu: ``connector.scan_mode`` > ``ctx.mode`` > ``"O2"``.
+
+        ``ScanContext`` semasinda ``mode`` alani yok; scanner modu connector'a
+        ``scan_mode`` niteligiyle verebilir (``max_variant_tasks`` ile ayni
+        desen). Verilmezse O2 butcesi (en muhafazakar) kullanilir.
+        """
+        ctx_mode = str(getattr(ctx, "mode", "") or "").strip()
+        return ctx_mode or "O2"
+
+    def _resolve_plan_mode(self, ctx: ScanContext) -> str:
+        override = str(getattr(self, "scan_mode", "") or "").strip()
+        return override or self._plan_mode(ctx)
+
     async def plan(self, ctx: ScanContext) -> list[TaskSpec]:
+        mode = self._resolve_plan_mode(ctx)
         tasks: list[TaskSpec] = []
         seen: set[str] = set()
 
         def add_task(uname: str | None, priority: int) -> None:
             """Tekilleştirme: plan ici + tarama geneli (connector'lar arasi)."""
             if not uname or uname in seen:
+                return
+            if len(tasks) >= MAX_PLANNED_USERNAMES:
+                if uname not in seen:
+                    logger.debug(
+                        "Site-check kullanıcı adı tavanı (%d) doldu: %r atlandı",
+                        MAX_PLANNED_USERNAMES,
+                        uname,
+                    )
                 return
             seen.add(uname)
             if not self.plan_registry.claim(ctx.scan_id, uname, self.name):
@@ -128,6 +157,19 @@ class SiteCheckConnector:
             if len(tasks) > before:
                 budget -= 1
 
+        # D2: istek butcesi kullanici adi sayisina bolunur -> gorev basina site
+        # limiti. n x site_limit <= butce (bolme kalani kadar sapma).
+        site_limit = site_limit_for(len(tasks), mode)
+        for task in tasks:
+            task.params["mode"] = mode
+            task.params["site_limit"] = site_limit
+        if len(tasks) and site_limit:
+            logger.info(
+                "Site-check plani: %s modu, %d kullanıcı adı × %d site (bütçe payı)",
+                mode,
+                len(tasks),
+                site_limit,
+            )
         return tasks
 
     @staticmethod
@@ -146,14 +188,28 @@ class SiteCheckConnector:
         return ctx_mode or "O2"
 
     def _targets(self, username: str, task: TaskSpec, ctx: ScanContext) -> list[SiteSpec]:
-        """Bu kullanıcı adı için taranacak siteler (mod tavanı + rotasyon).
+        """Bu kullanıcı adı için taranacak siteler (bütçe payı + rotasyon).
 
         ``sites=`` ile açık liste verilmişse (testler, elle çağrılar) o liste
         kullanılır — WMN dilimi devreye girmez.
         """
         if self._explicit_sites:
             return self.sites
-        return sites_for_username(username, self._scan_mode(task, ctx))
+        return sites_for_username(
+            username, self._scan_mode(task, ctx), self._site_limit(task)
+        )
+
+    @staticmethod
+    def _site_limit(task: TaskSpec) -> int | None:
+        """Görevdeki ``site_limit`` (yoksa/geçersizse ``None`` → mod bütçesi)."""
+        raw = task.params.get("site_limit")
+        if raw is None:
+            return None
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            logger.warning("Geçersiz site_limit (%r), mod bütçesi kullanılacak", raw)
+            return None
 
     # ------------------------------------------------------------------
     # Run
@@ -233,6 +289,8 @@ class SiteCheckConnector:
                 #: mod bazli plan: hangi modda kaç site tarandı (butce kaniti)
                 "scan_mode": mode,
                 "sites_planned": len(targets),
+                #: plan aşamasında bütçeden türetilen kullanıcı adı başına site tavanı
+                "site_limit": self._site_limit(task),
                 "hits": len(hits),
                 "checks": checks_payload,
                 "skipped": sum(1 for r in results if r.status == SKIPPED),

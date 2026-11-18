@@ -52,6 +52,9 @@ class SiteSpec:
     #: Yalniz platform gercekten farkli bir karakter kumesi kabul ediyorsa doldurulur.
     username_pattern: str | None = None
     notes: str = ""
+    #: Turetilmis veri kaynagi kategorisi (orn. WMN ``cat``); elle yazilan
+    #: spec'lerde bos. Tarama politikasi (orn. NSFW dislama) bunu okur.
+    category: str = ""
 
 
 def _json_site(

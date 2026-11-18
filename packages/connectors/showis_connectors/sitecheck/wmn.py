@@ -5,17 +5,18 @@ turetilmis veri) Showis'in elle yazilmis ``SITES`` listesine **ek** kapsama
 saglar. Bu modul uc isi yapar:
 
 1. **Yukleme** — ``load_wmn_specs()``: JSON kayitlarini dogrulanmis
-   ``SiteSpec`` nesnelerine cevirir, bozuk kaydi atlar ve uyarir.
+   ``SiteSpec`` nesnelerine cevirir, bozuk kaydi atlar ve uyarir. Basliklar
+   ikinci kez **allowlist**'ten gecirilir (savunmaci; importer ayni listeyi
+   uygular).
 2. **Birlestirme** — ``merged_sites()``: elle yazilmis ``SITES`` **once** gelir,
    ardindan host bazinda tekil WMN kayitlari. Cakisan host'ta elle yazilmis
-   kazanir (ayarli sinyaller daha iyi). NSFW kategorisi varsayilan olarak
-   elenir (``SHOWIS_SITECHECK_ALLOW_NSFW=1`` ile acilir).
-3. **Butce dilimi** — ``sites_for_username()``: mod basina WMN tavanini uygular
-   ve site listesini kullanici adina gore **deterministik** dondurur. Boylece
-   tek bir kullanici adi tum listeyi yiyip diger kullanicilari ac birakmaz.
-
-WMN kategorisi ``SiteSpec``'te alan olmadigi icin ``notes`` alanina
-``"wmn:<kategori>"`` olarak yazilir; ``spec_category()`` bunu okur.
+   kazanir. NSFW kategorisi varsayilan olarak elenir
+   (``SHOWIS_SITECHECK_ALLOW_NSFW=1`` ile acilir).
+3. **Butce** — ``sites_for_username()``: mod basina **istek butcesi**
+   (``SITECHECK_REQUEST_BUDGET``) ve planli kullanici adi sayisindan turetilen
+   site limitini uygular; WMN dilimini kullanici adina gore **deterministik**
+   dondurur (round-robin). Boylece tek bir kullanici adi tum butceyi yiyip
+   digerlerini ac birakmaz.
 """
 
 from __future__ import annotations
@@ -42,15 +43,19 @@ WMN_PATH = Path(__file__).with_name("data") / "wmn-sites.json"
 #: WMN'de yetiskin icerik kategorisi.
 NSFW_CATEGORY = "xx NSFW xx"
 
-#: ``SiteSpec.notes`` icinde WMN kaynagini/kategorisini isaretleyen onek.
-WMN_NOTES_PREFIX = "wmn:"
+#: ``SiteSpec.notes`` icinde WMN kaynagini isaretleyen deger.
+WMN_SOURCE_NOTE = "wmn"
 
-#: Mod basina WMN site tavani (elle yazilmis ``SITES`` her modda dahildir).
-#: 0 = WMN kapali (yalniz elle yazilmis siteler).
-SITE_CAP_BY_MODE: dict[str, int] = {"O1": 0, "O2": 120, "O3": 150}
+#: Aktarilabilecek istek basliklari (D4: allowlist; fail-closed).
+#: Kimlik/oturum tasiyabilecek basliklar (``Cookie``, ``Authorization``,
+#: ``X-*``, ``Referer``) hicbir kosulda tasinmaz.
+ALLOWED_HEADERS = frozenset({"accept", "accept-language"})
 
-#: Env ile mod tavanini ezme (negatif/gecersiz deger -> mod varsayilani).
-MAX_SITES_ENV = "SHOWIS_SITECHECK_MAX_SITES"
+#: Mod basina sitecheck **istek** butcesi (D2). 0 = WMN/sitecheck kapali.
+SITECHECK_REQUEST_BUDGET: dict[str, int] = {"O1": 0, "O2": 600, "O3": 1200}
+
+#: Env ile mod butcesini ezme (gecersiz/negatif deger -> mod varsayilani).
+REQUEST_BUDGET_ENV = "SHOWIS_SITECHECK_REQUEST_BUDGET"
 
 #: NSFW kategorisini taramaya dahil etme anahtari.
 ALLOW_NSFW_ENV = "SHOWIS_SITECHECK_ALLOW_NSFW"
@@ -67,6 +72,17 @@ def _host(url_template: str) -> str:
     """Sablonun host'u (kucuk harf, ``www.`` atilmis)."""
     host = (urlsplit(url_template.replace("{u}", "ornek")).hostname or "").lower()
     return host[4:] if host.startswith("www.") else host
+
+
+def filter_headers(raw: Any) -> dict[str, str]:
+    """Basliklari allowlist'ten gecirir (savunmaci; importer ile ayni kural)."""
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(name): str(value)
+        for name, value in raw.items()
+        if str(name).strip().lower() in ALLOWED_HEADERS and str(value)
+    }
 
 
 def _spec_from_record(record: Any, position: int) -> SiteSpec:
@@ -94,14 +110,6 @@ def _spec_from_record(record: Any, position: int) -> SiteSpec:
     ):
         raise ValueError(f"absent_statuses int listesi degil ({statuses!r})")
 
-    headers = record.get("headers")
-    if headers is None:
-        headers = {}
-    if not isinstance(headers, dict):
-        raise ValueError("headers nesne degil")
-
-    category = str(record.get("category") or "misc").strip() or "misc"
-
     return SiteSpec(
         key=key,
         name=name or key,
@@ -112,10 +120,11 @@ def _spec_from_record(record: Any, position: int) -> SiteSpec:
         present_regex=record.get("present_regex") or None,
         absent_regex=record.get("absent_regex") or None,
         # WMN literal substring'leri present_regex'te; eslesmezse "unknown"
-        # kalir (posing riskini artirmamak icin varsayilan).
+        # kalir (yanlis pozitif uretmemek icin varsayilan).
         no_match_is_absent=False,
-        headers={str(k): str(v) for k, v in headers.items()},
-        notes=f"{WMN_NOTES_PREFIX}{category}",
+        headers=filter_headers(record.get("headers")),
+        notes=WMN_SOURCE_NOTE,
+        category=str(record.get("category") or "").strip(),
     )
 
 
@@ -166,7 +175,7 @@ def clear_cache() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Politika / tavan
+# Politika / butce
 # ---------------------------------------------------------------------------
 
 
@@ -176,34 +185,51 @@ def allow_nsfw() -> bool:
 
 
 def spec_category(spec: SiteSpec) -> str | None:
-    """``SiteSpec`` icin WMN kategorisi (elle yazilmissa ``None``)."""
-    notes = spec.notes or ""
-    if not notes.startswith(WMN_NOTES_PREFIX):
-        return None
-    return notes[len(WMN_NOTES_PREFIX) :] or None
+    """``SiteSpec`` kategorisi (elle yazilmissa ``None``)."""
+    return spec.category or None
+
+
+def is_wmn(spec: SiteSpec) -> bool:
+    """Spec turetilmis WMN verisinden mi?"""
+    return spec.notes == WMN_SOURCE_NOTE
 
 
 def is_nsfw(spec: SiteSpec) -> bool:
     return spec_category(spec) == NSFW_CATEGORY
 
 
-def site_cap_for_mode(mode: str | None) -> int:
-    """Mod basina WMN site tavani (env ile ezilebilir; gecersiz -> varsayilan)."""
-    raw = (os.getenv(MAX_SITES_ENV) or "").strip()
+def request_budget_for_mode(mode: str | None) -> int:
+    """Moda gore sitecheck istek butcesi (env ile ezilebilir).
+
+    Gecersiz/negatif env degeri mod varsayilanina doner (fail-safe).
+    """
+    raw = (os.getenv(REQUEST_BUDGET_ENV) or "").strip()
     if raw:
         try:
             value = int(raw, 10)
         except ValueError:
             logger.warning(
-                "%s gecersiz (%r); mod varsayilani kullanilacak", MAX_SITES_ENV, raw
+                "%s gecersiz (%r); mod varsayilani kullanilacak", REQUEST_BUDGET_ENV, raw
             )
         else:
             if value >= 0:
                 return value
             logger.warning(
-                "%s negatif (%d); mod varsayilani kullanilacak", MAX_SITES_ENV, value
+                "%s negatif (%d); mod varsayilani kullanilacak", REQUEST_BUDGET_ENV, value
             )
-    return SITE_CAP_BY_MODE[norm_mode(mode)]
+    return SITECHECK_REQUEST_BUDGET[norm_mode(mode)]
+
+
+def site_limit_for(usernames: int, mode: str | None) -> int:
+    """Kullanici adi basina site limiti (``budget // n``, en az 1).
+
+    ``n`` planlanan sitecheck kullanici adi sayisidir; boylece
+    ``n x site_limit <= budget`` garanti edilir (bolme kalani kadar sapma).
+    """
+    budget = request_budget_for_mode(mode)
+    if budget <= 0:
+        return 0
+    return max(1, budget // max(1, int(usernames)))
 
 
 # ---------------------------------------------------------------------------
@@ -247,21 +273,31 @@ def merged_sites() -> list[SiteSpec]:
 # ---------------------------------------------------------------------------
 
 
-def sites_for_username(username: str, mode: str | None = None) -> list[SiteSpec]:
+def sites_for_username(
+    username: str,
+    mode: str | None = None,
+    limit: int | None = None,
+) -> list[SiteSpec]:
     """Bir kullanici adi icin taranacak siteler.
 
-    * Elle yazilmis ``SITES`` **her zaman** dahildir.
-    * WMN kismi mod tavanina gore dilimlenir (``SITE_CAP_BY_MODE`` / env).
-    * Dilim, kullanici adinin sha1'ine gore dondurulur: ayni ad -> ayni dilim
-      (deterministik), farkli adlar -> farkli dilimler (round-robin).
+    * ``limit`` = bu kullanici adi icin **toplam** site tavani (elle yazilmis
+      dahil). Verilmezse mod butcesinden turetilir (tek kullanici adi varsayimi).
+    * Elle yazilmis ``SITES`` once gelir; kalan yer WMN dilimiyle doldurulur.
+    * WMN dilimi ``sha1(username)`` offset'i ile dondurulur: ayni ad -> ayni
+      dilim (deterministik), farkli adlar -> farkli dilimler (round-robin).
+    * ``limit == 0`` (orn. O1 butcesi) -> bos liste; istek atilmaz.
     """
     manual, extra = split_sites()
-    cap = site_cap_for_mode(mode)
-    if cap <= 0 or not extra:
-        return manual
+    total_limit = request_budget_for_mode(mode) if limit is None else int(limit)
+    if total_limit <= 0:
+        return []
+    if total_limit <= len(manual):
+        return manual[:total_limit]
 
-    count = min(cap, len(extra))
+    wmn_count = min(total_limit - len(manual), len(extra))
+    if wmn_count <= 0:
+        return manual
     digest = hashlib.sha1(str(username or "").encode("utf-8")).hexdigest()
     offset = int(digest, 16) % len(extra)
-    rotated = [extra[(offset + i) % len(extra)] for i in range(count)]
+    rotated = [extra[(offset + i) % len(extra)] for i in range(wmn_count)]
     return manual + rotated

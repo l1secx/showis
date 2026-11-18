@@ -26,6 +26,7 @@ from showis_engine.scan_modes import (
     _API_CONNECTORS,
     _COST,
     _IDENTIFIER_TASKS,
+    _REFERENCE_SITES_PER_USERNAME,
     _RENDER_EVENTS,
     _SITECHECK_SEARCH_USERNAMES,
     DEFAULT_CALIBRATION_PATH,
@@ -37,7 +38,7 @@ from showis_engine.scan_modes import (
     planner_cap,
     reset_calibration_cache,
     scan_concurrency,
-    site_count,
+    sitecheck_request_budget,
 )
 from showis_engine.variants import generate_variants
 
@@ -63,7 +64,12 @@ def _target(school: str | None = None) -> Target:
 
 
 def _legacy_estimate(target: Target, mode: str = "O2") -> int:
-    """Sıralı (concurrency=1) referans: güncel katsayılarla bölmesiz toplam."""
+    """Sıralı (concurrency=1) referans: güncel katsayılarla bölmesiz toplam.
+
+    A2b/I5: sitecheck süresi artık "kullanıcı adı × 22 sn" değil, modun istek
+    bütçesi × (22/48) sn/site ile hesaplanır (22 sn, 48 site için kalibre
+    edilmişti). Diğer adımlar değişmedi.
+    """
     profile = MODE_PROFILES[norm_mode(mode)]
     hints = target.hints or {}
     variants = generate_variants(target.first_name, target.last_name, hints).variants
@@ -92,7 +98,10 @@ def _legacy_estimate(target: Target, mode: str = "O2") -> int:
     )
     steps = search_tasks + api_tasks + slow_tasks
     if site_usernames:
-        seconds += site_usernames * _COST["site_username"]
+        # A2b/I5: site basina maliyet (22 sn / 48 site) × mod istek butcesi
+        seconds += sitecheck_request_budget(mode) * (
+            _COST["site_username"] / _REFERENCE_SITES_PER_USERNAME
+        )
         seconds += _IDENTIFIER_TASKS * _COST["identifier_task"]
         steps += site_usernames + _IDENTIFIER_TASKS
     if norm_mode(mode) == "O3":
@@ -271,7 +280,10 @@ def test_gecersiz_kalibrasyon_degerleri_ayiklanir(monkeypatch, tmp_path):
     est = estimate_scan(_target(), "O2")
     assert est["confidence"] == "calibrated"
     site_step = next(s for s in est["steps"] if s["key"] == "sitecheck")
-    assert site_step["seconds"] == pytest.approx(site_step["tasks"] * 30.0, rel=1e-6)
+    # A2b: süre = istek bütçesi × (kalibre 30 sn / 48 site); "görev × 30" değil.
+    expected = sitecheck_request_budget("O2") * (30.0 / _REFERENCE_SITES_PER_USERNAME)
+    assert site_step["seconds"] == pytest.approx(expected, rel=1e-6)
+    assert site_step["tasks"] != sitecheck_request_budget("O2")
 
 
 def test_kalibrasyon_yolu_env_ile_seciliyor(monkeypatch, tmp_path):
@@ -688,9 +700,12 @@ def test_site_basina_istek_faktoru_env_ile_ayarlanir(monkeypatch):
     base = estimate_scan(_smoke_target(), "O2")
     monkeypatch.setenv("SHOWIS_ESTIMATE_ROBOTS_FACTOR", "2.0")
     doubled = estimate_scan(_smoke_target(), "O2")
-    site_tasks = next(s["tasks"] for s in base["steps"] if s["key"] == "sitecheck")
-    sites = site_count()
-    assert doubled["requests"] - base["requests"] == pytest.approx(site_tasks * sites, rel=0.01)
+    # A2b: istek = gorev + site istekleri × faktor; sayim `site_requests`'ten.
+    # `requests` tarama butcesiyle kirpildigi icin kirpilmamis deger kullanilir.
+    assert base["requests_capped"] is True
+    assert doubled["requests_raw"] - base["requests_raw"] == pytest.approx(
+        base["site_requests"], rel=0.01
+    )
     assert base["site_request_factor"] == 1.0
     assert doubled["site_request_factor"] == 2.0
 

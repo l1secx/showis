@@ -81,6 +81,16 @@ _COST = {
 #: Engine, connector paketine bağımlı olmadığı için tembel (çağrı anında) import
 #: yapılır; connector yoksa tahmin için son bilinen sayı kullanılır.
 _SITE_COUNT_FALLBACK = 52
+#: A2b: `_COST["site_username"]` değeri **48 site / kullanıcı adı** için kalibre
+#: edildi (T-371). Site sayısı artık mod bütçesinden türediği için maliyet site
+#: başına ölçeklenir: ``site_username / 48`` saniye/site.
+_REFERENCE_SITES_PER_USERNAME = 48
+#: Sitecheck planının üreteceği en fazla kullanıcı adı
+#: (`showis_connectors.sitecheck.connector.MAX_PLANNED_USERNAMES` ile hizalı;
+#: test bunların eşitliğini doğrular).
+SITECHECK_MAX_USERNAMES = 10
+#: Sitecheck istek bütçesi (connector paketi yoksa kullanılan yedek; D2).
+_SITECHECK_REQUEST_BUDGET_FALLBACK = {"O1": 0, "O2": 600, "O3": 1200}
 #: T-371: gerçek O2 taramasından (8287e0d7) türetilen görev katsayıları:
 #: 22 profil-connector × 6 kullanıcı adı = 132, sitecheck 6 + sitecheck_search 10 = 16,
 #: yavaş connector 6×2 + 2 arama = 14, arama 1, kimlik doğrulama 1 → toplam 164.
@@ -321,6 +331,21 @@ def site_count() -> int:
         return _SITE_COUNT_FALLBACK
 
 
+def sitecheck_request_budget(mode: str | None) -> int:
+    """Moda göre sitecheck **istek** bütçesi (D2; env ile ezilebilir).
+
+    Connector paketi yoksa sabit yedeğe düşer; tahmin hiçbir zaman
+    connector'ın uygulayacağı bütçeyi aşan bir sayı üretmemeli.
+    """
+    normalized = norm_mode(mode)
+    try:  # tembel import: engine -> connector bagimliligi yok
+        from showis_connectors.sitecheck.wmn import request_budget_for_mode
+
+        return int(request_budget_for_mode(normalized))
+    except Exception:  # pragma: no cover - connector paketi yoksa
+        return _SITECHECK_REQUEST_BUDGET_FALLBACK[normalized]
+
+
 def norm_mode(mode: str | None) -> str:
     """Eski/bilinmeyen mod degerlerini O1/O2/O3'e indirger."""
     value = (mode or "O2").strip().upper()
@@ -422,15 +447,29 @@ def estimate_scan(
         if slow_allowed
         else 0
     )
-    site_usernames = min(profile["usernames"], len(variants))
+    site_usernames = min(profile["usernames"], len(variants), SITECHECK_MAX_USERNAMES)
     if site_usernames:
         # `sitecheck_search` ayrıca aramadan bulduğu kimlikleri planlar (dedupe sonrası)
         site_usernames += _SITECHECK_SEARCH_USERNAMES
 
     steps: list[dict[str, Any]] = []
 
-    def add_step(key: str, label: str, tasks: int, cost_key: str) -> float:
-        seconds = _step_seconds(tasks, cost_key, costs, concurrency)
+    def add_step(
+        key: str,
+        label: str,
+        tasks: int,
+        cost_key: str,
+        *,
+        units: int | None = None,
+        costs_override: dict[str, float] | None = None,
+    ) -> float:
+        """Adım ekler; ``units`` verilirse süre ``tasks`` yerine ondan hesaplanır."""
+        seconds = _step_seconds(
+            tasks if units is None else units,
+            cost_key,
+            costs_override or costs,
+            concurrency,
+        )
         steps.append({"key": key, "label": label, "tasks": tasks, "seconds": round(seconds, 1)})
         return seconds
 
@@ -450,11 +489,20 @@ def estimate_scan(
         )
 
     if site_usernames:
+        # A2b/I5: site sayısı artık "64 site" varsayımı değil, modun istek
+        # bütçesinden türetilir; süre site başına ölçeklenir (22 sn / 48 site).
+        sitecheck_requests = sitecheck_request_budget(mode)
+        per_site_costs = dict(costs)
+        per_site_costs["site_username"] = (
+            costs["site_username"] / _REFERENCE_SITES_PER_USERNAME
+        )
         seconds += add_step(
             "sitecheck",
-            f"Site-check ({site_usernames} kullanıcı adı × {site_count()} site)",
+            f"Site-check ({site_usernames} kullanıcı adı, ~{sitecheck_requests} istek)",
             site_usernames,
             "site_username",
+            units=sitecheck_requests,
+            costs_override=per_site_costs,
         )
         seconds += add_step(
             "identifiers",
@@ -471,12 +519,32 @@ def estimate_scan(
     # Entity/finding yazimi tek DB yazari uzerinden seri kalir.
     seconds += tasks * costs["entity"]
 
+    # Site basina istekler: ana sitecheck butcesi + sitecheck_search'un
+    # (kapsam disi, ayni tarama butcesini paylasir) kendi site istekleri.
+    if site_usernames:
+        site_requests = sitecheck_requests
+        if slow_allowed:
+            site_requests += _SITECHECK_SEARCH_USERNAMES * site_count()
+    else:
+        site_requests = 0
+
+    # Tarama-geneli butce baglayicidir: kapi fazlasini keser (fail-closed).
+    # Tahmin, gercekte olacak seyi soylemeli -> butceyle kirpilir; kirpilmamis
+    # deger `requests_raw` olarak seffaflik icin doner.
+    requests_raw = int(round(tasks + site_requests * site_request_factor()))
+    max_requests = profile["max_http_requests"]
+
     return {
         "mode": norm_mode(mode),
         "seconds": int(seconds + 0.999),
         "tasks": min(tasks, profile["max_tasks"]),
         # T-371: istek = görev başına ~1 + site başına robots/redirect katsayısı
-        "requests": int(round(tasks + site_usernames * site_count() * site_request_factor())),
+        "requests": min(requests_raw, max_requests),
+        "requests_raw": requests_raw,
+        "requests_capped": requests_raw > max_requests,
+        # A2b: sitecheck'in mod butcesinden gelen istek payi (seffaflik icin)
+        "sitecheck_requests": sitecheck_requests if site_usernames else 0,
+        "site_requests": site_requests,
         "steps": steps,
         "budget": budget_for_mode(mode),
         # Ek alanlar (sozlesme bozulmaz, UI kullanmak zorunda degil).

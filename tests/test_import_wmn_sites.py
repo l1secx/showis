@@ -25,6 +25,14 @@ OUT_PATH = (
     REPO_ROOT / "packages/connectors/showis_connectors/sitecheck/data/wmn-sites.json"
 )
 
+#: Allowlist disinda kalmasi gereken (kimlik/oturum tasiyabilecek) basliklar.
+_SECRET_HEADERS = {
+    "Authorization": "Bearer gizli",
+    "proxy-authorization": "Basic gizli",
+    "Cookie": "session=abc",
+    "X-Api-Key": "anahtar",
+}
+
 
 def _record(**overrides):
     """Gecerli bir WMN kaydi; testler tek alani degistirir."""
@@ -152,34 +160,32 @@ def test_alan_eslemesi(fixture_doc):
 
 
 # ---------------------------------------------------------------------------
-# A1b: headers tasima
+# A2b/D4: header allowlist
 # ---------------------------------------------------------------------------
 
 
-def test_headers_aynen_tasinir():
+def test_headers_allowlist_tasinir():
     doc = {
         "sites": [
             _record(
                 name="Header Site",
                 headers={
-                    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64)",
                     "Accept": "application/json",
+                    "Accept-Language": "en-US,en;q=0.5",
+                    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64)",
                     "Content-Type": "application/json",
                     "Origin": "https://header.example",
                     "Referer": "https://header.example/",
                     "X-Tool": "vt-ui-main",
+                    "Cookie": "accept_rules=true;",
                 },
             )
         ]
     }
     site = wmn.convert(doc).sites[0]
     assert site["headers"] == {
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64)",
         "Accept": "application/json",
-        "Content-Type": "application/json",
-        "Origin": "https://header.example",
-        "Referer": "https://header.example/",
-        "X-Tool": "vt-ui-main",
+        "Accept-Language": "en-US,en;q=0.5",
     }
 
 
@@ -193,27 +199,25 @@ def test_headers_yoksa_alan_yazilmaz():
     assert "headers" not in wmn.convert(doc).sites[0]
 
 
-def test_kimlik_basliklari_aktarilmaz():
-    doc = {
-        "sites": [
-            _record(
-                name="Secret Site",
-                headers={
-                    "Authorization": "Bearer gizli",
-                    "proxy-authorization": "Basic gizli",
-                    "User-Agent": "ok",
-                },
-            )
-        ]
-    }
-    site = wmn.convert(doc).sites[0]
-    assert site["headers"] == {"User-Agent": "ok"}
+def test_allowlist_disi_basliklar_sayilir():
+    doc = {"sites": [_record(name="Secret Site", headers=_SECRET_HEADERS)]}
+    result = wmn.convert(doc)
+
+    assert "headers" not in result.sites[0]
+    assert result.headers_carried == 0
+    assert result.headers_dropped == 1
+    assert result.headers_removed == len(_SECRET_HEADERS)
 
 
-def test_headers_sayaci_ve_dogrulama(fixture_doc):
-    fixture_doc["sites"][0]["headers"] = {"Accept": "text/html"}
+def test_headers_sayaclari(fixture_doc):
+    fixture_doc["sites"][0]["headers"] = {"Accept": "text/html", "Cookie": "x=1"}
     doc, result = wmn.build_document(fixture_doc)
-    assert doc["_generated"]["headers_carried"] == 1
+
+    generated = doc["_generated"]
+    assert generated["headers_carried"] == 1
+    assert generated["headers_dropped"] == 1
+    assert generated["headers_removed"] == 1
+    assert generated["header_allowlist"] == ["accept", "accept-language"]
     assert result.headers_carried == 1
     assert wmn.validate_sites(doc["sites"]) == []
 
@@ -232,9 +236,12 @@ def test_validate_headers_hatalari():
         "headers" in i for i in wmn.validate_sites([{**base, "headers": {"A": 1}}])
     )
     assert any(
-        "kimlik" in i
-        for i in wmn.validate_sites([{**base, "headers": {"Authorization": "x"}}])
+        "allowlist" in i
+        for i in wmn.validate_sites([{**base, "headers": {"Cookie": "x"}}])
     )
+    # allowlist ici basliklar sorun degil
+    assert wmn.validate_sites([{**base, "headers": {"Accept": "text/html"}}]) == []
+
 
 
 # ---------------------------------------------------------------------------
@@ -341,6 +348,27 @@ def test_dokuman_zarfini_tasir(fixture_doc):
     assert doc["_generated"]["excluded"]["post"] == 1
 
 
+def test_lisans_zarfi_cc_by_sa_zorunlu_alanlari(fixture_doc):
+    """D5: lisans adi + URI + kaynak + telif + katkida bulunanlar."""
+    doc, _ = wmn.build_document(fixture_doc)
+    lic = doc["_license"]
+
+    assert lic["name"] == "CC BY-SA 4.0"
+    assert lic["uri"] == "https://creativecommons.org/licenses/by-sa/4.0/"
+    assert lic["source"] == "https://github.com/WebBreacher/WhatsMyName"
+    assert lic["copyright"] == "Copyright (C) 2015-2026 Micah Hoffman"
+    assert lic["adapted"] is True
+    assert lic["authors"], "authors bos olmamali"
+    # kaynakta authors yoksa telif satirina duser
+    assert lic["authors"] == ["Copyright (C) 2015-2026 Micah Hoffman"]
+
+
+def test_lisans_zarfi_kaynak_authors_kullanir():
+    doc, _ = wmn.build_document({"authors": ["Bir", " Iki ", ""], "sites": []})
+    assert doc["_license"]["authors"] == ["Bir", "Iki"]
+
+
+
 def test_main_dosyaya_yazar_ve_dogrular(tmp_path, fixture_doc):
     source = tmp_path / "wmn-source.json"
     source.write_text(json.dumps(fixture_doc), encoding="utf-8")
@@ -402,21 +430,25 @@ def test_gercek_veri_kept_esigi():
     assert result.kept + sum(result.excluded.values()) == result.sites_total
 
 
-def test_gercek_veri_headers_tasinir():
-    """A1b: kaynakta headers'i olan tutulan kayitlar ciktiya tasinmali."""
+def test_gercek_veri_headers_allowlist():
+    """A2b/D4: ciktiya yalnizca allowlist basliklari tasinir."""
     if not REAL_SOURCE.exists():
         pytest.skip(f"gercek WMN kaynagi yok: {REAL_SOURCE}")
     source = json.loads(REAL_SOURCE.read_text(encoding="utf-8"))
     result = wmn.convert(source)
+
     with_headers = [s for s in result.sites if "headers" in s]
-    assert result.headers_carried == len(with_headers) > 0
-    # kaynakta headers blogu olmayan kayit ciktiya headers eklemez
-    names = {s["name"] for s in with_headers}
-    assert "Apex Legends" in names
+    assert result.headers_carried == len(with_headers)
+    assert with_headers, "en az bir kayitta allowlist basligi beklenir"
     for site in with_headers:
         assert site["headers"]
         assert all(isinstance(v, str) for v in site["headers"].values())
-        assert not {n.lower() for n in site["headers"]} & wmn.SENSITIVE_HEADERS
+        # beklenen kume testte LITERAL: kod sabiti bosaltilsa test duser
+        assert {n.lower() for n in site["headers"]} <= {"accept", "accept-language"}
+    # dusurulen basliklar raporlanir
+    assert result.headers_dropped > 0
+    assert result.headers_removed >= result.headers_dropped
+
 
 
 def test_gercek_veri_nsfw_kategorisi_korunur():

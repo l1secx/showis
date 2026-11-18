@@ -64,9 +64,12 @@ Thumbs.db
 data/
 storage/
 evidence_cache/
-# A1/A1b: sitecheck paket verisi (turetilmis WMN JSON + NOTICE) surum kontrolunde
+# A2b/D6: yalniz turetilmis WMN verisi izinli. Dizin istisnasi bilerek dar:
+# ayni dizine dusen .env / *.pem / *.key / alt dizin yok sayilmaya devam eder.
 !packages/connectors/showis_connectors/sitecheck/data/
-!packages/connectors/showis_connectors/sitecheck/data/**
+packages/connectors/showis_connectors/sitecheck/data/**
+!packages/connectors/showis_connectors/sitecheck/data/wmn-sites.json
+!packages/connectors/showis_connectors/sitecheck/data/NOTICE.md
 
 # yerel sirlar (T-113)
 infra/.secrets/
