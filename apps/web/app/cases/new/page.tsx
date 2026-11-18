@@ -31,6 +31,8 @@ const DRAFT_KEY = "showis:new-case-draft";
 const NAME_HINT_ID = "target-name-hint";
 /** Kullanıcı adı (nick) alanının uzunluk ipucunun kimliği. */
 const NICK_HINT_ID = "target-nick-hint";
+/** Ad modundaki opsiyonel nick alanının ayrı ipucu kimliği (ipuçları eşzamanlı yaşamaz). */
+const NICK_HINT_ID_NAME = "target-nick-hint-name";
 
 const EMPTY = {
   mode: "name" as TargetKind,
@@ -261,12 +263,16 @@ export default function NewCasePage() {
                     <input
                       ref={nicknameRef}
                       minLength={3}
+                      aria-describedby={NICK_HINT_ID_NAME}
                       className="input pl-7 font-mono"
                       placeholder="kerem"
                       value={form.nickname}
                       onChange={(e) => set("nickname", e.target.value)}
                     />
                   </div>
+                  <span id={NICK_HINT_ID_NAME} className="mt-1 block text-[11px] text-slate-500">
+                    en az 3 karakter
+                  </span>
                 </label>
               )}
             </div>
