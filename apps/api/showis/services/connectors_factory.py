@@ -24,6 +24,7 @@ from showis_connectors import (
     DevtoConnector,
     DockerHubConnector,
     GitHubConnector,
+    GitHubEmailConnector,
     GitLabConnector,
     GravatarConnector,
     HackerNewsConnector,
@@ -189,6 +190,8 @@ async def build_connectors(db: AsyncSession) -> list[Any]:
         # Bulgular'a ipucu (lead) sonuclari duser.
         WebSearchConnector(search_provider=search_provider),
         GitHubConnector(token=github_token or None),
+        # B2 (D9): e-posta → commit → login pivotu; token yoksa gorev uretmez.
+        GitHubEmailConnector(token=github_token or None),
         TryHackMeConnector(
             browser_client=browser_client,
             search_provider=search_provider,

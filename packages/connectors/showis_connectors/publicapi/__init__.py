@@ -6,6 +6,7 @@ from .codeberg import CodebergConnector
 from .codeforces import CodeforcesConnector
 from .devto import DevtoConnector
 from .dockerhub import DockerHubConnector
+from .github_email import GitHubEmailConnector, email_tag
 from .gitlab import GitLabConnector
 from .gravatar import GravatarConnector, gravatar_hash
 from .hackernews import HackerNewsConnector
@@ -31,6 +32,8 @@ __all__ = [
     "CodeforcesConnector",
     "DevtoConnector",
     "DockerHubConnector",
+    "GitHubEmailConnector",
+    "email_tag",
     "GitLabConnector",
     "GravatarConnector",
     "HackerNewsConnector",

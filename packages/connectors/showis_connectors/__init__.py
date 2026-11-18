@@ -8,6 +8,7 @@ from .publicapi import (
     CodeforcesConnector,
     DevtoConnector,
     DockerHubConnector,
+    GitHubEmailConnector,
     GitLabConnector,
     GravatarConnector,
     HackerNewsConnector,
@@ -31,6 +32,7 @@ from .tryhackme import TryHackMeConnector
 
 __all__ = [
     "GitHubConnector",
+    "GitHubEmailConnector",
     "GitLabConnector",
     "KeybaseConnector",
     "TryHackMeConnector",

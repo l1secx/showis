@@ -8,11 +8,25 @@ en degerli kaynaklardan biridir.
 
 from __future__ import annotations
 
+import contextvars
+import uuid
 from typing import Any
+from urllib.parse import quote
 
-from showis_contracts import Platform
+from showis_contracts import Observation, Platform, ScanContext, TaskSpec
 
 from .base import ProfileFetch, PublicProfileConnector
+
+#: Keybase `user/lookup` API'si hangi parametreyle sorgulandigini tutar.
+#: `run()` gorevi turune gore ayarlar; `fetch()` imzasi taban sinifla uyumlu
+#: kalsin diye modul duzeyinde bir contextvar kullanilir (es zamanli gorevler
+#: kendi baglamlarini gorur).
+_LOOKUP_PARAM: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "keybase_lookup_param", default="username"
+)
+
+#: API'nin dondurmesini istedigimiz alanlar (payload kucuk kalsin).
+_LOOKUP_FIELDS = "basics,profile,proofs_summary"
 
 #: proof_type -> entity attribute link alani
 _PROOF_LINK_FIELDS = {
@@ -24,6 +38,19 @@ _PROOF_LINK_FIELDS = {
     "medium": "medium_link",
     "keybase": None,
 }
+
+
+def _proofs(profile: dict[str, Any]) -> list[dict[str, Any]]:
+    """Kanit listesini iki yanit seklinden de cikarir.
+
+    `proofs_human` (varsayilan yanit) ya da `fields=...proofs_summary` ile gelen
+    `proofs_summary.all`. Ikisi de ayni `proof_type`/`nametag` alanlarini tasir.
+    """
+    proofs = profile.get("proofs_human")
+    if not isinstance(proofs, list):
+        summary = profile.get("proofs_summary")
+        proofs = summary.get("all") if isinstance(summary, dict) else None
+    return [p for p in (proofs or []) if isinstance(p, dict)]
 
 
 def _proof_url(proof_type: str, nametag: str) -> str:
@@ -43,11 +70,60 @@ class KeybaseConnector(PublicProfileConnector):
     platform = Platform.KEYBASE
     profile_url_template = "https://keybase.io/{id}"
     identifier_pattern = r"keybase\.io/([A-Za-z0-9_.-]+)"
+    #: `profile_by_github` = D9 pivotu (e-posta→commit→login→Keybase proof).
+    supported_kinds = {"fetch_profile", "profile_by_github"}
+
+    # ------------------------------------------------------------------
+    # Plan: GitHub kullanici adi pivotu (D9)
+    # ------------------------------------------------------------------
+
+    async def plan(self, ctx: ScanContext) -> list[TaskSpec]:
+        tasks = await super().plan(ctx)
+        seen = {str(t.params.get("username") or "") for t in tasks}
+        for seed in ctx.seeds:
+            # Keybase `user/lookup` e-posta kabul etmiyor (D9); GitHub login'i
+            # ile arama yapilir: e-posta→commit→login→Keybase zinciri.
+            if seed.platform != Platform.GITHUB or not seed.username:
+                continue
+            login = str(seed.username).strip().lstrip("@")
+            if not login or f"github:{login}" in seen:
+                continue
+            seen.add(f"github:{login}")
+            tasks.append(
+                TaskSpec(
+                    id=str(uuid.uuid4()),
+                    connector=self.name,
+                    platform=self.platform,
+                    kind="profile_by_github",
+                    params={"github": login},
+                    priority=3,
+                )
+            )
+        return tasks
+
+    # ------------------------------------------------------------------
+    # Run: gorev turune gore lookup parametresi
+    # ------------------------------------------------------------------
+
+    def _task_identifier(self, task: TaskSpec) -> str:
+        if task.kind == "profile_by_github":
+            return str(task.params.get("github") or "").strip().lstrip("@")
+        return super()._task_identifier(task)
+
+    async def run(self, task: TaskSpec, ctx: ScanContext) -> list[Observation]:
+        if task.kind == "profile_by_github":
+            token = _LOOKUP_PARAM.set("github")
+            try:
+                return await super().run(task, ctx)
+            finally:
+                _LOOKUP_PARAM.reset(token)
+        return await super().run(task, ctx)
 
     async def fetch(self, identifier: str) -> ProfileFetch | None:
+        param = _LOOKUP_PARAM.get()
         url = (
             "https://keybase.io/_/api/1.0/user/lookup.json"
-            f"?username={identifier}"
+            f"?{param}={quote(identifier, safe='')}&fields={_LOOKUP_FIELDS}"
         )
         resp = await self.http_client.get(
             url,
@@ -68,7 +144,7 @@ class KeybaseConnector(PublicProfileConnector):
             return None
         profile = them[0]
         basics = profile.get("basics") or {}
-        proofs = profile.get("proofs_human") or []
+        proofs = _proofs(profile)
 
         social: dict[str, str] = {}
         links: list[str] = []
