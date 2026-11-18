@@ -51,16 +51,20 @@ isteği ≤ 600, O3'te ≤ 1200.
 ## B. E-posta pivotu
 
 Bugün `Seed.email` var ama (a) UI'da alan yok, (b) yalnız Gravatar hash'liyor,
-(c) Keybase e-posta ile aranmıyor.
+(c) Keybase yalnız kullanıcı adıyla aranıyor.
 
-1. **UI:** seed satırına `E-posta` alanı + payload (`email`).
-2. **Keybase:** `user/lookup.json?email=` (API destekli) — e-posta → kullanıcı adı/proof.
-3. **GitHub commit araması:** `author-email:` yalnız token varsa; token yoksa görev üretilmez.
-4. **Kapsam dışı (gerekçeli):** parola-sıfırlama uçlarıyla hesap yoklama (ToS/etki
-   nedeniyle), breach/telefon verisi (veri satın alma işi, kod değil).
+1. **UI:** seed satırına `E-posta` alanı + payload (`email`). ✅ B1 (`0df4cb7`)
+2. **GitHub commit araması:** `search/commits?q=author-email:<email>` — token varsa;
+   token yoksa görev üretilmez (fail-closed). Commit'in yazar login'i → profil entity'si.
+3. **Keybase — düzeltme (D9):** Keybase `user/lookup` API'si e-posta ile arama **desteklemiyor**
+   (yalnız `usernames`, `domain`, `twitter`, `github`, `reddit`, `hackernews`, `key_fingerprint`).
+   Bu yüzden Keybase'e e-posta değil **GitHub kullanıcı adı** pivotu eklenir (`?github=<login>`),
+   bu da e-posta→commit→login→Keybase proof zincirini tamamlar.
+4. **Kapsam dışı (gerekçeli):** parola-sıfırlama uçlarıyla hesap yoklama (ToS/etki),
+   breach/telefon verisi (veri satın alma işi), Keybase e-posta (API'de yok).
 
-**Kabul:** e-posta seed'i UI'dan girilip DB'ye düşer; Gravatar + Keybase e-posta
-görevleri üretilir; token yokken GitHub e-posta görevi üretilmez; testler yeşil.
+**Kabul:** e-posta seed'i UI'dan girilip DB'ye düşer (✅); token varken GitHub e-posta commit
+görevi üretilir, token yokken üretilmez; Keybase GitHub pivotu çalışır; testler yeşil.
 
 ## C. Skor sertleştirme
 
