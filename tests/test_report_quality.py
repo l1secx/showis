@@ -6,6 +6,7 @@ import json
 
 import pytest
 from showis_engine.report import (
+    basis_label,
     build_report_sections,
     generate_html_report,
     generate_json_report,
@@ -454,3 +455,54 @@ def test_safe_case_token_parametrik(token, expected):
 
     result = safe_case_token(token)
     assert result == (expected or "case")
+
+
+# ---------------------------------------------------------------------------
+# 8. C2: bağımsız doğrulama gerekçesi (`confidence_basis`)
+# ---------------------------------------------------------------------------
+
+
+def _data_with_basis(basis: str | None) -> dict:
+    data = _report_data()
+    finding = data["findings"][0]  # en yüksek skorlu, confirmed
+    if basis is None:
+        finding.pop("confidence_basis", None)
+    else:
+        finding["confidence_basis"] = basis
+    return data
+
+
+def test_confidence_basis_turkce_etiketle_html_raporunda_gorunur():
+    html = render_html_report(_data_with_basis("cross_link"))
+    assert "Çapraz bağlantı doğrulaması" in html
+    # JSON'da da hem kod hem Türkçe etiket taşınır (top_findings).
+    payload = json.loads(generate_json_report(_data_with_basis("cross_link")).decode("utf-8"))
+    assert payload["findings"][0]["confidence_basis"] == "cross_link"
+    top = payload["executive_summary"]["top_findings"][0]
+    assert top["confidence_basis"] == "cross_link"
+    assert top["basis_label"] == "Çapraz bağlantı doğrulaması"
+
+
+@pytest.mark.parametrize(
+    "basis,label",
+    [
+        ("commit_email", "Commit e-postası doğrulaması"),
+        ("avatar", "Avatar eşleşmesi doğrulaması"),
+        ("weak", "Bağımsız doğrulama yok"),
+    ],
+)
+def test_confidence_basis_etiketleri(basis, label):
+    assert basis_label(basis) == label
+    assert label in render_html_report(_data_with_basis(basis))
+
+
+def test_confidence_basis_bos_ise_satir_basilmaz():
+    html = render_html_report(_data_with_basis(None))
+    # Bulgu satırı biçimindeki "Doğrulama: …" hiçbir yerde yok (boş satır yok).
+    assert "Doğrulama:" not in html
+    assert "None" not in html
+
+    payload = json.loads(generate_json_report(_data_with_basis(None)).decode("utf-8"))
+    assert payload["findings"][0]["confidence_basis"] == ""
+    assert payload["executive_summary"]["top_findings"][0]["basis_label"] == ""
+

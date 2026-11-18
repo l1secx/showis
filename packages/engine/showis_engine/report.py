@@ -52,6 +52,29 @@ _STATUS_LABELS = {
     "rejected": "Reddedildi",
 }
 
+#: Bağımsız doğrulama sinyali etiketleri — `Finding.confidence_basis` (C2).
+#: Kaynak: `showis_engine.resolver` (`cross_link` > `commit_email` > `avatar` > `weak`).
+_BASIS_LABELS = {
+    "cross_link": "Çapraz bağlantı doğrulaması",
+    "commit_email": "Commit e-postası doğrulaması",
+    "avatar": "Avatar eşleşmesi doğrulaması",
+    "weak": "Bağımsız doğrulama yok",
+}
+
+
+def basis_label(value: Any) -> str:
+    """`confidence_basis` kodunu Türkçe etikete çevirir.
+
+    Boş/eski kayıtlar ve bilinmeyen kodlar için boş dize döner: raporlarda
+    "Doğrulama" satırı bu durumda **hiç basılmaz** (boş `None` sızmaz).
+    """
+    text = str(value or "").strip()
+    return _BASIS_LABELS.get(text, "")
+
+
+#: Şablonlar `{{ finding.confidence_basis|basis_label }}` ile etiketi basar.
+report_env.filters["basis_label"] = basis_label
+
 #: Kronoloji için kabul edilen tarih attribute'ları (T-301 ile aynı adlar)
 _DATE_ATTRIBUTES = ("created_at", "joined_at", "created", "ctime")
 
@@ -225,6 +248,9 @@ def build_report_sections(report_data: dict[str, Any]) -> dict[str, Any]:
             "score": round(float(finding.get("score") or 0.0), 3),
             "reason": _one_line_reason(finding),
             "url": finding.get("url"),
+            # C2: kararın gerekçesi (Türkçe etiket; yoksa boş).
+            "confidence_basis": str(finding.get("confidence_basis") or ""),
+            "basis_label": basis_label(finding.get("confidence_basis")),
         }
         for finding in sorted(
             findings, key=lambda item: float(item.get("score") or 0.0), reverse=True
@@ -373,6 +399,15 @@ def build_report_sections(report_data: dict[str, Any]) -> dict[str, Any]:
 def generate_json_report(report_data: dict[str, Any]) -> bytes:
     """Rapor verisini JSON bytes olarak döndürür (bölümler dahil, geriye uyumlu)."""
     payload = dict(report_data)
+    # C2: `confidence_basis` her bulguda bulunsun (eski kayıtlarda boş dize).
+    findings = payload.get("findings")
+    if isinstance(findings, list):
+        payload["findings"] = [
+            {**finding, "confidence_basis": str(finding.get("confidence_basis") or "")}
+            if isinstance(finding, dict)
+            else finding
+            for finding in findings
+        ]
     sections = build_report_sections(payload)
     for key, value in sections.items():
         payload.setdefault(key, value)
@@ -430,10 +465,11 @@ doğrultusunda kullanılabilir.</p>
 {% if sections.executive_summary.top_findings %}
 <h2>En yüksek 5 bulgu</h2>
 <table>
-  <tr><th>Platform</th><th>Etiket</th><th>Skor</th><th>Durum</th><th>Gerekçe</th></tr>
+  <tr><th>Platform</th><th>Etiket</th><th>Skor</th><th>Durum</th><th>Doğrulama</th><th>Gerekçe</th></tr>
   {% for finding in sections.executive_summary.top_findings %}
   <tr><td>{{ finding.platform }}</td><td>{{ finding.label }}</td>
       <td>{{ "%.2f"|format(finding.score) }}</td><td>{{ finding.status }}</td>
+      <td>{{ finding.basis_label or "-" }}</td>
       <td>{{ finding.reason }}</td></tr>
   {% endfor %}
 </table>
@@ -486,10 +522,11 @@ doğrultusunda kullanılabilir.</p>
 <h2>5. Bulgular</h2>
 {% if report.findings %}
 <table>
-  <tr><th>Platform</th><th>Etiket</th><th>Skor</th><th>Durum</th><th>URL</th></tr>
+  <tr><th>Platform</th><th>Etiket</th><th>Skor</th><th>Durum</th><th>Doğrulama</th><th>URL</th></tr>
   {% for finding in report.findings %}
   <tr><td>{{ finding.platform }}</td><td>{{ finding.label }}</td>
       <td>{{ "%.2f"|format(finding.score) }}</td><td>{{ finding.status }}</td>
+      <td>{{ (finding.confidence_basis|basis_label) or "-" }}</td>
       <td class="tag">{{ finding.url or "-" }}</td></tr>
   {% endfor %}
 </table>
@@ -549,6 +586,7 @@ _PDF_FRAGMENTS = {
     ),
     "finding_line": report_env.from_string(
         "<b>{{ platform }}</b> — {{ label }} · skor {{ score }} · {{ status }}<br/>{{ reason }}"
+        "{% if basis %}<br/>Doğrulama: {{ basis }}{% endif %}"
     ),
     "signal_line": report_env.from_string(
         "Sinyal kırılımı: {{ signals }}"
@@ -737,7 +775,7 @@ def generate_pdf_report(report_data: dict[str, Any]) -> bytes:
         story.append(Spacer(1, 6))
         story.append(_table(
             [
-                ["#", "Platform", "Etiket", "Skor", "Durum", "Gerekçe"],
+                ["#", "Platform", "Etiket", "Skor", "Durum", "Doğrulama", "Gerekçe"],
                 *[
                     [
                         str(index + 1),
@@ -745,12 +783,13 @@ def generate_pdf_report(report_data: dict[str, Any]) -> bytes:
                         item["label"],
                         f"{item['score']:.2f}",
                         item["status"],
+                        item["basis_label"] or "-",
                         item["reason"],
                     ]
                     for index, item in enumerate(summary["top_findings"])
                 ],
             ],
-            [0.8 * cm, 2.2 * cm, 3.2 * cm, 1.3 * cm, 1.8 * cm, 7.7 * cm],
+            [0.7 * cm, 2.0 * cm, 2.8 * cm, 1.1 * cm, 1.6 * cm, 2.8 * cm, 6.0 * cm],
         ))
 
     story.extend(
@@ -860,19 +899,20 @@ def generate_pdf_report(report_data: dict[str, Any]) -> bytes:
     if findings:
         story.append(_table(
             [
-                ["Platform", "Etiket", "Skor", "Durum", "URL"],
+                ["Platform", "Etiket", "Skor", "Durum", "Doğrulama", "URL"],
                 *[
                     [
                         f.get("platform", ""),
                         f.get("label", ""),
                         f"{float(f.get('score', 0.0)):.2f}",
                         f.get("status", ""),
+                        basis_label(f.get("confidence_basis")) or "-",
                         f.get("url") or "-",
                     ]
                     for f in findings
                 ],
             ],
-            [2.2 * cm, 4.0 * cm, 1.4 * cm, 2.0 * cm, 7.4 * cm],
+            [2.0 * cm, 3.4 * cm, 1.2 * cm, 1.7 * cm, 3.2 * cm, 5.5 * cm],
         ))
 
         for f in findings[:25]:
@@ -886,6 +926,7 @@ def generate_pdf_report(report_data: dict[str, Any]) -> bytes:
                             score=f"{float(f.get('score', 0.0)):.2f}",
                             status=f.get("status", ""),
                             reason=f.get("explanation") or _one_line_reason(f),
+                            basis=basis_label(f.get("confidence_basis")),
                         )
                     ),
                     body_style,

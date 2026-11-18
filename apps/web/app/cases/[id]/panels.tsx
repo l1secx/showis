@@ -398,6 +398,45 @@ const SIGNAL_META: Record<string, { label: string; hint: string }> = {
 /** Kırılım çubuğunun ölçeği: en büyük tek sinyal ağırlığı. */
 const MAX_SIGNAL_WEIGHT = 0.3;
 
+/* --- C2: bağımsız doğrulama gerekçesi (`Finding.confidence_basis`) --- */
+
+/**
+ * CONFIRMED kararının dayandığı bağımsız doğrulama sinyali — resolver önceliği
+ * `cross_link > commit_email > avatar > weak`. `weak` rozet ÜRETMEZ: skor yüksek
+ * olsa da bulgu CANDIDATE kalır, gerekçe skor panelinde açıklanır.
+ */
+const CONFIDENCE_BASIS_META: Record<string, { badge: string; reason: string }> = {
+  cross_link: {
+    badge: "Doğrulama: çapraz bağlantı",
+    reason: "Çapraz bağlantı doğrulaması",
+  },
+  commit_email: {
+    badge: "Doğrulama: commit e-postası",
+    reason: "Commit e-postası doğrulaması",
+  },
+  avatar: {
+    badge: "Doğrulama: avatar eşleşmesi",
+    reason: "Avatar eşleşmesi doğrulaması",
+  },
+};
+
+/** Skor ≥0.80 ama bağımsız sinyal yok → CONFIRMED değil, CANDIDATE. */
+const WEAK_BASIS_REASON = "Bağımsız doğrulama yok (skor ≥0.80 olsa da CANDIDATE)";
+
+/**
+ * Bulgunun doğrulama gerekçesi. Alan yoksa (alan eklenmeden önce üretilmiş
+ * kayıtlar) resolver önceliğiyle **skor kırılımından** türetilir; bu yalnızca
+ * görüntüleme amaçlıdır, skoru/statüyü değiştirmez.
+ */
+function confidenceBasisOf(f: FindingWithAuth): string {
+  if (f.confidence_basis) return f.confidence_basis;
+  const b = f.breakdown ?? {};
+  if (Number(b.cross_link) > 0) return "cross_link";
+  if (Number(b.commit_email_or_pgp) > 0) return "commit_email";
+  if (Number(b.avatar_exact_hash) > 0) return "avatar";
+  return "weak";
+}
+
 const findingsFilterKey = (caseId: string) => `showis:findings:${caseId}`;
 const findingsRejectedKey = (caseId: string) => `showis:findings:show-rejected:${caseId}`;
 
@@ -545,12 +584,30 @@ function AuthenticityChip({
 }
 
 
+function ConfidenceBasisBadge({ basis }: { basis: string }) {
+  const meta = CONFIDENCE_BASIS_META[basis];
+  if (!meta) return null;
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-300"
+      title="CONFIRMED kararının dayandığı bağımsız doğrulama sinyali — skoru değiştirmez"
+    >
+      <ShieldCheck size={11} aria-hidden />
+      {meta.badge}
+    </span>
+  );
+}
+
 function ScoreBreakdown({
   breakdown,
   score,
+  basis,
+  status,
 }: {
   breakdown: Record<string, number>;
   score: number;
+  basis?: string;
+  status?: string;
 }) {
   const [open, setOpen] = useState(false);
   const panelId = useId();
@@ -560,6 +617,16 @@ function ScoreBreakdown({
     .map(([key, value]) => ({ key, value: Number(value), meta: SIGNAL_META[key] }))
     .sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
   const total = typeof breakdown.total === "number" ? breakdown.total : score;
+
+  // C2: gerekçe satırı — skor bileşeni değil, kararın nedenidir.
+  const basisMeta = basis ? CONFIDENCE_BASIS_META[basis] : undefined;
+  const isWeakHigh = basis === "weak" && total >= 0.8 && status !== "confirmed";
+  const basisReason = status === "confirmed" && basisMeta
+    ? basisMeta.reason
+    : isWeakHigh
+      ? WEAK_BASIS_REASON
+      : "";
+  const basisHeading = status === "confirmed" ? "Neden CONFIRMED" : "Neden CANDIDATE";
 
   return (
     <div className="mt-3">
@@ -629,6 +696,19 @@ function ScoreBreakdown({
             <span className="text-slate-500">Toplam güven</span>
             <span className="mono font-medium text-blue-300">{Math.round(total * 100)}%</span>
           </div>
+          {basisReason && (
+            <div className="mt-2 border-t border-slate-800 pt-1.5">
+              <p className="text-[10px] uppercase tracking-wider text-slate-500">{basisHeading}</p>
+              <p
+                className={`mt-0.5 flex items-start gap-1.5 text-[11px] ${
+                  status === "confirmed" ? "text-emerald-300" : "text-amber-300"
+                }`}
+              >
+                <ShieldCheck size={11} className="mt-0.5 shrink-0" aria-hidden />
+                {basisReason}
+              </p>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -653,6 +733,7 @@ function FindingCard({
   const pct = Math.round(f.score * 100);
   const isLead = f.status === "lead";
   const evidencePanelId = useId();
+  const basis = confidenceBasisOf(f);
 
   return (
     <div
@@ -668,6 +749,7 @@ function FindingCard({
             <span className="truncate font-medium text-slate-100">{f.label}</span>
             <PlatformBadge platform={f.platform} />
             <Badge value={f.status} />
+            {f.status === "confirmed" && <ConfidenceBasisBadge basis={basis} />}
             <span className="mono text-sm font-medium text-blue-300" title={`Güven skoru ${pct}%`}>
               {pct}%
             </span>
@@ -727,7 +809,9 @@ function FindingCard({
         </div>
       </div>
 
-      {f.breakdown && <ScoreBreakdown breakdown={f.breakdown} score={f.score} />}
+      {f.breakdown && (
+        <ScoreBreakdown breakdown={f.breakdown} score={f.score} basis={basis} status={f.status} />
+      )}
 
       <button
         type="button"

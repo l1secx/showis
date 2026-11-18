@@ -113,6 +113,9 @@ export interface FindingItem {
   explanation?: string | null;
   evidence_ids: string[];
   verified_at?: string | null;
+  /** CONFIRMED kararının dayandığı bağımsız doğrulama sinyali (C2):
+   *  `cross_link` | `commit_email` | `avatar` | `weak`. Boş/eski kayıtlarda yok. */
+  confidence_basis?: string;
 }
 
 export interface EvidenceItem {

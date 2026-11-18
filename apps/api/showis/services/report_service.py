@@ -140,6 +140,9 @@ def _finding_public(f: Finding) -> dict[str, Any]:
         "evidence_ids": f.evidence_ids or [],
         "verified_at": f.verified_at.isoformat() if f.verified_at else None,
         "created_at": f.created_at.isoformat() if f.created_at else None,
+        # C2: CONFIRMED kararının bağımsız doğrulama gerekçesi. DB kolonu C2a'da
+        # eklenene kadar modelde alan olmayabilir → `getattr` ile güvenli okunur.
+        "confidence_basis": getattr(f, "confidence_basis", "") or "",
     }
 
 
