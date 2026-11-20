@@ -213,10 +213,19 @@ def test_report_renders_nick_when_name_missing():
 
 
 def test_html_report_renders_nick_for_handle_only_target():
-    """HTML raporu (PDF hedef bloğundan bağımsız) handle hedefinde `@nick` yazar."""
+    """HTML raporu (PDF hedef bloğundan bağımsız) handle hedefinde `@nick` yazar.
+
+    R-06: tüm HTML'de `@kerem` aramak zayıftı — entity etiketi/URL de aynı dizeyi
+    içerebilir. Yönetici özetinin **hedef satırı** hedeflenir.
+    """
     data = _report_data()
     data["target"] = _handle_target_data()
-    assert "@kerem" in render_html_report(data)
+    # Diğer bölümler nick'i içermese de test geçmeli: asıl kanıt hedef satırı.
+    for entity in data["entities"]:
+        entity["label"] = "anonim"
+    html = render_html_report(data)
+    assert "<th>Hedef</th><td>@kerem</td>" in html
+    assert "@@kerem" not in html
 
 
 def test_en_yuksek_bes_bulgu_siralanir():

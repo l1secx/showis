@@ -329,3 +329,22 @@ async def test_llm_prompt_adds_nick_only_when_name_present():
 
     prompt = client.prompts[0]
     assert "Kerem Boz (@kerem)" in prompt
+
+
+@pytest.mark.asyncio
+async def test_llm_prompt_never_renders_double_at():
+    """R-05: legacy `nickname="@kerem"` (başında @) prompt'ta `@@kerem` olmaz."""
+    target = Target(kind="handle", nickname="@kerem")
+    finding = Resolver().resolve_entity(
+        _handle_entity(label="kerem", username="kerem"),
+        target,
+        "c",
+        "s",
+        username_platform_count=1,
+    )
+    client = _RecordingClient()
+    await FindingExplainer(llm_client=client).explain(finding, target)
+
+    target_section = client.prompts[0].split("HEDEF:", 1)[1].split("BULGU", 1)[0]
+    assert "@@kerem" not in target_section
+    assert "@kerem" in target_section

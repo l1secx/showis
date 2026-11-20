@@ -191,6 +191,15 @@ def test_target_display_name_falls_back_to_nick():
     assert Target(kind="handle", nickname="kerem").display_name == "@kerem"
 
 
+def test_target_display_name_normalizes_leading_at():
+    """R-05: legacy DB değeri (`@kerem`) `@@kerem` üretmez — tek kaynak burası."""
+    t = Target(kind="handle", nickname="@kerem")
+    assert t.display_name == "@kerem"
+    assert "@@" not in t.display_name
+    # Yalnız `@`/boşluk: etiket boş kalır, `@` tek başına basılmaz.
+    assert Target(kind="handle", nickname="  @ ").display_name == ""
+
+
 def test_target_display_name_no_trailing_space_without_surname():
     assert Target(first_name="Kerem", nickname="kb").display_name == "Kerem"
 

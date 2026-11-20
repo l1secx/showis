@@ -32,7 +32,10 @@ class Target(BaseModel):
         full = f"{self.first_name} {self.last_name}".strip()
         if full:
             return full
-        return f"@{self.nickname}" if self.nickname else ""
+        # Nick'in basindaki `@` **burada** normalize edilir: etiketin tek kaynagi
+        # burasi oldugu icin legacy DB degerleri (`@kerem`) `@@kerem` uretmez.
+        nick = (self.nickname or "").strip().lstrip("@").strip()
+        return f"@{nick}" if nick else ""
 
 
 class Seed(BaseModel):

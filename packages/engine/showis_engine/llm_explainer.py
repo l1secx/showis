@@ -62,15 +62,16 @@ class FindingExplainer:
     def _target_info(target: Target) -> str:
         """LLM'e giden hedef etiketi — tek kaynak `Target.display_name`.
 
-        `display_name` ad varsa "Ad Soyad", yoksa "@nick" verir; nick yalnızca
-        **ad da varsa** parantez içinde eklenir (handle hedefinde `@nick` iki
-        kez yazılmaz). Nick başındaki `@` atılır ki `@@nick` oluşmasın.
+        `display_name` ad varsa "Ad Soyad", yoksa "@nick" verir (nick basindaki
+        `@` orada normalize edilir); nick yalnizca **ad da varsa** parantez
+        icinde eklenir, handle hedefinde `@nick` iki kez yazilmaz.
         """
         display = target.display_name
         if not display:
             return ""
         nick = (target.nickname or "").strip().lstrip("@")
-        if display.startswith("@"):
+        if display == f"@{nick}":
+            # Handle hedefi: etiket zaten `@nick`; ek parantez gerekmez.
             return display
         return f"{display} (@{nick})" if nick else display
 
