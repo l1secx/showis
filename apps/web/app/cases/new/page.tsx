@@ -51,6 +51,21 @@ const EMPTY = {
 
 type CaseForm = typeof EMPTY;
 
+/**
+ * Backend kuralı (`apps/api/showis/api/v1/cases.py::_check_nickname`) ile aynı:
+ * baştaki `@` atılır, en az 3 karakter ve en az bir harf/rakam gerekir.
+ * `required=false` (ad modundaki opsiyonel nick) boş değeri kabul eder.
+ */
+function nickError(raw: string, required: boolean): string | null {
+  const value = raw.trim().replace(/^@+/, "").trim();
+  if (!value) return required ? "Kullanıcı adı gerekli." : null;
+  if (value.length < 3) return "en az 3 karakter";
+  if (!/[\p{L}\p{N}]/u.test(value)) return "en az bir harf veya rakam içermeli";
+  return null;
+}
+
+const NICK_RULE_HINT = "en az 3 karakter, en az 1 harf/rakam";
+
 export default function NewCasePage() {
   const router = useRouter();
   const [saving, setSaving] = useState(false);
@@ -86,11 +101,22 @@ export default function NewCasePage() {
 
   const set = (k: keyof CaseForm, v: string | number) => setForm((f) => ({ ...f, [k]: v }));
 
+  // Nick kuralı backend'de de var; UI'da erken göstermek 422 turunu önler.
+  const handleNickError = nickError(form.nickname, mode === "handle");
+  const nickInvalid = handleNickError !== null;
+
   const updateSeed = (i: number, k: keyof SeedRow, v: string) =>
     setSeeds((rows) => rows.map((r, idx) => (idx === i ? { ...r, [k]: v } : r)));
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Buton devre dışı olsa da Enter ile gönderim mümkün: kuralı burada da uygula.
+    const nickIssue = nickError(form.nickname, mode === "handle");
+    if (nickIssue) {
+      setError(`Kullanıcı adı geçersiz: ${nickIssue}`);
+      nicknameRef.current?.focus();
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -203,6 +229,7 @@ export default function NewCasePage() {
                       ref={nicknameRef}
                       required
                       minLength={3}
+                      aria-invalid={nickInvalid}
                       aria-describedby={NICK_HINT_ID}
                       className="input pl-7 font-mono"
                       placeholder="abdulkeremdemir"
@@ -210,8 +237,14 @@ export default function NewCasePage() {
                       onChange={(e) => set("nickname", e.target.value)}
                     />
                   </div>
-                  <span id={NICK_HINT_ID} className="mt-1 block text-[11px] text-slate-500">
-                    en az 3 karakter
+                  <span
+                    id={NICK_HINT_ID}
+                    aria-live="polite"
+                    className={`mt-1 block text-[11px] ${
+                      nickInvalid ? "text-red-300" : "text-slate-500"
+                    }`}
+                  >
+                    {handleNickError ?? NICK_RULE_HINT}
                   </span>
                 </label>
               )}
@@ -263,6 +296,7 @@ export default function NewCasePage() {
                     <input
                       ref={nicknameRef}
                       minLength={3}
+                      aria-invalid={nickInvalid}
                       aria-describedby={NICK_HINT_ID_NAME}
                       className="input pl-7 font-mono"
                       placeholder="kerem"
@@ -270,8 +304,14 @@ export default function NewCasePage() {
                       onChange={(e) => set("nickname", e.target.value)}
                     />
                   </div>
-                  <span id={NICK_HINT_ID_NAME} className="mt-1 block text-[11px] text-slate-500">
-                    en az 3 karakter
+                  <span
+                    id={NICK_HINT_ID_NAME}
+                    aria-live="polite"
+                    className={`mt-1 block text-[11px] ${
+                      nickInvalid ? "text-red-300" : "text-slate-500"
+                    }`}
+                  >
+                    {handleNickError ?? `opsiyonel — ${NICK_RULE_HINT}`}
                   </span>
                 </label>
               )}
@@ -470,7 +510,11 @@ export default function NewCasePage() {
               Vaka oluşturulunca taramayı hemen başlat
             </label>
 
-            <button type="submit" disabled={saving} className="btn-primary mt-4 w-full">
+            <button
+              type="submit"
+              disabled={saving || nickInvalid}
+              className="btn-primary mt-4 w-full"
+            >
               {saving ? (
                 "Oluşturuluyor…"
               ) : (
