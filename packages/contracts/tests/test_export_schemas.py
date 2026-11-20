@@ -16,8 +16,7 @@ from pathlib import Path
 
 import pytest
 from showis_contracts.enums import EdgeType, EntityType, FindingStatus, Platform
-from showis_contracts.findings import ConfidenceBreakdown
-from showis_contracts.tasks import Target
+from showis_contracts.schemas import MODELS
 
 SCRIPT = (
     Path(__file__).resolve().parents[1] / "scripts" / "export_schemas.py"
@@ -100,9 +99,13 @@ def test_generator_targets_only_generated_file() -> None:
     assert "OTOMATİK ÜRETİLDİ" in generator.generate_typescript_definitions().splitlines()[0]
 
 
-@pytest.mark.parametrize("model", [Target, ConfidenceBreakdown])
+@pytest.mark.parametrize("model", MODELS, ids=lambda model: model.__name__)
 def test_committed_schema_matches_model(model) -> None:
     """Commit'lenen JSON şema modelle aynı olmalı (elle düzenleme suite'i kırar).
+
+    R-10: parametre listesi `export_schemas.py`'nin kullandığı **tek kaynak**
+    (`showis_contracts.schemas.MODELS`); elle tutulan 2 modellik liste yeni bir
+    dışa aktarılan şemayı (ör. `Finding`) sessizce kapsam dışı bırakıyordu.
 
     Dosya `indent=2` ile ve sonda yeni satır olmadan yazılır; bu yüzden bayt
     değil **ayrıştırılmış JSON** eşitliği karşılaştırılır.
