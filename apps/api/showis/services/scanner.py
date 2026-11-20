@@ -183,11 +183,21 @@ def _planner_query_key(text: str) -> str:
     return " ".join(str(text or "").split()).casefold()
 
 
+#: Tek basina arama terimi sayilmayan boolean operatorler (`OR`, `AND`, `NOT`).
+_QUERY_BOOLEAN_WORDS = frozenset({"or", "and", "not"})
+
+
 def _has_search_term(text: str) -> bool:
-    """Sorgu gercek bir arama terimi tasiyor mu (yalniz tirnak/operator degil)?"""
+    """Sorgu gercek bir arama terimi tasiyor mu (yalniz tirnak/operator/artik degil)?"""
     # Cift ve tek tirnak birlikte atilir: `'' site:x.com` da bos sorgudur.
     stripped = _QUERY_OPERATOR_RE.sub(" ", text).replace('"', " ").replace("'", " ")
-    return bool(stripped.split())
+    # Operatorden arta kalan noktalama (`-site:x.com` -> `-`) veya tek basina
+    # boolean kelime arama terimi degildir; en az bir alfanumerik token gerekir.
+    return any(
+        token.casefold() not in _QUERY_BOOLEAN_WORDS
+        and any(ch.isalnum() for ch in token)
+        for token in stripped.split()
+    )
 
 
 def _has_planner_connector(connectors: list[Any]) -> bool:
@@ -427,12 +437,18 @@ class ScannerService:
         )
 
         query_plan: QueryPlan | None = None
-        try:
-            # Plani uret; hata olursa `query_plan` None kalir ve planner gorevi
-            # eklenmez (connector gorevleri etkilenmez — eski davranis korunur).
-            query_plan = await self.planner.plan(target, variants)
-        except Exception as exc:
-            logger.warning("Query planlama hatası: %s", exc)
+        # O1'de planner tavani 0'dir (`planner_cap`): plan uretilse bile gorev olmaz.
+        # Cagriyi tamamen atlamak, kullanilmayacak bir LLM isteginin (en fazla
+        # `DEFAULT_PLANNER_TIMEOUT` = 10 sn) gecikmesini ve `max_llm_calls`
+        # butcesinden 1 cagriyi onler. `websearch` connector'i yoksa plan da
+        # bosuna uretilmez (`_has_planner_connector`).
+        if planner_cap(scan.mode) > 0 and _has_planner_connector(self.connectors):
+            try:
+                # Plani uret; hata olursa `query_plan` None kalir ve planner gorevi
+                # eklenmez (connector gorevleri etkilenmez — eski davranis korunur).
+                query_plan = await self.planner.plan(target, variants)
+            except Exception as exc:
+                logger.warning("Query planlama hatası: %s", exc)
 
         # Gather tasks from connectors (mod O1 hizli: yavas site-check atlanir)
         # Varyant sayisi da moda gore sinirlanir; aksi halde O1 de dakikalarca surer.
@@ -501,6 +517,19 @@ class ScannerService:
                 "log",
                 {"message": f"Sorgu planlayıcı {len(planner_specs)} arama görevi ekledi."},
             )
+        elif query_plan is not None:
+            # Plan uretildi ama tek sorgu bile gorev olmadi (hepsi tekrar/filtre
+            # veya tavan): sessiz kalmak "planlayici hic calismadi" ile karisir.
+            await event_broadcaster.broadcast(
+                scan.id,
+                "log",
+                {
+                    "message": (
+                        f"Sorgu planlayıcı {len(query_plan.queries)} sorgu üretti, "
+                        "0 yeni arama görevi (tekrar/filtre)."
+                    )
+                },
+            )
 
         # Record tasks in DB
         db_tasks: list[DbTask] = []
@@ -512,6 +541,9 @@ class ScannerService:
                 platform=spec.platform.value,
                 kind=spec.kind,
                 params=spec.params,
+                # Oncelik DB'de kalici: yurutme sirasi `_refill_pending` tarafindan
+                # `priority` (kucuk once) ile belirlenir.
+                priority=spec.priority,
                 status="pending",
             )
             db.add(t)
@@ -797,11 +829,13 @@ class ScannerService:
             return (datetime.now(timezone.utc) - origin).total_seconds()
 
         async def _refill_pending() -> None:
+            # Dusuk `priority` once kosar (varsayilan 5); ayni oncelikte ekleme sirasi
+            # korunur. Planner gorevleri priority=1..5 ile gelir (bkz. `Task.priority`).
             rows = (
                 await db.execute(
                     select(DbTask)
                     .where(DbTask.scan_id == scan_id, DbTask.status == "pending")
-                    .order_by(DbTask.created_at, DbTask.id)
+                    .order_by(DbTask.priority, DbTask.created_at, DbTask.id)
                 )
             ).scalars().all()
             for db_task in rows:
@@ -835,6 +869,9 @@ class ScannerService:
                     platform=_safe_platform(db_task.platform),
                     kind=db_task.kind,
                     params=db_task.params or {},
+                    # DB'de kalici oncelik spec'e geri tasinir (connector'lar
+                    # `spec.priority` okuyabilir); eski satirlarda NULL -> 5.
+                    priority=int(db_task.priority or 5),
                 )
                 matched = next(
                     (c for c in self.connectors if c.name == spec.connector), None

@@ -124,3 +124,34 @@ def test_planner_specs_drop_single_quoted_empty_term(svc):
     plan = plan_with(["'' site:y.com", '"a" site:x.com'])
     specs = svc._planner_task_specs(plan, "O3", [])
     assert [s.params["query"] for s in specs] == ['"a" site:x.com']
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "-site:x.com",  # negatif operator: yalniz `-` kalir
+        "OR",  # tek basina boolean kelime
+        "and",
+        "NOT",
+        "site:a.com site:b.com",  # yalniz operatorler
+        "-",
+        "()",
+    ],
+)
+def test_planner_specs_drop_operator_leftovers(svc, query):
+    """R-07: operator/noktalama artigi arama terimi degildir."""
+    assert svc._planner_task_specs(plan_with([query]), "O3", []) == []
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        '"kerem" site:x.com',
+        "kerem OR boz site:x.com",  # gercek terim varken boolean kalabilir
+        "site:x.com kerem",
+        "-site:x.com kerem boz",
+    ],
+)
+def test_planner_specs_keep_real_terms(svc, query):
+    specs = svc._planner_task_specs(plan_with([query]), "O3", [])
+    assert [s.params["query"] for s in specs] == [query]

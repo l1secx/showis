@@ -160,6 +160,9 @@ class Task(Base):
     platform: Mapped[str] = mapped_column(String(64), nullable=False)
     kind: Mapped[str] = mapped_column(String(64), nullable=False)
     params: Mapped[dict[str, Any]] = mapped_column(JSON_TYPE, default=dict)
+    #: Yurutme onceligi (kucuk once). Planner gorevleri 1..5 uretir; connector
+    #: gorevleri varsayilan 5'tir. `_refill_pending` bu kolonla siralar.
+    priority: Mapped[int] = mapped_column(Integer, default=5, server_default="5", nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="pending")
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -315,3 +318,5 @@ class AuditLog(Base):
 
 
 Index("ix_audit_logs_case_id_created_at", AuditLog.case_id, AuditLog.created_at.desc())
+#: `_refill_pending` sirasi: once dusuk `priority`, sonra ekleme sirasi (0008).
+Index("ix_tasks_scan_priority", Task.scan_id, Task.priority)
