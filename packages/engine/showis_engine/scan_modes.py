@@ -392,11 +392,17 @@ def estimate_scan(
     mode: str | None = "O2",
     *,
     calibration_path: str | Path | None = None,
+    planner_tasks: int | None = None,
 ) -> dict[str, Any]:
     """Tahmini gorev/istek sayisi ve toplam sure (saniye).
 
     Maliyetler sirayla: ``calibration.json`` (varsa) → ``_COST`` varsayilanlari.
     ``confidence`` alani tahminin kaynagini soyler: ``calibrated`` | ``heuristic``.
+
+    ``planner_tasks``: planin gercekte kac arama gorevi urettigi. ``None`` ise
+    mod tavanı (`planner_cap`) kullanilir ve bu bir **ust sinirdir** — plan
+    uretilmemis, sorgular filtreden gecmemis veya tekillestirmede elenmis
+    olabilir. Plan hazirsa gercek sayi gecilir; deger tavana kirpilir.
     """
     profile = MODE_PROFILES[norm_mode(mode)]
     calibration = load_calibration(calibration_path)
@@ -411,9 +417,10 @@ def estimate_scan(
     api_usernames = min(variant_cap(mode), len(variants))
 
     hint_count = sum(1 for k in ("school", "city", "company") if str(hints.get(k) or "").strip())
-    # Phase 2 planner sorgulari da gercek arama gorevi olur (O1=0, O2=8, O3=20);
-    # tahmin bunlari saymazsa web aramasi adimi moda gore 8/20 gorev eksik cikar.
-    search_tasks = 1 + hint_count + planner_cap(mode)
+    # Phase 2 planner sorgulari da gercek arama gorevi olur (O1=0, O2=8, O3=20).
+    planned = planner_cap(mode) if planner_tasks is None else int(planner_tasks)
+    planned = min(max(planned, 0), planner_cap(mode))
+    search_tasks = 1 + hint_count + planned
     api_tasks = api_usernames * _API_CONNECTORS
     # O1'de yavas connector'lar (sitecheck/render/tryhackme/hackthebox) hic planlanmaz.
     slow_allowed = norm_mode(mode) != "O1"
@@ -479,6 +486,8 @@ def estimate_scan(
         "requests": int(round(tasks + site_usernames * site_count() * site_request_factor())),
         "steps": steps,
         "budget": budget_for_mode(mode),
+        # Tahminde sayilan planner gorevi (planner_tasks=None -> mod tavani).
+        "planner_tasks": planned,
         # Ek alanlar (sozlesme bozulmaz, UI kullanmak zorunda degil).
         "confidence": "calibrated" if calibration.is_calibrated else "heuristic",
         "expected_accuracy_pct": _EXPECTED_ACCURACY_PCT[

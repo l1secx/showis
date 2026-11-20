@@ -31,6 +31,8 @@ from showis_engine.scan_modes import (
     DEFAULT_CALIBRATION_PATH,
     MODE_PROFILES,
     calibration_path,
+    effective_concurrency,
+    effective_costs,
     estimate_scan,
     load_calibration,
     norm_mode,
@@ -645,41 +647,77 @@ def test_host_limiter_env_sinirlari_kirpilir(monkeypatch):
 # T-371: istek/görev tahmini gerçek ölçümle hizalı
 # ---------------------------------------------------------------------------
 
-#: Referans canlı ölçüm (O2, 64 site, 6 kullanıcı adı, hedef "Test Smoke").
-#: T-371 ölçümü: 362 sn / 164 görev / 1176 istek — bu ölçüm **Phase 2 planner
-#: sorguları gerçek arama görevi olmadan** alındı (planda tek arama vardı).
-#: Planner sorguları artık `websearch` görevi olarak koşuyor (O2 tavanı 8), yani
-#: aynı tarama +8 görev ve +8 istek yapar: 8 × 30 sn arama, ölçülen etkin
-#: paralellik 3 (calibration.json `concurrency_observed` 3.14) ile ~+80 sn duvar
-#: saati ekler. Güncel (daha doğru) referans: 442 sn / 172 görev / 1184 istek.
-REF_WALL_SECONDS = 442
-REF_TASKS = 172
-REF_REQUESTS = 1184
+#: Referans **canlı ölçüm** (O2, 64 site, 6 kullanıcı adı, hedef "Test Smoke").
+#: T-371 ölçümü: 362 sn / 164 görev / 1176 istek. Ölçülen taramada planlayıcı
+#: sorguları henüz arama görevi olarak koşmuyordu (planda tek arama vardı).
+#:
+#: Bu yüzden REF *ölçülen* değerlerdir; planner'ın ekleyeceği iş buraya
+#: **eklenmez**. Planner etkisi ayrı delta testleriyle ölçülür
+#: (`test_planner_gorevleri_...`): plan 8 geçerli sorgu üretirse +8 arama görevi,
+#: ~+76 sn duvar saati (8 × 30 sn ÷ ölçülen etkin paralellik 3). REF yenilenirse
+#: provenans (tarih, scan_id, mod, hedef, LLM açık/kapalı) buraya yazılmalı.
+REF_WALL_SECONDS = 362
+REF_TASKS = 164
+REF_REQUESTS = 1176
 
 
 def _smoke_target() -> Target:
     return Target(first_name="Test", last_name="Smoke", hints={})
 
 
-def test_gorev_sayisi_gercek_olcume_yakin(monkeypatch):
+def test_gorev_sayisi_gercek_olcume_esit(monkeypatch):
+    """Planner görevi sayılmadan (ölçüm koşuluyla aynı) görev = 164."""
     monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY", raising=False)
-    est = estimate_scan(_smoke_target(), "O2")
+    est = estimate_scan(_smoke_target(), "O2", planner_tasks=0)
     assert est["tasks"] == REF_TASKS, f"görev {est['tasks']} (beklenen {REF_TASKS})"
 
 
-def test_istek_sayisi_gercek_olcume_yuzde_yirmi_icinde(monkeypatch):
+def test_varsayilan_tahmin_planner_tavani_ust_sinirdir(monkeypatch):
+    """Plan bilinmeden tahmin üst sınırdır: 164 ≤ görev ≤ 164 + tavan."""
+    monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY", raising=False)
+    est = estimate_scan(_smoke_target(), "O2")
+    assert est["planner_tasks"] == planner_cap("O2")
+    assert REF_TASKS <= est["tasks"] <= REF_TASKS + planner_cap("O2")
+
+
+def test_istek_sayisi_gercek_olcume_yuzde_on_icinde(monkeypatch):
     monkeypatch.delenv("SHOWIS_ESTIMATE_ROBOTS_FACTOR", raising=False)
     monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY", raising=False)
-    est = estimate_scan(_smoke_target(), "O2")
+    est = estimate_scan(_smoke_target(), "O2", planner_tasks=0)
     deviation = abs(est["requests"] - REF_REQUESTS) / REF_REQUESTS
-    assert deviation <= 0.20, f"istek {est['requests']} vs {REF_REQUESTS} (%{deviation*100:.0f})"
+    assert deviation <= 0.10, f"istek {est['requests']} vs {REF_REQUESTS} (%{deviation*100:.0f})"
 
 
-def test_sure_tahmini_gercek_olcume_yuzde_yirmi_icinde(monkeypatch):
+def test_sure_tahmini_gercek_olcume_yuzde_on_icinde(monkeypatch):
     monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY", raising=False)
-    est = estimate_scan(_smoke_target(), "O2")
+    est = estimate_scan(_smoke_target(), "O2", planner_tasks=0)
     deviation = abs(est["seconds"] - REF_WALL_SECONDS) / REF_WALL_SECONDS
-    assert deviation <= 0.20, f"süre {est['seconds']} vs {REF_WALL_SECONDS} (%{deviation*100:.0f})"
+    assert deviation <= 0.10, f"süre {est['seconds']} vs {REF_WALL_SECONDS} (%{deviation*100:.0f})"
+
+
+def test_planner_gorevleri_tahmine_gorev_ve_istek_olarak_eklenir(monkeypatch):
+    """Plan 8 görev ürettiğinde tahmin +8 görev / +8 istek gösterir."""
+    monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY", raising=False)
+    base = estimate_scan(_smoke_target(), "O2", planner_tasks=0)
+    planned = estimate_scan(_smoke_target(), "O2", planner_tasks=8)
+    assert planned["tasks"] - base["tasks"] == 8
+    assert planned["requests"] - base["requests"] == 8
+    # Tavan aşılamaz: O2'de 8'den fazlası sayılmaz.
+    assert estimate_scan(_smoke_target(), "O2", planner_tasks=99)["planner_tasks"] == 8
+
+
+def test_planner_delta_maliyeti_olculen_paralellikle_uyumlu(monkeypatch):
+    """+8 arama görevi ~76 sn ekler (8 × 30 sn ÷ 3,14) — tahmin katsayılarıyla."""
+    monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY", raising=False)
+    base = estimate_scan(_smoke_target(), "O2", planner_tasks=0)
+    planned = estimate_scan(_smoke_target(), "O2", planner_tasks=8)
+    costs = effective_costs(load_calibration())
+    concurrency = effective_concurrency("O2")
+    expected = 8 * costs["query"] / concurrency + 8 * costs["entity"]
+    assert planned["seconds"] - base["seconds"] == pytest.approx(expected, abs=2)
+    # Aynı hesapla 'planner kapatılırsa' süre tahmini ölçüme döner (362 ±%10):
+    # yani bu test, planner teriminin sayıldığının kanıtıdır.
+    assert abs(base["seconds"] - REF_WALL_SECONDS) / REF_WALL_SECONDS <= 0.10
 
 
 def test_site_basina_istek_faktoru_env_ile_ayarlanir(monkeypatch):
@@ -748,10 +786,10 @@ def _calibration_with_observed(tmp_path, observed: float | None) -> Path:
 
 
 def test_observed_paralellik_sure_tahminini_gercege_yakinlastirir(monkeypatch):
-    """Gerçek tarama 362 sn; observed=3.14 ile tahmin ±%10 içinde olmalı."""
+    """Gerçek tarama 362 sn (planner görevi yokken); observed=3.14 ile ±%10."""
     monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY", raising=False)
     path = _calibration_with_observed(Path_tempdir(), 3.14)
-    est = estimate_scan(_smoke_target(), "O2", calibration_path=path)
+    est = estimate_scan(_smoke_target(), "O2", calibration_path=path, planner_tasks=0)
     deviation = abs(est["seconds"] - REF_WALL_SECONDS) / REF_WALL_SECONDS
     assert deviation <= 0.10, (
         f"tahmin {est['seconds']} sn, gerçek {REF_WALL_SECONDS} (±%{deviation * 100:.0f})"
@@ -803,12 +841,16 @@ def test_o1_o3_efektif_paralellik_makul(monkeypatch):
 
 
 def test_gercek_kalibrasyon_dosyasi_hedef_araliginda(monkeypatch):
-    """Repodaki kalibration.json (observed=3.14) ile O2 tahmini 362 ±%10."""
+    """Repodaki calibration.json (observed=3.14) ile O2 tahmini 362 ±%10.
+
+    `planner_tasks=0`: 362 sn'lik ölçüm planner sorguları arama görevi olarak
+    koşmadan alındı; planner etkisi ayrı delta testinde.
+    """
     real = DEFAULT_CALIBRATION_PATH
     calibration = load_calibration(real)
     if calibration.concurrency_observed is None:
         pytest.skip("kalibrasyonda concurrency_observed yok (T-373 öncesi dosya)")
     monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY", raising=False)
-    est = estimate_scan(_smoke_target(), "O2", calibration_path=real)
+    est = estimate_scan(_smoke_target(), "O2", calibration_path=real, planner_tasks=0)
     deviation = abs(est["seconds"] - REF_WALL_SECONDS) / REF_WALL_SECONDS
     assert deviation <= 0.10, f"{est['seconds']} vs {REF_WALL_SECONDS}"

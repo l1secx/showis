@@ -194,7 +194,7 @@ export function ScanTab({
           <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2.5 text-xs text-slate-400">
             <span className="inline-flex items-center gap-1.5">
               <Clock size={13} className="text-blue-400" />
-              Tahmini süre{" "}
+              Tahmini üst sınır{" "}
               <span className="mono font-medium text-slate-200">
                 ~{estimate ? formatDuration(estimate.seconds) : "hesaplanıyor"}
               </span>
