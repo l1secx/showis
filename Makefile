@@ -1,4 +1,4 @@
-.PHONY: help dev lint typecheck test schemas docker-up docker-down backup restore demo demo-smoke seed-keys eval gate
+.PHONY: help bootstrap dev lint typecheck test schemas docker-up docker-down backup restore demo demo-smoke seed-keys eval gate
 
 PYTHON ?= .venv/bin/python
 PIP ?= .venv/bin/pip
@@ -8,6 +8,7 @@ PYTEST ?= .venv/bin/pytest
 
 help:
 	@echo "Showis OSINT Monorepo Komutları:"
+	@echo "  make bootstrap   - .venv kurar ve tüm bağımlılıkları + yerel paketleri kurar (tek komut)"
 	@echo "  make dev          - API ve Web uygulamasını geliştirme modunda başlatır"
 	@echo "  make lint         - Kod format ve lint kontrollerini çalıştırır"
 	@echo "  make typecheck    - Mypy ile statik tip kontrollerini çalıştırır"
@@ -18,6 +19,15 @@ help:
 
 schemas:
 	PYTHONPATH=packages/contracts $(PYTHON) packages/contracts/scripts/export_schemas.py
+
+# SET-01/SET-02: tek komut bootstrap. Yerel showis-* paketleri PyPI'da yok;
+# bu yüzden root pyproject bağımlılıklarında değil, bu hedefte -e ile kurulur.
+# Root meta-paket (pyproject.toml) runtime + dev bağımlılıklarını getirir.
+bootstrap:
+	python3 -m venv .venv
+	$(PIP) install --upgrade pip
+	$(PIP) install -e packages/contracts -e packages/engine -e packages/connectors \
+		-e packages/llm -e packages/settings -e '.[dev]'
 
 lint:
 	$(RUFF) check packages apps tests

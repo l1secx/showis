@@ -56,12 +56,20 @@ raporlayan kişisel OSINT web uygulaması.
 
 ### Docker (önerilen)
 
+Gereksinimler: Docker Engine + **Docker Compose v2** (`docker compose` eklentisi;
+eski `docker-compose` v1, `depends_on` sağlık koşullarını desteklemez), `make`,
+ve token üretimi için host'ta `cryptography` paketli bir Python 3
+(`pip install cryptography` veya dağıtım paketi — MASTER_KEY üretimi bunu ister).
+Caddy basic-auth hash'i için host'ta caddy yoksa:
+`docker run --rm caddy:2.7-alpine caddy hash-password --plaintext 'PAROLA'`.
+
 ```bash
 cp .env.example .env
-# Zorunlu: API paylaşılan token'ı (değer: sadece infra/.env içinde tutun)
-python3 -c "import secrets; print('SHOWIS_API_TOKEN=' + secrets.token_urlsafe(32))" >> .env
-# Zorunlu: BYOK sırlarını şifreleyen anahtar
-python3 -c "from cryptography.fernet import Fernet; print('MASTER_KEY=' + Fernet.generate_key().decode())" >> .env
+# Zorunlu: API paylaşılan token'ı. ÖNEMLİ: mevcut SHOWIS_API_TOKEN= satırını
+# DÜZENLEYİN (append etmeyin — aksi halde anahtar iki kez tanımlanır).
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"   # değeri .env içindeki SHOWIS_API_TOKEN='a yazın
+# Zorunlu: BYOK sırlarını şifreleyen anahtar — yine .env içindeki MASTER_KEY= satırına
+python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 
 make docker-up     # tüm servisler
 docker compose -f infra/docker-compose.yml ps
@@ -83,7 +91,12 @@ Kimlik doğrulama iki katmanlı:
 
 ### Geliştirme (docker'sız)
 
+Gereksinim: **Python ≥ 3.12** (Debian 12 = 3.11 → native yol bloklu; docker yolunu
+kullanın veya python3.12 kurun) + Node 18+ (`make dev` için).
+
 ```bash
+# Tek komut bootstrap: .venv + tüm bağımlılıklar + yerel showis-* paketleri
+make bootstrap
 # Postgres + Redis gerekli — portları host'a açmak için:
 docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml up -d postgres redis
 make dev           # api :8000 + web :3000
@@ -93,6 +106,9 @@ make typecheck     # mypy
 make schemas       # JSON Schema export
 make eval          # eval seti precision@3 raporu
 ```
+
+Operasyon betikleri (`infra/scripts/backup.sh` vb.) **bash ≥ 4** ister (ilişkisel
+dizi + GNU `date -d`); Alpine host'ta `apk add bash` gerekir.
 
 `SHOWIS_AUTH_DISABLED=1` yalnız test/dev bypass'ıdır — prod'da **asla** set edilmemeli
 (set edilirse API `CRITICAL` loglar). Doküman istiyorsanız `SHOWIS_DOCS_ENABLED=1`

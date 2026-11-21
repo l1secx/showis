@@ -20,8 +20,20 @@ dependencies = [
     "celery>=5.4.0",
     "redis>=5.0.0",
     "reportlab>=4.0.0",
-    "showis-contracts",
 ]
+
+# NOT (SET-02): `showis-contracts` (ve diğer showis-* paketleri) PyPI'da
+# bulunmaz; packages/ altındaki yerel dizinlerdir. `make bootstrap` onları
+# tek pip çağrısında -e ile kurar; bu yüzden burada bağımlılık olarak
+# listelenmezler (PyPI çözümüne düşmemeleri için).
+
+[tool.setuptools]
+# Sanal meta-paket (SET-01): bu distribution kendi Python paketi İÇERMEZ;
+# amacı üst-düzey bağımlılıkların + dev araçlarının TEK kurulum noktası
+# olması (`pip install -e '.[dev]'`). Flat-layout otomatik keşfi (apps/,
+# packages/, docs/ gibi çoklu üst-dizinler yüzünden) bu yapılandırma olmadan
+# build'i reddediyordu. Yerel showis-* paketleri packages/ altındandır.
+packages = []
 
 [project.optional-dependencies]
 dev = [
@@ -30,6 +42,10 @@ dev = [
     "respx>=0.21.0",
     "ruff>=0.4.0",
     "mypy>=1.10.0",
+    # SET-03: SQLAlchemy asyncio (greenlet) + test DB (aiosqlite). CI bunları
+    # ayrı pinliyordu; pyproject'tan kurulan taze venv testleri koşamıyordu.
+    "greenlet>=3.0.0",
+    "aiosqlite>=0.20.0",
 ]
 
 [tool.ruff]
