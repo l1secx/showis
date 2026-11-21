@@ -35,6 +35,9 @@ install_redaction_filter()
 DEFAULT_ALLOWED_ORIGINS = (
     "http://localhost:8083",
     "http://127.0.0.1:8083",
+    # CODE-01 notu: :8005 girdileri tarihsel (port T-111 ile publish edilmiyor).
+    # test_security_hardening.py bunlara dayali CORS testleri icerdigi icin
+    # simdilik tutuluyor; SHOWIS_ALLOWED_ORIGINS ile override edilebilir.
     "http://localhost:8005",
     "http://127.0.0.1:8005",
 )

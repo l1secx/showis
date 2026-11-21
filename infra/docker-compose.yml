@@ -1,10 +1,19 @@
-version: "3.8"
+# NOT (OPS-01): `version:` anahtarı Compose v2'de gereksiz (obsolete uyarısı
+# üretiyordu) ve kaldırıldı. Bu dosya Docker Compose v2 (`docker compose`
+# eklentisi) gerektirir — v1 `docker-compose`, `depends_on.condition:
+# service_healthy` semantiğini v3 dosyalarında güvenilir şekilde desteklemez.
 
 networks:
   frontend:
     driver: bridge
   backend:
     driver: bridge
+  # D-012 (SEC-01, dokümantasyon): bu ağ "dışa çıkış yalnız worker/browser'da"
+  # niyetini taşır; ancak frontend/backend'de `internal: true` YOK — USE_CELERY=0
+  # (varsayılan) modunda taramalar API sürecinde koştuğu için API'nin dışarı
+  # çıkması gerekir, bu yüzden zorunlu tutulmuyor. Wave 3 planında prod profili
+  # önerilecek (USE_CELERY=1 + internal ağlar); o profilde API'ye egress
+  # verilmemeli.
   egress:
     driver: bridge
 
@@ -136,6 +145,22 @@ services:
       # SEC-01: API kimlik dogrulamasi. Bos birakilirsa API fail-closed (503) calisir,
       # bu yuzden compose seviyesinde zorunlu tutuluyor (fail-fast).
       - SHOWIS_API_TOKEN=${SHOWIS_API_TOKEN:?SHOWIS_API_TOKEN tanimli degil - infra/.env dosyasina ekleyin (bkz. infra/.env.example)}
+      # D-010 (T-302/CFG-01): .env.example'de belgelenen ayar knobs'lari artik
+      # api'ye iletiliyor (daha once sessizce yok sayiliyorlardi). Hepsi opsiyonel:
+      # bos ise uygulamanin guvenli varsayilani gecerlidir.
+      # SHOWIS_AUTH_DISABLED bilincli olarak ILETILMEZ (test/dev bypass'i
+      # konteynere sizmaz; API yalniz imaj/env uzerinden ayarlanabilir kalir).
+      - SHOWIS_ALLOWED_ORIGINS=${SHOWIS_ALLOWED_ORIGINS:-}
+      - SHOWIS_SCAN_CONCURRENCY=${SHOWIS_SCAN_CONCURRENCY:-}
+      - SHOWIS_HOST_MAX_CONCURRENCY=${SHOWIS_HOST_MAX_CONCURRENCY:-}
+      - SHOWIS_HOST_MIN_INTERVAL=${SHOWIS_HOST_MIN_INTERVAL:-}
+      - SHOWIS_MAX_BODY_BYTES=${SHOWIS_MAX_BODY_BYTES:-}
+      - SHOWIS_SSE_MAX_SECONDS=${SHOWIS_SSE_MAX_SECONDS:-}
+      - SHOWIS_SSE_QUEUE_MAXSIZE=${SHOWIS_SSE_QUEUE_MAXSIZE:-}
+      - SHOWIS_DOCS_ENABLED=${SHOWIS_DOCS_ENABLED:-}
+      - SHOWIS_LLM_BASE_URL_ALLOWLIST=${SHOWIS_LLM_BASE_URL_ALLOWLIST:-}
+      - SHOWIS_SITECHECK_CACHE_TTL=${SHOWIS_SITECHECK_CACHE_TTL:-}
+      - SHOWIS_TRUSTED_PROXIES=${SHOWIS_TRUSTED_PROXIES:-}
     # umask 077 (T-314): imajdaki entrypoint-api.sh de ayni degeri set eder; bu override
     # sayesinde imaj yeniden derlenmeden de yeni raporlar 0600/0700 olur (ikisi de 077).
     command: ["/bin/sh", "-c", "umask 077 && exec uvicorn showis.main:app --host 0.0.0.0 --port 8000"]

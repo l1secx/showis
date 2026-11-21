@@ -67,7 +67,7 @@ docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d postgres -q -c "CREATE DATABAS
 
 cleanup() {
   log "test veritabani siliniyor: $TEST_DB"
-  docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d postgres -q -c "DROP DATABASE IF EXISTS \"$TEST_DB\";" >/dev/null 2>&1 2>&1 || true
+  docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d postgres -q -c "DROP DATABASE IF EXISTS \"$TEST_DB\";" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 

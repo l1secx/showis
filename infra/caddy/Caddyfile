@@ -6,8 +6,9 @@
 #     /*      -> web:3000  (UI)
 #
 # Erisim modeli (T-113):
-#   * Edge kimlik dogrulamasi = HTTP Basic (basicauth @gate). /health DISINDA her yol
-#     korumali: UI + /api/*.
+#   * Edge kimlik dogrulamasi = HTTP Basic (basicauth @gate). /health VE /healthz
+#     disindaki her yol korumali: UI + /api/* (/healthz bilincli muaf — T-330/F-04,
+#     yalniz ok|degraded + check adi doner).
 #   * /api/* Next proxy'sine gider; proxy token'i her istege kendisi ekliyor. Yani
 #     X-API-Token edge'de ayirt edici degil, tek gercek kapi basic auth.
 #   * SSE (text/event-stream): ayni origin'de tarayici basic auth kimligini EventSource

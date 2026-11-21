@@ -60,7 +60,13 @@ _metrics_cache: dict[str, Any] = {"at": 0.0, "body": ""}
 
 
 def app_version() -> str:
-    """Uygulama sürümü (opsiyonel `SHOWIS_VERSION` → paket metadata → '0.1.0')."""
+    """Uygulama sürümü (opsiyonel `SHOWIS_VERSION` → paket metadata → '0.1.0').
+
+    CODE-02 notu: `showis-monorepo` root meta-paketi konteyner imajında kurulu
+    DEĞİL (Dockerfile.api yalnız `packages/contracts` kurar), bu yüzden metadata
+    araması Docker'da her zaman PackageNotFoundError döner ve '0.1.0' fallback
+    geçerli. Gerçek sürüm göstermek için compose'dan `SHOWIS_VERSION` geç.
+    """
     env = os.getenv("SHOWIS_VERSION")
     if env:
         return env
