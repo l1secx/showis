@@ -386,26 +386,92 @@ async def test_n_plus_bir_yok(client, db_factory):
 
 
 # ---------------------------------------------------------------------------
-# Bilinen sınırlama: Türkçe büyük harf katlaması (İ/ı) SQL katmanında eksik
+# Türkçe harf katlaması (İ/ı/ş/ğ/ü/ö/ç) — SQLite ve Postgres'te aynı
 # ---------------------------------------------------------------------------
 
 
-async def test_turkce_buyuk_i_katlamasi_bilinen_sinirlama(client, db_factory):
-    """`İ` içeren büyük harfli arama SQLite'ta eşleşmez (ASCII lower).
-
-    Bu bilinçli bir sınırlama: çözüm için normalize edilmiş bir kolon/indeks
-    gerekir (migration — Atlas'a önerildi). Küçük harf aramalar ve alt dizgiler
-    çalışır; bu test davranışı kilitler ki regresyon sessizce geçmesin.
-    """
+async def test_turkce_harf_katlamasi(client, db_factory):
+    """Büyük/küçük Türkçe harf ve ASCII karşılıkları aynı sonucu verir."""
     await _seed(db_factory)
     # Alt dizgi araması (katlama gerekmez) çalışır — "Ayşe" ve "İşe alım"
     hit = {c["id"] for c in (await client.get("/api/v1/cases?q=şe")).json()["items"]}
     assert hit == {"case-ayse", "case-mehmet"}
-    # Küçük harfle yazılan `inceleme`, `İnceleme` (büyük İ) içeren adlarla eşleşmez
-    assert (await client.get("/api/v1/cases?q=inceleme")).json()["items"] == []
-    # Kullanıcı tam büyük `İ` yazarsa eşleşir
-    hit_ids = {c["id"] for c in (await client.get("/api/v1/cases?q=İnceleme")).json()["items"]}
-    assert hit_ids == {"case-ayse", "case-review"}
+
+    # Küçük `inceleme`, büyük `İnceleme` içeren adlarla artık eşleşir.
+    expected = {"case-ayse", "case-review"}
+    for query in ("inceleme", "İnceleme", "INCELEME"):
+        hit_ids = {
+            c["id"] for c in (await client.get("/api/v1/cases", params={"q": query})).json()["items"]
+        }
+        assert hit_ids == expected, query
+
+    # ASCII karşılığı yazılan `ayse`, `Ayşe` hedefini bulur.
+    hit_ids = {c["id"] for c in (await client.get("/api/v1/cases?q=ayse")).json()["items"]}
+    assert hit_ids == {"case-ayse"}
+
+
+# ---------------------------------------------------------------------------
+# Çok kelimeli arama: kelimeler farklı alanlarda olabilir (AND)
+# ---------------------------------------------------------------------------
+
+
+async def test_cok_kelimeli_arama_alanlar_arasi(client, db_factory):
+    """`ad soyad` ayrı kolonlarda olsa da tek aramada bulunur."""
+    await _seed(db_factory)
+
+    res = await client.get("/api/v1/cases", params={"q": "ayşe yılmaz"})
+    assert [c["id"] for c in res.json()["items"]] == ["case-ayse"]
+
+    # İki kelime farklı vakalara aitse eşleşme olmaz (OR değil, AND).
+    res = await client.get("/api/v1/cases", params={"q": "ayşe demir"})
+    assert res.json()["items"] == []
+
+    # Kelimeler vaka adı + amaç arasında da eşleşebilir.
+    res = await client.get("/api/v1/cases", params={"q": "mehmet doğrulama"})
+    assert [c["id"] for c in res.json()["items"]] == ["case-mehmet"]
+
+
+async def test_ilgi_sirasi(client, db_factory):
+    """`sort=relevance`: ada birebir eşleşen, yalnız amaçta geçenden önce gelir."""
+    await _seed(db_factory)
+    async with db_factory() as session:
+        session.add_all(
+            [
+                DbCase(
+                    id="case-name-match",
+                    name="Kerem Boz",
+                    purpose="genel kayıt",
+                    legal_basis="self_check",
+                    created_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
+                ),
+                DbCase(
+                    id="case-purpose-match",
+                    name="Başka Kayıt",
+                    purpose="Kerem Boz hakkında not",
+                    legal_basis="self_check",
+                    created_at=datetime(2026, 11, 20, tzinfo=timezone.utc),
+                ),
+            ]
+        )
+        session.add_all(
+            [
+                DbTarget(case_id="case-name-match", first_name="Kerem", last_name="Boz", hints={}),
+                DbTarget(case_id="case-purpose-match", first_name="Ali", last_name="Veli", hints={}),
+            ]
+        )
+        await session.commit()
+
+    res = await client.get(
+        "/api/v1/cases", params={"q": "kerem boz", "sort": "relevance"}
+    )
+    assert [c["id"] for c in res.json()["items"]][:2] == [
+        "case-name-match",
+        "case-purpose-match",
+    ]
+
+    # q yokken relevance anlamsızdır: en yeni kayıt sırasına düşer, 422 değil.
+    res = await client.get("/api/v1/cases", params={"sort": "relevance"})
+    assert res.status_code == 200
 
 
 # ---------------------------------------------------------------------------

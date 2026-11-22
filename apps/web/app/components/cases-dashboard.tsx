@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowDown, Loader2, Plus, Search, Trash2, X } from "lucide-react";
@@ -54,6 +54,7 @@ const SORT_OPTIONS: { value: CaseSort; label: string }[] = [
   { value: "created_asc", label: "En eski" },
   { value: "name_asc", label: "Ad (A-Z)" },
   { value: "updated_desc", label: "Son tarama" },
+  { value: "relevance", label: "İlgi düzeyi" },
 ];
 
 const PAGE_SIZE = 50;
@@ -78,6 +79,18 @@ export function CasesDashboard() {
     const timer = setTimeout(() => setDebouncedQuery(query.trim()), 300);
     return () => clearTimeout(timer);
   }, [query]);
+
+  // Arama başlarken ilgi sıralamasına geç; kullanıcı başka sıralama seçtiyse
+  // dokunma. Arama temizlenince varsayılan "En yeni"ye dön.
+  const hadQueryRef = useRef(false);
+  useEffect(() => {
+    const hadQuery = hadQueryRef.current;
+    hadQueryRef.current = Boolean(debouncedQuery);
+    if (debouncedQuery && !hadQuery) setSort("relevance");
+    else if (!debouncedQuery && hadQuery) {
+      setSort((current) => (current === "relevance" ? "created_desc" : current));
+    }
+  }, [debouncedQuery]);
 
   const refreshGrandTotal = useCallback(() => {
     api

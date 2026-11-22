@@ -6,6 +6,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from showis.db.base import Base
 from showis.db.models import Case as DbCase
+from showis.db.models import Edge as DbEdge
 from showis.db.models import Entity as DbEntity
 from showis.db.models import Finding as DbFinding
 from showis.db.models import Scan as DbScan
@@ -178,3 +179,116 @@ async def test_export_authenticity_alanlarini_icerir(client, db_factory):
     # Export eskiden beri var olan alanları korur
     for key in ("id", "entity_id", "platform", "status", "score", "breakdown"):
         assert key in findings["github"]
+
+
+# ---------------------------------------------------------------------------
+# Kimlik kümesi + bağımsız sinyal özeti (gece geliştirmesi)
+# ---------------------------------------------------------------------------
+
+
+async def _seed_clusters(db_factory) -> None:
+    await _seed(db_factory)
+    async with db_factory() as session:
+        github = await session.get(DbFinding, "finding:github:ada")
+        github.breakdown = {
+            "username_exact_match": 0.30,
+            "name_similarity": 0.20,
+            "cross_link": 0.25,
+            "avatar_exact_hash": 0.10,
+            "total": 0.92,
+        }
+        session.add_all(
+            [
+                DbEdge(
+                    id="edge-github-gitlab",
+                    case_id=CASE_ID,
+                    type="same_person",
+                    source_entity_id="github:ada",
+                    target_entity_id="gitlab:ada",
+                    confidence=0.45,
+                    evidence_ids=[],
+                ),
+                DbEdge(
+                    id="edge-github-mastodon",
+                    case_id=CASE_ID,
+                    type="same_person",
+                    source_entity_id="github:ada",
+                    target_entity_id="mastodon:ada",
+                    confidence=0.55,
+                    evidence_ids=[],
+                ),
+            ]
+        )
+        await session.commit()
+
+
+async def test_bulgular_kimlik_kumesi_ve_sinyal_ozeti(client, db_factory):
+    await _seed_clusters(db_factory)
+    res = await client.get(f"/api/v1/cases/{CASE_ID}/findings")
+    assert res.status_code == 200, res.text
+    rows = {row["platform"]: row for row in res.json()}
+
+    github = rows["github"]
+    assert github["cluster"]["size"] == 3
+    assert set(github["cluster"]["platforms"]) == {"github", "gitlab", "mastodon"}
+    assert github["cluster"]["max_confidence"] == 0.55
+    assert github["cluster_id"] == github["cluster"]["id"]
+    # Aynı kümedeki bulgular aynı kimliği taşır
+    assert rows["gitlab"]["cluster_id"] == github["cluster_id"]
+
+    # Tek başına kalan web kaydı kendi kümesinde
+    assert rows["web"]["cluster"]["size"] == 1
+    assert rows["web"]["cluster_id"] != github["cluster_id"]
+
+    assert github["corroboration"] == 4
+    assert set(github["signals"]) == {
+        "username_exact_match",
+        "name_similarity",
+        "cross_link",
+        "avatar_exact_hash",
+    }
+    assert rows["gitlab"]["corroboration"] == 0
+
+
+async def test_platform_filtresi(client, db_factory):
+    await _seed_clusters(db_factory)
+    res = await client.get(f"/api/v1/cases/{CASE_ID}/findings?platform=gitlab")
+    assert res.status_code == 200, res.text
+    assert [row["platform"] for row in res.json()] == ["gitlab"]
+
+    res = await client.get(
+        f"/api/v1/cases/{CASE_ID}/findings?platform=github,gitlab"
+    )
+    assert [row["platform"] for row in res.json()] == ["github", "gitlab"]
+
+    res = await client.get(f"/api/v1/cases/{CASE_ID}/findings?platform=bogus")
+    assert res.status_code == 422
+
+
+async def test_corroboration_sirasi(client, db_factory):
+    await _seed_clusters(db_factory)
+    res = await client.get(
+        f"/api/v1/cases/{CASE_ID}/findings?sort=corroboration_desc"
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()[0]["platform"] == "github"
+
+    res = await client.get(f"/api/v1/cases/{CASE_ID}/findings?sort=score_asc")
+    assert [row["platform"] for row in res.json()][0] == "web"
+
+    res = await client.get(f"/api/v1/cases/{CASE_ID}/findings?sort=bogus")
+    assert res.status_code == 422
+
+
+async def test_grafik_kume_ozeti(client, db_factory):
+    await _seed_clusters(db_factory)
+    res = await client.get(f"/api/v1/cases/{CASE_ID}/graph")
+    assert res.status_code == 200, res.text
+    payload = res.json()
+    assert "clusters" in payload
+    big = next(cluster for cluster in payload["clusters"] if cluster["size"] == 3)
+    assert set(big["platforms"]) == {"github", "gitlab", "mastodon"}
+    nodes = {node["data"]["id"]: node["data"] for node in payload["nodes"]}
+    assert nodes["github:ada"]["cluster_size"] == 3
+    assert nodes["github:ada"]["cluster_id"] == big["id"]
+    assert nodes["web:ada"]["cluster_size"] == 1

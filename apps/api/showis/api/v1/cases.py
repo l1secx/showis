@@ -23,6 +23,10 @@ from showis.db.models import Target as DbTarget
 from showis.db.session import get_db
 from showis.services.audit import list_audit_logs, record_request_audit
 from showis.services.connectors_factory import build_connectors, build_llm_client
+from showis.services.identity_graph import (
+    compute_identity_clusters,
+    corroboration_signals,
+)
 from showis.services.report_service import create_report, purge_case_reports
 from showis.services.retention import _evidence_file_path
 from showis.services.scanner import ScannerService
@@ -31,7 +35,7 @@ from showis_contracts import FindingStatus, Platform, Target
 from showis_engine.policy import guard_target
 from showis_engine.scan_modes import budget_for_mode, estimate_scan, norm_mode
 from showis_engine.variants import normalize_turkish
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import and_, case, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -324,46 +328,190 @@ def reject_control_chars(value: str | None, *, param: str) -> str | None:
     return value
 
 
+def _escape_literal(value: str) -> str:
+    r"""`LIKE` deseni için `%`, `_` ve `\` kaçışlanır (kullanıcı joker üretemez)."""
+    return str(value).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _escape_like(value: str) -> str:
-    r"""`ILIKE` deseni için `%`, `_` ve `\` kaçışlanır (kullanıcı joker üretemez)."""
-    escaped = str(value).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return f"%{escaped}%"
+    """Alt dizgi deseni: literal kaçışı + iki yanına `%`."""
+    return f"%{_escape_literal(value)}%"
+
+
+#: Türkçe/aksanlı harfleri ASCII karşılığına indirger. `İ/I/ı` aynı harfe
+#: katlanır: `İnceleme`, `inceleme` ve `INCELEME` aynı aramada buluşur.
+_TR_SEARCH_MAP = str.maketrans(
+    {
+        "İ": "i",
+        "I": "i",
+        "ı": "i",
+        "Ş": "s",
+        "ş": "s",
+        "Ğ": "g",
+        "ğ": "g",
+        "Ü": "u",
+        "ü": "u",
+        "Ö": "o",
+        "ö": "o",
+        "Ç": "c",
+        "ç": "c",
+        "Â": "a",
+        "â": "a",
+        "Î": "i",
+        "î": "i",
+        "Û": "u",
+        "û": "u",
+    }
+)
+
+
+def _fold_search_text(value: str) -> str:
+    """Arama metnini katlar; kelime sınırlarını (boşluk) **korur**."""
+    folded = str(value or "").translate(_TR_SEARCH_MAP).lower()
+    return " ".join(folded.split())
+
+
+def _fold_sql(column: Any) -> Any:
+    """DB tarafında Türkçe harf katlaması (SQLite ve Postgres uyumlu).
+
+    `lower()` SQLite'ta yalnız ASCII'yi katlar; bu yüzden önce Türkçe harfler
+    `replace()` ile ASCII'ye çevrilir. Böylece `İnceleme` ile `inceleme`
+    aynı ifadeye dönüşür ve ILIKE/LIKE eşleşmesi DB'den bağımsız çalışır.
+    """
+    expression = column
+    for source, target in (
+        ("İ", "i"),
+        ("I", "i"),
+        ("ı", "i"),
+        ("Ş", "s"),
+        ("ş", "s"),
+        ("Ğ", "g"),
+        ("ğ", "g"),
+        ("Ü", "u"),
+        ("ü", "u"),
+        ("Ö", "o"),
+        ("ö", "o"),
+        ("Ç", "c"),
+        ("ç", "c"),
+        ("Â", "a"),
+        ("â", "a"),
+        ("Î", "i"),
+        ("î", "i"),
+        ("Û", "u"),
+        ("û", "u"),
+    ):
+        expression = func.replace(expression, source, target)
+    return func.lower(expression)
+
+
+def _search_tokens(text: str, *, limit: int = 8) -> list[str]:
+    """Arama metnini kelimelere ayırır (en fazla `limit`; aşırı uzun sorgu yok)."""
+    return [token for token in text.split() if token][:limit]
+
+
+def _token_match(token: str) -> Any:
+    """Tek kelimenin vaka adı/amacı veya hedef kimliğinde geçmesi."""
+    folded = _fold_search_text(token)
+    if not folded:
+        return None
+    pattern = _escape_like(folded)
+    target_fields = (
+        DbTarget.first_name,
+        DbTarget.last_name,
+        DbTarget.nickname,
+    )
+    target_conds = [
+        _fold_sql(field).like(pattern, escape="\\")
+        for field in target_fields
+    ]
+    case_conds = [
+        _fold_sql(Case.name).like(pattern, escape="\\"),
+        _fold_sql(Case.purpose).like(pattern, escape="\\"),
+    ]
+    target_hit = select(DbTarget.case_id).where(or_(*target_conds))
+    return or_(*case_conds, Case.id.in_(target_hit))
+
+
+def _relevance_score(token: str) -> Any:
+    """Tek kelime için 0..~100 arası ilgi puanı (SQL ifadesi)."""
+    folded = _fold_search_text(token)
+    if not folded:
+        return 0
+    contains = _escape_like(folded)
+    prefix = f"{_escape_literal(folded)}%"
+    name = _fold_sql(Case.name)
+    purpose = _fold_sql(Case.purpose)
+    first = _fold_sql(DbTarget.first_name)
+    last = _fold_sql(DbTarget.last_name)
+    nickname = _fold_sql(DbTarget.nickname)
+    full = func.trim(
+        func.coalesce(_fold_sql(DbTarget.first_name), "")
+        + " "
+        + func.coalesce(_fold_sql(DbTarget.last_name), "")
+    )
+    target_score = (
+        select(
+            func.max(
+                case(
+                    (full == folded, 100),
+                    (full.like(prefix, escape="\\"), 90),
+                    (nickname == folded, 95),
+                    (nickname.like(prefix, escape="\\"), 85),
+                    (first == folded, 70),
+                    (last == folded, 70),
+                    (full.like(contains, escape="\\"), 55),
+                    (nickname.like(contains, escape="\\"), 50),
+                    (first.like(contains, escape="\\"), 35),
+                    (last.like(contains, escape="\\"), 35),
+                    else_=0,
+                )
+            )
+        )
+        .where(DbTarget.case_id == Case.id)
+        .correlate(Case)
+        .scalar_subquery()
+    )
+    return (
+        case(
+            (name == folded, 100),
+            (name.like(prefix, escape="\\"), 80),
+            (name.like(contains, escape="\\"), 60),
+            else_=0,
+        )
+        + func.coalesce(target_score, 0)
+        + case((purpose.like(contains, escape="\\"), 20), else_=0)
+    )
+
+
+def _relevance_order(text: str) -> list[Any]:
+    """Kelime bazlı ilgi sırası: her kelimenin en iyi eşleşmesi toplanır."""
+    tokens = _search_tokens(text)
+    if not tokens:
+        return []
+    score: Any = 0
+    for token in tokens:
+        score = score + _relevance_score(token)
+    return [score.desc(), Case.created_at.desc(), Case.id.asc()]
 
 
 def _case_filters(q: str | None, case_status: str | None) -> list[Any]:
-    """Arama + durum filtrelerini SQL koşullarına çevirir (geçersiz değer → 422)."""
+    """Arama + durum filtrelerini SQL koşullarına çevirir (geçersiz değer → 422).
+
+    Çok kelimeli aramada **her kelime** ayrı ayrı aranır ve hepsi eşleşmelidir
+    (AND). Böylece `kerem boz` sorgusu `first_name=Kerem`, `last_name=Boz`
+    olan hedefi bulur; tek alanda birleşik yazılması gerekmez.
+    """
     conditions: list[Any] = []
 
     text = (q or "").strip()
     if text:
-        pattern = _escape_like(text)
-        from showis_engine.variants import normalize_turkish
-        norm_text = normalize_turkish(text)
-        norm_pattern = _escape_like(norm_text) if norm_text and norm_text != text.lower() else None
-
-        # Hedef ad/soyad/nick için alt sorgu: join ile satır çoğaltmadan arama
-        target_conds = [
-            DbTarget.first_name.ilike(pattern, escape="\\"),
-            DbTarget.last_name.ilike(pattern, escape="\\"),
-            DbTarget.nickname.ilike(pattern, escape="\\"),
+        token_conditions = [
+            condition
+            for token in _search_tokens(text)
+            if (condition := _token_match(token)) is not None
         ]
-        case_conds = [
-            Case.name.ilike(pattern, escape="\\"),
-            Case.purpose.ilike(pattern, escape="\\"),
-        ]
-        if norm_pattern:
-            target_conds.extend([
-                DbTarget.first_name.ilike(norm_pattern, escape="\\"),
-                DbTarget.last_name.ilike(norm_pattern, escape="\\"),
-                DbTarget.nickname.ilike(norm_pattern, escape="\\"),
-            ])
-            case_conds.extend([
-                Case.name.ilike(norm_pattern, escape="\\"),
-                Case.purpose.ilike(norm_pattern, escape="\\"),
-            ])
-
-        target_hit = select(DbTarget.case_id).where(or_(*target_conds))
-        conditions.append(or_(*case_conds, Case.id.in_(target_hit)))
+        if token_conditions:
+            conditions.append(and_(*token_conditions))
 
     if case_status is not None and case_status.strip():
         value = case_status.strip().lower()
@@ -387,7 +535,9 @@ async def list_cases(
     mode: str | None = None,
     limit: int = Query(DEFAULT_CASE_LIMIT, ge=1, le=MAX_CASE_LIMIT),
     offset: int = Query(0, ge=0, le=MAX_CASE_OFFSET),
-    sort: Literal["created_desc", "created_asc", "name_asc", "updated_desc"] = "created_desc",
+    sort: Literal[
+        "created_desc", "created_asc", "name_asc", "updated_desc", "relevance"
+    ] = "created_desc",
     legacy: bool = False,
     db: AsyncSession = Depends(get_db),
 ):
@@ -451,7 +601,10 @@ async def list_cases(
         ordered = base.order_by(Case.created_at.asc(), Case.id.asc())
     elif sort == "updated_desc":
         ordered = base.order_by(updated_at.desc(), Case.id.asc())
-    else:  # created_desc (varsayılan)
+    elif sort == "relevance" and (q or "").strip():
+        # q yokken "relevance" anlamsızdır: en yeni kayıt sırasına düş.
+        ordered = base.order_by(*_relevance_order((q or "").strip()))
+    else:  # created_desc (varsayılan) veya q'suz relevance
         ordered = base.order_by(Case.created_at.desc(), Case.id.asc())
 
     if legacy:
@@ -977,51 +1130,138 @@ def _parse_min_authenticity(raw: float | None) -> float | None:
     return raw
 
 
+_FINDING_SORTS = frozenset(
+    {"score_desc", "score_asc", "authenticity_desc", "corroboration_desc"}
+)
+
+
+def _parse_finding_platforms(raw: str | None) -> set[str]:
+    """`?platform=github,gitlab` → doğrulanmış platform kümesi (boşsa filtre yok)."""
+    if raw is None or not raw.strip():
+        return set()
+    values = {part.strip().lower() for part in raw.split(",") if part.strip()}
+    valid = {platform.value for platform in Platform}
+    invalid = sorted(values - valid)
+    if invalid:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                f"Geçersiz platform: {', '.join(invalid)} "
+                f"(izinli: {', '.join(sorted(valid))})"
+            ),
+        )
+    return values
+
+
 @router.get("/{case_id}/findings")
 async def get_case_findings(
     case_id: str,
     status: str | None = None,
+    platform: str | None = None,
     min_authenticity: float | None = None,
+    sort: Literal[
+        "score_desc", "score_asc", "authenticity_desc", "corroboration_desc"
+    ] = "score_desc",
     db: AsyncSession = Depends(get_db),
 ):
-    """Vaka bulguları — skora göre azalan.
+    """Vaka bulguları — kimlik kümesi ve bağımsız sinyal özetiyle.
 
     Opsiyonel filtreler (T-327):
     * `status=candidate,confirmed` — virgülle çoklu; her değer
       `candidate|confirmed|lead|rejected` olmalı (aksi halde 422).
+    * `platform=github,gitlab` — virgülle çoklu platform filtresi.
     * `min_authenticity=0.35` — 0..1 aralığında; authenticity skoru bu değerin
       altında olan (veya `authenticity` boş olan) bulgular döner **değil**.
+    * `sort` — `score_desc` (varsayılan), `score_asc`, `authenticity_desc`,
+      `corroboration_desc`.
+
+    Her bulgu, bağlı olduğu kimlik kümesini (`cluster`) ve güven skoruna
+    katkı veren bağımsız sinyalleri (`signals`, `corroboration`) taşır.
     """
+    if sort not in _FINDING_SORTS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Geçersiz sort: {sort} (izinli: {', '.join(sorted(_FINDING_SORTS))})",
+        )
     statuses = _parse_status_filter(status)
+    platforms = _parse_finding_platforms(platform)
     min_auth = _parse_min_authenticity(min_authenticity)
 
     stmt = select(Finding).where(Finding.case_id == case_id)
     if statuses:
         stmt = stmt.where(Finding.status.in_(statuses))
+    if platforms:
+        stmt = stmt.where(Finding.platform.in_(platforms))
     if min_auth is not None:
         stmt = stmt.where(Finding.authenticity.is_not(None)).where(
             Finding.authenticity >= min_auth
         )
     findings = (await db.execute(stmt.order_by(Finding.score.desc()))).scalars().all()
-    return [
-        {
-            "id": f.id,
-            "entity_id": f.entity_id,
-            "platform": f.platform,
-            "label": f.label,
-            "url": f.url,
-            "status": f.status,
-            "score": f.score,
-            "breakdown": f.breakdown,
-            "explanation": f.explanation,
-            "evidence_ids": f.evidence_ids,
-            "verified_at": f.verified_at.isoformat() if f.verified_at else None,
-            # T-327: sahte/spam (authenticity) sinyali — eski istemciler icin ek alan
-            "authenticity": f.authenticity,
-            "authenticity_reasons": f.authenticity_reasons,
-        }
-        for f in findings
-    ]
+
+    entities = (
+        await db.execute(select(Entity).where(Entity.case_id == case_id))
+    ).scalars().all()
+    edges = (
+        await db.execute(select(Edge).where(Edge.case_id == case_id))
+    ).scalars().all()
+    clusters_by_entity, _ = compute_identity_clusters(entities, edges)
+
+    rows = []
+    for finding in findings:
+        signals = corroboration_signals(finding.breakdown)
+        cluster = clusters_by_entity.get(finding.entity_id)
+        rows.append(
+            {
+                "id": finding.id,
+                "entity_id": finding.entity_id,
+                "platform": finding.platform,
+                "label": finding.label,
+                "url": finding.url,
+                "status": finding.status,
+                "score": finding.score,
+                "breakdown": finding.breakdown,
+                "explanation": finding.explanation,
+                "evidence_ids": finding.evidence_ids,
+                "verified_at": (
+                    finding.verified_at.isoformat() if finding.verified_at else None
+                ),
+                # T-327: sahte/spam (authenticity) sinyali — eski istemciler icin ek alan
+                "authenticity": finding.authenticity,
+                "authenticity_reasons": finding.authenticity_reasons,
+                # Yeni: kaç bağımsız sinyal bu skoru destekliyor?
+                "corroboration": len(signals),
+                "signals": signals,
+                "evidence_count": len(finding.evidence_ids or []),
+                # Yeni: aynı kişiye bağlı hesaplar (tek başına kalan da döner).
+                "cluster": cluster.as_dict() if cluster else None,
+                "cluster_id": cluster.id if cluster else None,
+            }
+        )
+
+    if sort == "score_asc":
+        rows.sort(key=lambda row: (row["score"], row["id"]))
+    elif sort == "authenticity_desc":
+        rows.sort(
+            key=lambda row: (
+                row["authenticity"] is None,
+                -(row["authenticity"] or 0.0),
+                -row["score"],
+                row["id"],
+            )
+        )
+    elif sort == "corroboration_desc":
+        rows.sort(
+            key=lambda row: (
+                -row["corroboration"],
+                -row["score"],
+                row["authenticity"] is None,
+                -(row["authenticity"] or 0.0),
+                row["id"],
+            )
+        )
+    else:  # score_desc
+        rows.sort(key=lambda row: (-row["score"], row["id"]))
+    return rows
 
 
 @router.post("/{case_id}/export")
@@ -1154,6 +1394,7 @@ async def get_case_graph(case_id: str, db: AsyncSession = Depends(get_db)):
     edges = (await db.execute(select(Edge).where(Edge.case_id == case_id))).scalars().all()
     findings = (await db.execute(select(Finding).where(Finding.case_id == case_id))).scalars().all()
     score_by_entity = {f.entity_id: f.score for f in findings}
+    clusters_by_entity, clusters = compute_identity_clusters(entities, edges)
 
     nodes = [
         {
@@ -1165,6 +1406,22 @@ async def get_case_graph(case_id: str, db: AsyncSession = Depends(get_db)):
                 "url": e.url,
                 "score": score_by_entity.get(e.id, e.score or 0.0),
                 "attributes": e.attributes or {},
+                "cluster_id": (
+                    clusters_by_entity[e.id].id if e.id in clusters_by_entity else None
+                ),
+                "cluster_size": (
+                    clusters_by_entity[e.id].size if e.id in clusters_by_entity else 1
+                ),
+                "cluster_confidence": (
+                    clusters_by_entity[e.id].max_confidence
+                    if e.id in clusters_by_entity
+                    else 0.0
+                ),
+                "cluster_platforms": (
+                    list(clusters_by_entity[e.id].platforms)
+                    if e.id in clusters_by_entity
+                    else []
+                ),
             }
         }
         for e in entities
@@ -1183,7 +1440,11 @@ async def get_case_graph(case_id: str, db: AsyncSession = Depends(get_db)):
         }
         for ed in edges
     ]
-    return {"nodes": nodes, "edges": graph_edges}
+    return {
+        "nodes": nodes,
+        "edges": graph_edges,
+        "clusters": [cluster.as_dict() for cluster in clusters],
+    }
 
 
 @router.get("/{case_id}/audit")

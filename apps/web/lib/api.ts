@@ -31,7 +31,12 @@ export interface CaseListItem extends CaseSummary {
   } | null;
 }
 
-export type CaseSort = "created_desc" | "created_asc" | "name_asc" | "updated_desc";
+export type CaseSort =
+  | "created_desc"
+  | "created_asc"
+  | "name_asc"
+  | "updated_desc"
+  | "relevance";
 
 export interface CaseListParams {
   q?: string;
