@@ -12,6 +12,7 @@ import logging
 from typing import Sequence
 
 from .base import SearchHit, SearchProvider
+from .ranking import rank_hits
 
 logger = logging.getLogger("showis.websearch.hybrid")
 
@@ -60,7 +61,5 @@ class HybridSearchProvider:
                     exc,
                 )
 
-        # Sıralama ve sınırlandırma
-        for idx, hit in enumerate(all_hits):
-            hit.rank = idx + 1
-        return all_hits[:limit]
+        # Sağlayıcı sırası yerine hedefe uygunluk: tekilleştir, puanla, sırala.
+        return rank_hits(all_hits, query, limit=limit)
