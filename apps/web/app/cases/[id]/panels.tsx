@@ -1044,9 +1044,11 @@ export function FindingsTab({ caseId }: { caseId: string }) {
 
   const platformOptions = useMemo(() => {
     const map = new Map<string, number>();
-    findings.forEach((f) => map.set(f.platform, (map.get(f.platform) ?? 0) + 1));
+    // Sayılar, o anki durum/güvenilirlik filtresinden geçen kümele uyumlu olmalı;
+    // aksi halde "GitHub 30" yazıp tıklanınca 0 sonuç görünür.
+    visible.forEach((f) => map.set(f.platform, (map.get(f.platform) ?? 0) + 1));
     return [...map.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  }, [findings]);
+  }, [visible]);
 
   // Platform + serbest metin (etiket/URL/platform) birlikte daraltır.
   const narrowed = useMemo(() => {
