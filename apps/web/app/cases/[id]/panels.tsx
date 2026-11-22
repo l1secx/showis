@@ -1457,6 +1457,19 @@ export function FindingsTab({ caseId }: { caseId: string }) {
             <Download size={12} aria-hidden />
             JSON
           </button>
+          {(platformFilter.length > 0 || findingQuery) && (
+            <button
+              type="button"
+              onClick={() => {
+                setPlatformFilter([]);
+                setFindingQuery("");
+              }}
+              className="btn-quiet btn-sm"
+            >
+              <X size={12} aria-hidden />
+              Aramayı/filtreyi temizle
+            </button>
+          )}
         </div>
       </div>
 
