@@ -10,9 +10,11 @@ import {
   EyeOff,
   FileCode2,
   Fingerprint,
+  Layers,
   Loader2,
   Play,
   RefreshCw,
+  Search,
   Square,
   X,
 } from "lucide-react";
@@ -391,6 +393,22 @@ export function ScanTab({
 /* ---------------- Bulgular sekmesi ---------------- */
 
 type FindingFilter = "all" | "confirmed" | "candidate" | "lead" | "rejected";
+type FindingSort = "score_desc" | "corroboration_desc" | "authenticity_desc" | "score_asc";
+
+const FINDING_SORTS: { value: FindingSort; label: string; hint: string }[] = [
+  { value: "score_desc", label: "Güven skoru (yüksek)", hint: "En yüksek güven skoru önce" },
+  {
+    value: "corroboration_desc",
+    label: "Bağımsız sinyal",
+    hint: "Skoru en çok bağımsız sinyal destekleyen bulgu önce",
+  },
+  {
+    value: "authenticity_desc",
+    label: "Hesap güvenilirliği",
+    hint: "Sahte/spam sinyali en düşük hesaplar önce",
+  },
+  { value: "score_asc", label: "Güven skoru (düşük)", hint: "Zayıf sinyaller önce" },
+];
 
 const FINDING_FILTERS: { value: FindingFilter; label: string; hint: string }[] = [
   { value: "all", label: "Tümü", hint: "Reddedilenler gizliyken kalan tüm bulgular" },
@@ -463,10 +481,7 @@ function readStoredShowRejected(caseId: string): boolean {
 export const LOW_AUTH_THRESHOLD = 0.35;
 export const HIGH_AUTH_THRESHOLD = 0.7;
 
-type FindingWithAuth = FindingItem & {
-  authenticity?: number | null;
-  authenticity_reasons?: string[];
-};
+type FindingWithAuth = FindingItem;
 
 const findingsLowAuthKey = (caseId: string) => `showis:findings:hide-low-auth:${caseId}`;
 
@@ -502,7 +517,7 @@ function AuthenticityChip({
   reasons,
 }: {
   score: number | null | undefined;
-  reasons?: string[];
+  reasons?: string[] | null;
 }) {
   const [open, setOpen] = useState(false);
   const panelId = useId();
@@ -684,6 +699,15 @@ function FindingRecord({
             <h2 className="truncate text-[14px] font-semibold text-ink">{f.label}</h2>
             <PlatformBadge platform={f.platform} />
             <Badge value={f.status} />
+            {f.cluster && f.cluster.size > 1 && (
+              <span
+                className="status text-ink-3"
+                title={`${f.cluster.platforms.join(", ")} — ${f.cluster.evidence_count} kanıt`}
+              >
+                <Layers size={11} aria-hidden />
+                {f.cluster.size} hesap aynı kümede
+              </span>
+            )}
           </div>
 
           {f.url && (
@@ -738,6 +762,24 @@ function FindingRecord({
               style={{ width: `${Math.max(4, pct)}%` }}
             />
           </div>
+          {(f.corroboration ?? 0) > 0 && (
+            <p
+              className="text-right text-[11.5px] text-ink-3"
+              title={
+                (f.signals ?? [])
+                  .map((key) => SIGNAL_META[key]?.label ?? key)
+                  .join(", ") || undefined
+              }
+            >
+              <span className="numeric font-medium text-ink-2">{f.corroboration}</span>{" "}
+              bağımsız sinyal
+              <span className="mx-1 text-ink-4" aria-hidden>
+                ·
+              </span>
+              <span className="numeric">{f.evidence_count ?? f.evidence_ids.length}</span>{" "}
+              kanıt
+            </p>
+          )}
 
           {(f.status === "candidate" || f.status === "lead") && (
             <div className="mt-1 flex gap-2">
@@ -821,6 +863,11 @@ export function FindingsTab({ caseId }: { caseId: string }) {
   const [showRejected, setShowRejected] = useState(false);
   // T-301: düşük güvenilirlikli hesapları gizle (varsayılan kapalı).
   const [hideLowAuth, setHideLowAuth] = useState(false);
+  // OSINT görünümü: platform filtresi, serbest arama, sıralama ve küme gruplama.
+  const [platformFilter, setPlatformFilter] = useState<string[]>([]);
+  const [findingQuery, setFindingQuery] = useState("");
+  const [findingSort, setFindingSort] = useState<FindingSort>("score_desc");
+  const [grouped, setGrouped] = useState(true);
   /** Karar eyleminin hatası — boşsa hata yok. */
   const [actionError, setActionError] = useState<{ message: string; detail?: string } | null>(
     null
@@ -993,13 +1040,81 @@ export function FindingsTab({ caseId }: { caseId: string }) {
     );
   }, [findings, focusEntity]);
 
+  const platformOptions = useMemo(() => {
+    const map = new Map<string, number>();
+    findings.forEach((f) => map.set(f.platform, (map.get(f.platform) ?? 0) + 1));
+    return [...map.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  }, [findings]);
+
+  // Platform + serbest metin (etiket/URL/platform) birlikte daraltır.
+  const narrowed = useMemo(() => {
+    const needle = findingQuery.trim().toLocaleLowerCase("tr");
+    const platformSet = new Set(platformFilter);
+    return visible.filter((f) => {
+      if (platformSet.size > 0 && !platformSet.has(f.platform)) return false;
+      if (!needle) return true;
+      const haystack = `${f.label} ${f.url ?? ""} ${f.platform}`.toLocaleLowerCase("tr");
+      return haystack.includes(needle);
+    });
+  }, [visible, platformFilter, findingQuery]);
+
+  const sortedVisible = useMemo(() => {
+    const rows = [...narrowed];
+    rows.sort((a, b) => {
+      if (findingSort === "corroboration_desc") {
+        const diff = (b.corroboration ?? 0) - (a.corroboration ?? 0);
+        if (diff !== 0) return diff;
+        return b.score - a.score || a.id.localeCompare(b.id);
+      }
+      if (findingSort === "authenticity_desc") {
+        const left = a.authenticity ?? -1;
+        const right = b.authenticity ?? -1;
+        if (left !== right) return right - left;
+        return b.score - a.score || a.id.localeCompare(b.id);
+      }
+      if (findingSort === "score_asc") {
+        return a.score - b.score || a.id.localeCompare(b.id);
+      }
+      return b.score - a.score || a.id.localeCompare(b.id);
+    });
+    return rows;
+  }, [narrowed, findingSort]);
+
   const shown = useMemo(
     () =>
-      focusFinding && !visible.some((f) => f.id === focusFinding.id)
-        ? [focusFinding, ...visible]
-        : visible,
-    [focusFinding, visible]
+      focusFinding && !sortedVisible.some((f) => f.id === focusFinding.id)
+        ? [focusFinding, ...sortedVisible]
+        : sortedVisible,
+    [focusFinding, sortedVisible]
   );
+
+  // Kimlik kümeleri: aynı kişiye bağlı hesaplar tek başlık altında toplanır.
+  const findingGroups = useMemo(() => {
+    const clusters = new Map<
+      string,
+      { cluster: NonNullable<FindingWithAuth["cluster"]>; items: FindingWithAuth[] }
+    >();
+    const singles: FindingWithAuth[] = [];
+    for (const finding of shown) {
+      const cluster = finding.cluster;
+      if (cluster && cluster.size > 1) {
+        const existing = clusters.get(cluster.id);
+        if (existing) existing.items.push(finding);
+        else clusters.set(cluster.id, { cluster, items: [finding] });
+      } else {
+        singles.push(finding);
+      }
+    }
+    return {
+      clusters: [...clusters.values()].sort(
+        (a, b) =>
+          b.cluster.size - a.cluster.size ||
+          b.cluster.max_confidence - a.cluster.max_confidence ||
+          a.cluster.id.localeCompare(b.cluster.id)
+      ),
+      singles,
+    };
+  }, [shown]);
 
   useEffect(() => {
     if (!focusFinding) return;
@@ -1028,9 +1143,24 @@ export function FindingsTab({ caseId }: { caseId: string }) {
           : hiddenRejected > 0 && filter === "all"
             ? `${hiddenRejected} reddedilen bulgu gizlendi. Düşük güvenli sonuçlar varsayılan olarak gösterilmez.`
             : "Bu filtreye uyan bulgu yok."
-        : hiddenLowAuth > 0
-          ? `${hiddenLowAuth} düşük güvenilirlikli bulgu gizlendi.`
-          : "Bu filtreye uyan bulgu yok.";
+        : narrowed.length === 0
+          ? "Bu arama veya platform filtresine uyan bulgu yok."
+          : hiddenLowAuth > 0
+            ? `${hiddenLowAuth} düşük güvenilirlikli bulgu gizlendi.`
+            : "Bu filtreye uyan bulgu yok.";
+
+  const renderFinding = (finding: FindingWithAuth) => (
+    <FindingRecord
+      key={finding.id}
+      finding={finding}
+      evidence={evidence[finding.id]}
+      expanded={expanded === finding.id}
+      highlighted={focusFinding?.id === finding.id}
+      busy={verifying === finding.id}
+      onToggleEvidence={toggleEvidence}
+      onVerify={verify}
+    />
+  );
 
   return (
     <div className="space-y-4">
@@ -1113,6 +1243,99 @@ export function FindingsTab({ caseId }: { caseId: string }) {
               tarama sürüyor
             </span>
           )}
+        </div>
+      </div>
+
+      {/* OSINT daraltma: platform, etiket/URL araması, sıralama, küme görünümü */}
+      <div className="flex flex-col gap-3 border-b border-line pb-3 lg:flex-row lg:items-center">
+        <div className="relative min-w-[220px] flex-1">
+          <Search
+            size={14}
+            aria-hidden
+            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-3"
+          />
+          <input
+            type="search"
+            value={findingQuery}
+            onChange={(e) => setFindingQuery(e.target.value)}
+            placeholder="Bulgu etiketi, URL veya platform ara"
+            aria-label="Bulgularda ara"
+            className="input py-1.5 pl-9 text-[12.5px]"
+          />
+          {findingQuery && (
+            <button
+              type="button"
+              onClick={() => setFindingQuery("")}
+              aria-label="Bulgu aramasını temizle"
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-ink-3 hover:text-ink"
+            >
+              <X size={12} aria-hidden />
+            </button>
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          <span className="text-[12px] text-ink-3">Platform</span>
+          {platformOptions.slice(0, 8).map(([platform, count]) => {
+            const active = platformFilter.length === 0 || platformFilter.includes(platform);
+            return (
+              <button
+                key={platform}
+                type="button"
+                aria-pressed={platformFilter.includes(platform)}
+                aria-label={`${platformMeta(platform).label} platform filtresi`}
+                onClick={() =>
+                  setPlatformFilter((current) =>
+                    current.includes(platform)
+                      ? current.filter((item) => item !== platform)
+                      : [...current, platform]
+                  )
+                }
+                className={`inline-flex items-center gap-1.5 text-[12px] transition-colors ${
+                  active ? "text-ink-2" : "text-ink-3 line-through"
+                }`}
+              >
+                <span
+                  className="h-2 w-2 shrink-0 rounded-[1px]"
+                  style={{ backgroundColor: platformMeta(platform).accent }}
+                  aria-hidden
+                />
+                {platformMeta(platform).label}
+                <span className="numeric text-ink-3">{count}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-2 text-[12px] text-ink-3">
+            Sırala
+            <select
+              value={findingSort}
+              onChange={(e) => setFindingSort(e.target.value as FindingSort)}
+              aria-label="Bulgu sıralaması"
+              title={FINDING_SORTS.find((item) => item.value === findingSort)?.hint}
+              className="select w-auto py-1 text-[12px]"
+            >
+              {FINDING_SORTS.map((item) => (
+                <option key={item.value} value={item.value}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            aria-pressed={grouped}
+            onClick={() => setGrouped((value) => !value)}
+            title="Aynı kişiye bağlı hesapları tek kümede topla"
+            className={`inline-flex items-center gap-1.5 text-[12px] transition-colors ${
+              grouped ? "font-medium text-ink" : "text-ink-3 hover:text-ink"
+            }`}
+          >
+            <Layers size={12} aria-hidden />
+            Kümeler
+          </button>
         </div>
       </div>
 
@@ -1218,21 +1441,68 @@ export function FindingsTab({ caseId }: { caseId: string }) {
               </button>
             )}
           </div>
-        ) : (
-          <div className="panel divide-y divide-line">
-            {shown.map((f) => (
-              <FindingRecord
-                key={f.id}
-                finding={f}
-                evidence={evidence[f.id]}
-                expanded={expanded === f.id}
-                highlighted={focusFinding?.id === f.id}
-                busy={verifying === f.id}
-                onToggleEvidence={toggleEvidence}
-                onVerify={verify}
-              />
+        ) : grouped && findingGroups.clusters.length > 0 ? (
+          <div className="space-y-4">
+            {findingGroups.clusters.map(({ cluster, items }) => (
+              <section key={cluster.id} className="panel overflow-hidden">
+                <header className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-line bg-sunken px-4 py-2.5">
+                  <span className="inline-flex items-center gap-1.5 text-[12.5px] font-semibold text-ink">
+                    <Layers size={13} aria-hidden />
+                    Kimlik kümesi
+                  </span>
+                  <span className="numeric text-[12px] text-ink-3">
+                    {items.length}/{cluster.size} hesap
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 text-[12px] text-ink-3">
+                    <span
+                      className="h-1.5 w-1.5 rounded-full bg-accent"
+                      aria-hidden
+                    />
+                    küme güveni{" "}
+                    <span className="numeric font-medium text-ink-2">
+                      {Math.round(cluster.max_confidence * 100)}%
+                    </span>
+                  </span>
+                  <span className="text-[12px] text-ink-3">
+                    {cluster.evidence_count} kanıt
+                  </span>
+                  <span className="flex flex-wrap items-center gap-2 text-[11.5px] text-ink-3">
+                    {cluster.platforms.slice(0, 6).map((platform) => (
+                      <span key={platform} className="inline-flex items-center gap-1">
+                        <span
+                          className="h-1.5 w-1.5 rounded-full"
+                          style={{ backgroundColor: platformMeta(platform).accent }}
+                          aria-hidden
+                        />
+                        {platformMeta(platform).label}
+                      </span>
+                    ))}
+                    {cluster.platforms.length > 6 && (
+                      <span className="numeric">+{cluster.platforms.length - 6}</span>
+                    )}
+                  </span>
+                </header>
+                <div className="divide-y divide-line">{items.map(renderFinding)}</div>
+              </section>
             ))}
+            {findingGroups.singles.length > 0 && (
+              <section className="panel overflow-hidden">
+                <header className="border-b border-line bg-sunken px-4 py-2.5">
+                  <span className="text-[12.5px] font-semibold text-ink">
+                    Bağımsız kayıtlar
+                  </span>
+                  <span className="numeric ml-2 text-[12px] text-ink-3">
+                    {findingGroups.singles.length}
+                  </span>
+                </header>
+                <div className="divide-y divide-line">
+                  {findingGroups.singles.map(renderFinding)}
+                </div>
+              </section>
+            )}
           </div>
+        ) : (
+          <div className="panel divide-y divide-line">{shown.map(renderFinding)}</div>
         )}
       </div>
     </div>

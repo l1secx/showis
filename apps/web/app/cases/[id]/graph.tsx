@@ -11,6 +11,7 @@ import {
   Focus,
   Image as ImageIcon,
   Info,
+  Layers,
   RotateCcw,
   X,
 } from "lucide-react";
@@ -160,6 +161,19 @@ interface GNode {
   url: string | null;
   score: number;
   attributes: Record<string, unknown>;
+  clusterId: string | null;
+  clusterSize: number;
+  clusterConfidence: number;
+  clusterPlatforms: string[];
+}
+
+interface GCluster {
+  id: string;
+  size: number;
+  platforms: string[];
+  max_confidence: number;
+  edge_count: number;
+  evidence_count: number;
 }
 
 interface GEdge {
@@ -173,6 +187,9 @@ interface GEdge {
 
 interface GraphPrefs {
   minConfidence: number;
+  minScore: number;
+  connectedOnly: boolean;
+  clusterId: string | null;
   platforms: string[];
   edgeTypes: string[];
   layout: LayoutName;
@@ -186,6 +203,9 @@ interface HoverEdge {
 
 const DEFAULT_PREFS: GraphPrefs = {
   minConfidence: 0,
+  minScore: 0,
+  connectedOnly: false,
+  clusterId: null,
   platforms: [],
   edgeTypes: [],
   layout: "cose",
@@ -204,8 +224,16 @@ function readPrefs(caseId: string): GraphPrefs | null {
         ? parsed.layout
         : DEFAULT_PREFS.layout;
     const min = Number(parsed.minConfidence);
+    const minScore = Number(parsed.minScore);
+    const clusterId =
+      typeof parsed.clusterId === "string" && parsed.clusterId.trim()
+        ? parsed.clusterId.trim()
+        : null;
     return {
       minConfidence: Number.isFinite(min) ? Math.min(1, Math.max(0, min)) : 0,
+      minScore: Number.isFinite(minScore) ? Math.min(1, Math.max(0, minScore)) : 0,
+      connectedOnly: parsed.connectedOnly === true,
+      clusterId,
       platforms: Array.isArray(parsed.platforms) ? parsed.platforms.map(String) : [],
       edgeTypes: Array.isArray(parsed.edgeTypes) ? parsed.edgeTypes.map(String) : [],
       layout,
@@ -310,6 +338,7 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [nodes, setNodes] = useState<GNode[]>([]);
   const [edges, setEdges] = useState<GEdge[]>([]);
+  const [clusters, setClusters] = useState<GCluster[]>([]);
   const [loading, setLoading] = useState(true);
   const [prefs, setPrefs] = useState<GraphPrefs>(DEFAULT_PREFS);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -370,6 +399,12 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
           url: n.data.url ?? null,
           score: Number(n.data.score ?? 0),
           attributes: (n.data.attributes as Record<string, unknown>) ?? {},
+          clusterId: n.data.cluster_id ? String(n.data.cluster_id) : null,
+          clusterSize: Number(n.data.cluster_size ?? 1),
+          clusterConfidence: Number(n.data.cluster_confidence ?? 0),
+          clusterPlatforms: Array.isArray(n.data.cluster_platforms)
+            ? n.data.cluster_platforms.map(String)
+            : [],
         }));
         const gEdges: GEdge[] = (payload.edges ?? []).map((e) => ({
           id: String(e.data.id),
@@ -379,8 +414,17 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
           confidence: Number(e.data.confidence ?? 0),
           reason: String(e.data.reason ?? ""),
         }));
+        const gClusters: GCluster[] = (payload.clusters ?? []).map((cluster) => ({
+          id: String(cluster.id),
+          size: Number(cluster.size ?? 0),
+          platforms: Array.isArray(cluster.platforms) ? cluster.platforms.map(String) : [],
+          max_confidence: Number(cluster.max_confidence ?? 0),
+          edge_count: Number(cluster.edge_count ?? 0),
+          evidence_count: Number(cluster.evidence_count ?? 0),
+        }));
         setNodes(gNodes);
         setEdges(gEdges);
+        setClusters(gClusters);
       })
       .catch((e: Error) => !cancelled && setError(e.message))
       .finally(() => !cancelled && setLoading(false));
@@ -390,12 +434,26 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
   }, [caseId]);
 
   /* --- filtre yardımcıları --- */
+  const connectedNodeIds = useMemo(() => {
+    const ids = new Set<string>();
+    edges.forEach((edge) => {
+      ids.add(edge.source);
+      ids.add(edge.target);
+    });
+    return ids;
+  }, [edges]);
+
   const visibleNodeIds = useMemo(() => {
     const platformSet = new Set(prefs.platforms);
     return new Set(
-      nodes.filter((n) => platformSet.size === 0 || platformSet.has(n.platform)).map((n) => n.id)
+      nodes
+        .filter((node) => platformSet.size === 0 || platformSet.has(node.platform))
+        .filter((node) => node.score >= prefs.minScore)
+        .filter((node) => !prefs.clusterId || node.clusterId === prefs.clusterId)
+        .filter((node) => !prefs.connectedOnly || connectedNodeIds.has(node.id))
+        .map((node) => node.id)
     );
-  }, [nodes, prefs.platforms]);
+  }, [nodes, prefs.platforms, prefs.minScore, prefs.clusterId, prefs.connectedOnly, connectedNodeIds]);
 
   const visibleEdges = useMemo(() => {
     const typeSet = new Set(prefs.edgeTypes);
@@ -463,6 +521,9 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
           platform: n.platform,
           type: n.type,
           score: n.score,
+          cluster_id: n.clusterId ?? "",
+          cluster_size: n.clusterSize,
+          cluster_confidence: n.clusterConfidence,
         },
       })),
       ...edges.map((e) => ({
@@ -544,7 +605,11 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
 
     cy.batch(() => {
       cy.nodes().forEach((n) => {
-        const ok = platformSet.size === 0 || platformSet.has(String(n.data("platform")));
+        const ok =
+          (platformSet.size === 0 || platformSet.has(String(n.data("platform")))) &&
+          Number(n.data("score") ?? 0) >= prefs.minScore &&
+          (!prefs.clusterId || String(n.data("cluster_id")) === prefs.clusterId) &&
+          (!prefs.connectedOnly || n.connectedEdges().nonempty());
         n.style("display", ok ? "element" : "none");
         if (ok) keepNodes.add(n.id());
       });
@@ -565,7 +630,16 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
     // yazılarıyla çakışıyor ve grafiğin okunmasını zorlaştırıyordu.
     cy.edges().removeClass("labelled");
     setStats((s) => ({ ...s, visibleNodes: keepNodes.size, visibleEdges: keptEdges }));
-  }, [prefs.minConfidence, prefs.platforms, prefs.edgeTypes, nodes, edges]);
+  }, [
+    prefs.minConfidence,
+    prefs.minScore,
+    prefs.connectedOnly,
+    prefs.clusterId,
+    prefs.platforms,
+    prefs.edgeTypes,
+    nodes,
+    edges,
+  ]);
 
   /* --- seçimi cytoscape'e yansıt --- */
   useEffect(() => {
@@ -757,9 +831,17 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
   };
 
   const resetFilters = () =>
-    updatePrefs({ minConfidence: 0, platforms: [], edgeTypes: [] });
+    updatePrefs({
+      minConfidence: 0,
+      minScore: 0,
+      connectedOnly: false,
+      clusterId: null,
+      platforms: [],
+      edgeTypes: [],
+    });
 
   const hiddenEdges = edges.length - visibleEdges.length;
+  const multiClusters = clusters.filter((cluster) => cluster.size > 1);
 
   return (
     <div className="space-y-5">
@@ -805,6 +887,7 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
           <div className="ml-auto flex flex-wrap items-center gap-2">
             <span className="numeric text-ink-3" aria-live="polite">
               {stats.visibleNodes}/{nodes.length} düğüm, {stats.visibleEdges}/{edges.length} kenar
+              {multiClusters.length > 0 && ` · ${multiClusters.length} kimlik kümesi`}
               {stats.layoutMs > 0 && ` — yerleşim ${stats.layoutMs} ms`}
             </span>
             <button type="button" onClick={() => runExport("PNG", exportPng)}
@@ -913,7 +996,12 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
               </button>
             );
           })}
-          {(prefs.platforms.length > 0 || prefs.edgeTypes.length > 0 || prefs.minConfidence > 0) && (
+          {(prefs.platforms.length > 0 ||
+            prefs.edgeTypes.length > 0 ||
+            prefs.minConfidence > 0 ||
+            prefs.minScore > 0 ||
+            prefs.connectedOnly ||
+            prefs.clusterId) && (
             <button
               type="button"
               onClick={resetFilters}
@@ -925,6 +1013,80 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
             </button>
           )}
         </div>
+
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-line pt-4">
+          <label className="flex min-w-[240px] flex-1 items-center gap-3 text-[12px] text-ink-3">
+            <span className="whitespace-nowrap">
+              Düğüm skoru{" "}
+              <span className="numeric text-ink">{prefs.minScore.toFixed(2)}</span>
+            </span>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={prefs.minScore}
+              onChange={(e) => updatePrefs({ minScore: Number(e.target.value) })}
+              aria-label="Düğüm güven skoru eşiği"
+              className="h-1 w-full max-w-xs cursor-pointer accent-[rgb(var(--accent))]"
+            />
+          </label>
+          <button
+            type="button"
+            aria-pressed={prefs.connectedOnly}
+            onClick={() => updatePrefs({ connectedOnly: !prefs.connectedOnly })}
+            title="Kenarı olmayan, tek başına duran kayıtları gizle"
+            className={`inline-flex items-center gap-1.5 text-[12px] transition-colors ${
+              prefs.connectedOnly ? "font-medium text-ink" : "text-ink-3 hover:text-ink"
+            }`}
+          >
+            <Focus size={12} aria-hidden />
+            Yalnız bağlı düğümler
+          </button>
+        </div>
+
+        {multiClusters.length > 0 && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-line pt-4">
+            <span className="text-[12px] text-ink-3">Kimlik kümesi</span>
+            <button
+              type="button"
+              aria-pressed={prefs.clusterId === null}
+              onClick={() => updatePrefs({ clusterId: null })}
+              className={`rounded-[4px] px-1.5 py-0.5 text-[12px] transition-colors ${
+                prefs.clusterId === null
+                  ? "bg-sunken font-medium text-ink"
+                  : "text-ink-3 hover:text-ink"
+              }`}
+            >
+              Tümü
+            </button>
+            {multiClusters.slice(0, 8).map((cluster) => {
+              const active = prefs.clusterId === cluster.id;
+              return (
+                <button
+                  key={cluster.id}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() =>
+                    updatePrefs({ clusterId: active ? null : cluster.id })
+                  }
+                  title={`${cluster.platforms.join(", ")} — ${cluster.evidence_count} kanıt`}
+                  className={`inline-flex items-center gap-1.5 rounded-[4px] px-1.5 py-0.5 text-[12px] transition-colors ${
+                    active
+                      ? "bg-accent-soft font-medium text-accent-ink"
+                      : "text-ink-3 hover:text-ink"
+                  }`}
+                >
+                  <Layers size={11} aria-hidden />
+                  <span className="numeric">{cluster.size}</span> hesap
+                  <span className="numeric text-ink-3">
+                    {Math.round(cluster.max_confidence * 100)}%
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </section>
 
       {exportError && (
@@ -1065,6 +1227,28 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
                   </a>
                 )}
               </div>
+
+              {selectedNode.clusterSize > 1 && (
+                <div className="rounded-[6px] border border-accent-line bg-accent-soft px-3 py-2 text-[12px] text-accent-ink">
+                  <p className="flex flex-wrap items-center gap-x-2 gap-y-1 font-medium">
+                    <Layers size={12} aria-hidden />
+                    Kimlik kümesi · {selectedNode.clusterSize} hesap
+                    <span className="numeric">
+                      {Math.round(selectedNode.clusterConfidence * 100)}% küme güveni
+                    </span>
+                  </p>
+                  <p className="mt-1 text-ink-3">
+                    {selectedNode.clusterPlatforms.join(", ") || "platform bilgisi yok"}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => updatePrefs({ clusterId: selectedNode.clusterId })}
+                    className="mt-1.5 text-[12px] font-medium underline decoration-accent-line underline-offset-2 hover:decoration-accent"
+                  >
+                    Kümeyi grafikte izole et
+                  </button>
+                </div>
+              )}
 
               {selectedFindingId && (
                 <p className="numeric break-all rounded-[6px] border border-line bg-sunken px-2.5 py-1.5 text-[12px] text-ink-3">

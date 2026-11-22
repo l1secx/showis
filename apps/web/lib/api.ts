@@ -106,6 +106,15 @@ export interface ScanEstimate {
   steps: ScanEstimateStep[];
 }
 
+export interface FindingCluster {
+  id: string;
+  size: number;
+  platforms: string[];
+  max_confidence: number;
+  edge_count: number;
+  evidence_count: number;
+}
+
 export interface FindingItem {
   id: string;
   entity_id: string;
@@ -118,6 +127,15 @@ export interface FindingItem {
   explanation?: string | null;
   evidence_ids: string[];
   verified_at?: string | null;
+  authenticity?: number | null;
+  authenticity_reasons?: string[] | null;
+  /** Skora katkı veren bağımsız sinyal sayısı (OSINT çapraz doğrulama). */
+  corroboration?: number;
+  signals?: string[];
+  evidence_count?: number;
+  /** Aynı kişiye bağlı hesapların kümesi (tek kayıt da döner). */
+  cluster?: FindingCluster | null;
+  cluster_id?: string | null;
 }
 
 export interface EvidenceItem {
@@ -133,9 +151,33 @@ export interface EvidenceItem {
   preview?: string | null;
 }
 
+export interface GraphCluster {
+  id: string;
+  size: number;
+  platforms: string[];
+  max_confidence: number;
+  edge_count: number;
+  evidence_count: number;
+}
+
 export interface GraphData {
-  nodes: { data: { id: string; label: string; type?: string; platform?: string; url?: string | null; score?: number; attributes?: Record<string, any> } }[];
+  nodes: {
+    data: {
+      id: string;
+      label: string;
+      type?: string;
+      platform?: string;
+      url?: string | null;
+      score?: number;
+      attributes?: Record<string, any>;
+      cluster_id?: string | null;
+      cluster_size?: number;
+      cluster_confidence?: number;
+      cluster_platforms?: string[];
+    };
+  }[];
   edges: { data: { id: string; source: string; target: string; label?: string; type?: string; confidence?: number; reason?: string } }[];
+  clusters?: GraphCluster[];
 }
 
 export interface AuditEntry {
