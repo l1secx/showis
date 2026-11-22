@@ -1288,6 +1288,7 @@ async def export_case(
     evidence = (
         (await db.execute(select(Evidence).where(Evidence.case_id == case_id))).scalars().all()
     )
+    clusters_by_entity, clusters = compute_identity_clusters(entities, edges)
 
     await record_request_audit(
         db=db,
@@ -1370,9 +1371,17 @@ async def export_case(
                 # T-327: authenticity alanlari export'ta da yer alir
                 "authenticity": f.authenticity,
                 "authenticity_reasons": f.authenticity_reasons,
+                # Yeni: küme kimliği + bağımsız sinyal özeti
+                "corroboration": len(corroboration_signals(f.breakdown)),
+                "cluster_id": (
+                    clusters_by_entity[f.entity_id].id
+                    if f.entity_id in clusters_by_entity
+                    else None
+                ),
             }
             for f in findings
         ],
+        "clusters": [cluster.as_dict() for cluster in clusters],
         "evidence": [
             {
                 "id": ev.id,
