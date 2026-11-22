@@ -764,7 +764,7 @@ function FindingRecord({
               style={{ width: `${Math.max(4, pct)}%` }}
             />
           </div>
-          {(f.corroboration ?? 0) > 0 && (
+          {((f.corroboration ?? 0) > 0 || (f.evidence_count ?? f.evidence_ids.length) > 0) && (
             <p
               className="text-right text-[11.5px] text-ink-3"
               title={
@@ -773,11 +773,15 @@ function FindingRecord({
                   .join(", ") || undefined
               }
             >
-              <span className="numeric font-medium text-ink-2">{f.corroboration}</span>{" "}
-              bağımsız sinyal
-              <span className="mx-1 text-ink-4" aria-hidden>
-                ·
-              </span>
+              {(f.corroboration ?? 0) > 0 && (
+                <>
+                  <span className="numeric font-medium text-ink-2">{f.corroboration}</span>{" "}
+                  bağımsız sinyal
+                  <span className="mx-1 text-ink-4" aria-hidden>
+                    ·
+                  </span>
+                </>
+              )}
               <span className="numeric">{f.evidence_count ?? f.evidence_ids.length}</span>{" "}
               kanıt
             </p>
