@@ -840,8 +840,12 @@ function FindingRecord({
                 </a>
                 <p className="numeric text-ink-3">
                   {ev.kind} — sha256 {ev.content_hash.slice(0, 16)}
+                  {ev.http_status ? ` — HTTP ${ev.http_status}` : ""}
                   {ev.fetched_at ? ` — ${new Date(ev.fetched_at).toLocaleString("tr-TR")}` : ""}
                 </p>
+                {ev.preview && (
+                  <p className="line-clamp-3 text-[12px] leading-snug text-ink-2">{ev.preview}</p>
+                )}
               </div>
             ))}
           </div>

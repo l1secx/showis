@@ -1,5 +1,6 @@
 """Bulgu doğrulama/reddetme + kanıt görüntüleme uçları."""
 
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -8,10 +9,35 @@ from pydantic import BaseModel
 from showis.db.models import Evidence, Finding
 from showis.db.session import get_db
 from showis.services.audit import record_request_audit
+from showis.services.retention import _evidence_file_path
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(tags=["findings"])
+
+#: Önizleme üretilecek kanıt türleri (ikili/görsel veri dışarı verilmez).
+_PREVIEW_KINDS = frozenset({"text", "html", "json"})
+_MAX_PREVIEW_BYTES = 4096
+_MAX_PREVIEW_CHARS = 600
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _evidence_preview(storage_key: str | None, kind: str) -> str | None:
+    """Kanıt dosyasından güvenli, kısa metin önizlemesi (yol kaçışı korumalı)."""
+    if kind not in _PREVIEW_KINDS:
+        return None
+    path = _evidence_file_path(storage_key)
+    if path is None or not path.is_file():
+        return None
+    try:
+        raw = path.read_bytes()[:_MAX_PREVIEW_BYTES]
+    except OSError:
+        return None
+    text = raw.decode("utf-8", errors="replace")
+    if kind == "html":
+        text = _HTML_TAG_RE.sub(" ", text)
+    text = " ".join(text.split())
+    return text[:_MAX_PREVIEW_CHARS] or None
 
 
 class FindingPatch(BaseModel):
@@ -93,7 +119,7 @@ async def get_finding_evidence(finding_id: str, db: AsyncSession = Depends(get_d
                 "user_agent": ev.user_agent,
                 "fetched_at": ev.fetched_at.isoformat() if ev.fetched_at else None,
                 "expires_at": ev.expires_at.isoformat() if ev.expires_at else None,
-                "preview": None,
+                "preview": _evidence_preview(ev.storage_key, ev.kind),
             }
             for ev in items
         ],

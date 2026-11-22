@@ -304,3 +304,52 @@ async def test_export_kume_ve_corroboration_icerir(client, db_factory):
     findings = {row["platform"]: row for row in payload["findings"]}
     assert findings["github"]["cluster_id"] == big["id"]
     assert findings["github"]["corroboration"] == 4
+
+
+# ---------------------------------------------------------------------------
+# Kanıt önizlemesi (güvenli, kısa metin)
+# ---------------------------------------------------------------------------
+
+
+async def test_kanit_onizlemesi_guvenli(
+    client, db_factory, tmp_path, monkeypatch
+):
+    from showis.db.models import Evidence as DbEvidence
+
+    await _seed(db_factory)
+    monkeypatch.setenv("SHOWIS_EVIDENCE_DIR", str(tmp_path))
+    storage_key = "evidence/ab/cdef.text"
+    target = tmp_path / storage_key
+    target.parent.mkdir(parents=True)
+    target.write_text("Kerem Boz\nGitHub profili\ngithub.com/kerem", encoding="utf-8")
+
+    async with db_factory() as session:
+        finding = await session.get(DbFinding, "finding:github:ada")
+        finding.evidence_ids = ["ev-preview"]
+        session.add(
+            DbEvidence(
+                id="ev-preview",
+                case_id=CASE_ID,
+                source_url="https://github.com/kerem",
+                kind="text",
+                content_hash="a" * 64,
+                storage_key=storage_key,
+                http_status=200,
+            )
+        )
+        await session.commit()
+
+    res = await client.get("/api/v1/findings/finding:github:ada/evidence")
+    assert res.status_code == 200, res.text
+    item = res.json()["evidence"][0]
+    assert "Kerem Boz" in item["preview"]
+    # Sunucu dosya yolu sızmaz, yalnız dosya adı döner.
+    assert item["storage_key"] == "cdef.text"
+
+    # Yol kaçışı denemesi: önizleme üretilmez.
+    async with db_factory() as session:
+        row = await session.get(DbEvidence, "ev-preview")
+        row.storage_key = "../../etc/passwd"
+        await session.commit()
+    res = await client.get("/api/v1/findings/finding:github:ada/evidence")
+    assert res.json()["evidence"][0]["preview"] is None

@@ -30,7 +30,8 @@ def _evidence_file_path(storage_key: str | None) -> Path | None:
     """Evidence storage_key'i disk yoluna cevirir (path traversal korumali)."""
     if not storage_key:
         return None
-    base = Path(os.getenv("SHOWIS_EVIDENCE_DIR", "./data/evidence")).resolve()
+    # Boş env değeri cwd'ye çözülmesin: varsayılan depo dizinine düş.
+    base = Path(os.getenv("SHOWIS_EVIDENCE_DIR") or "./data/evidence").resolve()
     candidate = (base / storage_key).resolve()
     if not str(candidate).startswith(str(base) + os.sep):
         return None
