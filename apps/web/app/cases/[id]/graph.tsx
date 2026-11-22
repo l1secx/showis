@@ -39,28 +39,52 @@ function platformColor(platform: string, theme: Theme): string {
   return theme === "dark" ? meta.accent : meta.color;
 }
 
+/** Küme kimliğinden deterministik renk — aynı küme her açılışta aynı renk. */
+const CLUSTER_PALETTE: Record<Theme, string[]> = {
+  light: ["#2563eb", "#0f766e", "#b45309", "#7e22ce", "#be123c", "#4d7c0f", "#0369a1", "#a21caf"],
+  dark: ["#60a5fa", "#2dd4bf", "#fbbf24", "#c084fc", "#fb7185", "#a3e635", "#38bdf8", "#e879f9"],
+};
+
+function clusterColor(clusterId: string | null, theme: Theme): string | null {
+  if (!clusterId) return null;
+  let hash = 0;
+  for (let index = 0; index < clusterId.length; index += 1) {
+    hash = (hash * 31 + clusterId.charCodeAt(index)) >>> 0;
+  }
+  const palette = CLUSTER_PALETTE[theme];
+  return palette[hash % palette.length];
+}
+
 /**
  * Cytoscape stil sayfası — temaya göre üretilir.
  *
  * Düğümlerde marka rengi kenar olarak kullanılır, dolgu markanın düşük
  * opaklıklı tonudur; böylece açık zeminde ağır lekeler oluşmaz.
  */
-function buildStyle(theme: Theme): cytoscape.StylesheetStyle[] {
+function buildStyle(
+  theme: Theme,
+  colorMode: "platform" | "cluster" = "platform"
+): cytoscape.StylesheetStyle[] {
   const dark = theme === "dark";
   const textColor = dark ? "#edeff2" : "#15181d";
   const halo = dark ? "#22262c" : "#ffffff";
   const edgeText = dark ? "#8d96a2" : "#6e7784";
   const selectColor = dark ? "#84aad1" : "#1b3a5b";
+  const nodeColor = (ele: cytoscape.NodeSingular) => {
+    if (colorMode === "cluster") {
+      return String(ele.data("cluster_color") || platformColor(String(ele.data("platform")), theme));
+    }
+    return platformColor(String(ele.data("platform")), theme);
+  };
 
   return [
     {
       selector: "node",
       style: {
         "background-color": (ele: cytoscape.NodeSingular) =>
-          tint(platformColor(String(ele.data("platform")), theme), dark ? 0.2 : 0.16),
+          tint(nodeColor(ele), dark ? 0.2 : 0.16),
         "border-width": 2,
-        "border-color": (ele: cytoscape.NodeSingular) =>
-          platformColor(String(ele.data("platform")), theme),
+        "border-color": nodeColor,
         width: "mapData(score, 0, 1, 20, 44)",
         height: "mapData(score, 0, 1, 20, 44)",
         label: "data(label)",
@@ -212,6 +236,7 @@ interface GraphPrefs {
   platforms: string[];
   edgeTypes: string[];
   layout: LayoutName;
+  colorMode: "platform" | "cluster";
 }
 
 interface HoverEdge {
@@ -228,6 +253,7 @@ const DEFAULT_PREFS: GraphPrefs = {
   platforms: [],
   edgeTypes: [],
   layout: "cose",
+  colorMode: "platform",
 };
 
 const prefsKey = (caseId: string) => `showis:graph:${caseId}`;
@@ -256,6 +282,7 @@ function readPrefs(caseId: string): GraphPrefs | null {
       platforms: Array.isArray(parsed.platforms) ? parsed.platforms.map(String) : [],
       edgeTypes: Array.isArray(parsed.edgeTypes) ? parsed.edgeTypes.map(String) : [],
       layout,
+      colorMode: parsed.colorMode === "cluster" ? "cluster" : "platform",
     };
   } catch {
     return null;
@@ -386,8 +413,14 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
   useEffect(() => {
     const cy = cyRef.current;
     if (!cy) return;
-    cy.style(buildStyle(theme));
-  }, [theme]);
+    cy.batch(() => {
+      cy.nodes().forEach((node) => {
+        const clusterId = String(node.data("cluster_id") || "") || null;
+        node.data("cluster_color", clusterColor(clusterId, theme) ?? "");
+      });
+    });
+    cy.style(buildStyle(theme, prefs.colorMode));
+  }, [theme, prefs.colorMode]);
 
   /* --- tercihleri yükle (yalnız istemci) --- */
   useEffect(() => {
@@ -549,6 +582,7 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
           cluster_id: n.clusterId ?? "",
           cluster_size: n.clusterSize,
           cluster_confidence: n.clusterConfidence,
+          cluster_color: clusterColor(n.clusterId, readTheme()) ?? "",
         },
       })),
       ...edges.map((e) => ({
@@ -575,7 +609,7 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
       textureOnViewport: false,
       hideEdgesOnViewport: dense,
       pixelRatio: dense ? 1 : "auto",
-      style: buildStyle(readTheme()),
+      style: buildStyle(readTheme(), prefs.colorMode),
       layout: { name: "preset" },
     });
 
@@ -1041,6 +1075,31 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
             >
               <RotateCcw size={12} aria-hidden />
             </button>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-[12px] text-ink-3">Renk</span>
+            <div
+              role="group"
+              aria-label="Düğüm renklendirme"
+              className="flex items-center gap-0.5 rounded-[6px] border border-line-2 bg-sunken p-0.5"
+            >
+              {(["platform", "cluster"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  aria-pressed={prefs.colorMode === mode}
+                  onClick={() => updatePrefs({ colorMode: mode })}
+                  className={`rounded-[4px] px-2 py-1 text-[12px] transition-colors ${
+                    prefs.colorMode === mode
+                      ? "bg-surface font-medium text-ink shadow-scrim"
+                      : "text-ink-3 hover:text-ink"
+                  }`}
+                >
+                  {mode === "platform" ? "Platform" : "Küme"}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="relative w-full sm:w-56">
