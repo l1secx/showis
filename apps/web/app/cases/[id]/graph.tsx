@@ -13,6 +13,7 @@ import {
   Info,
   Layers,
   RotateCcw,
+  Search,
   X,
 } from "lucide-react";
 import { api, type GraphData } from "../../../lib/api";
@@ -107,6 +108,24 @@ function buildStyle(theme: Theme): cytoscape.StylesheetStyle[] {
       style: {
         label: "data(label)",
         "text-rotation": "autorotate",
+      },
+    },
+    {
+      selector: ".path-node",
+      style: {
+        "border-width": 5,
+        "border-color": dark ? "#f0b429" : "#b26a00",
+        "background-opacity": 0.9,
+      },
+    },
+    {
+      selector: ".path-edge",
+      style: {
+        "line-color": dark ? "#f0b429" : "#b26a00",
+        "target-arrow-color": dark ? "#f0b429" : "#b26a00",
+        width: 4,
+        opacity: 1,
+        "z-index": 10,
       },
     },
   ];
@@ -344,6 +363,12 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [hover, setHover] = useState<HoverEdge | null>(null);
   const [stats, setStats] = useState({ visibleNodes: 0, visibleEdges: 0, layoutMs: 0 });
+  const [nodeQuery, setNodeQuery] = useState("");
+  const [pathFrom, setPathFrom] = useState("");
+  const [pathTo, setPathTo] = useState("");
+  const [pathNodeIds, setPathNodeIds] = useState<string[]>([]);
+  const [pathEdgeIds, setPathEdgeIds] = useState<string[]>([]);
+  const [pathError, setPathError] = useState<string | null>(null);
   /** Dışa aktarma hatası — boşsa hata yok. */
   const [exportError, setExportError] = useState<{ message: string; detail?: string } | null>(
     null
@@ -641,6 +666,30 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
     edges,
   ]);
 
+  /* --- filtre değişince eski yol vurgusu anlamsızlaşır --- */
+  useEffect(() => {
+    setPathNodeIds([]);
+    setPathEdgeIds([]);
+    setPathError(null);
+  }, [
+    prefs.minConfidence,
+    prefs.minScore,
+    prefs.connectedOnly,
+    prefs.clusterId,
+    prefs.platforms,
+    prefs.edgeTypes,
+  ]);
+
+  /* --- yol vurgusunu cytoscape'e yansıt --- */
+  useEffect(() => {
+    const cy = cyRef.current;
+    if (!cy) return;
+    cy.nodes().removeClass("path-node");
+    cy.edges().removeClass("path-edge");
+    pathNodeIds.forEach((id) => cy.$id(id).addClass("path-node"));
+    pathEdgeIds.forEach((id) => cy.$id(id).addClass("path-edge"));
+  }, [pathNodeIds, pathEdgeIds, nodes, edges]);
+
   /* --- seçimi cytoscape'e yansıt --- */
   useEffect(() => {
     const cy = cyRef.current;
@@ -675,6 +724,14 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
   );
 
   const visibleEdgeIds = useMemo(() => new Set(visibleEdges.map((e) => e.id)), [visibleEdges]);
+
+  const visibleNodes = useMemo(
+    () =>
+      nodes
+        .filter((node) => visibleNodeIds.has(node.id))
+        .sort((a, b) => b.score - a.score || a.label.localeCompare(b.label)),
+    [nodes, visibleNodeIds]
+  );
 
   const linkedEdges = useMemo(() => {
     if (!selectedId) return [];
@@ -801,6 +858,108 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
     cy.animate({ center: { eles: node }, zoom: Math.max(cy.zoom(), 1.2) }, { duration: 300 });
   };
 
+  const jumpToNode = (nodeId: string) => {
+    const cy = cyRef.current;
+    if (!cy) return;
+    const node = cy.$id(nodeId);
+    if (node.empty()) return;
+    node.unselect();
+    setSelectedId(nodeId);
+    cy.animate(
+      { center: { eles: node }, zoom: Math.max(cy.zoom(), 1.25) },
+      { duration: 300 }
+    );
+  };
+
+  const jumpToSearch = () => {
+    const term = nodeQuery.trim().toLocaleLowerCase("tr");
+    if (!term) return;
+    const match =
+      visibleNodes.find((node) => node.label.toLocaleLowerCase("tr") === term) ??
+      visibleNodes.find((node) => node.id.toLocaleLowerCase("tr") === term) ??
+      visibleNodes.find((node) => node.label.toLocaleLowerCase("tr").includes(term));
+    if (match) {
+      setExportError(null);
+      jumpToNode(match.id);
+    } else {
+      setExportError({
+        message: "Aramayla eşleşen görünür düğüm bulunamadı.",
+        detail: `Aranan: ${nodeQuery}`,
+      });
+    }
+  };
+
+  const fitVisible = () => {
+    const cy = cyRef.current;
+    if (!cy) return;
+    const visible = cy.nodes().filter((node) => node.style("display") !== "none");
+    if (visible.empty()) return;
+    cy.animate({ fit: { eles: visible, padding: 48 } }, { duration: 300 });
+  };
+
+  const findShortestPath = () => {
+    setPathError(null);
+    if (!pathFrom || !pathTo) {
+      setPathError("Bağlantı yolu için iki düğüm seçin.");
+      return;
+    }
+    if (pathFrom === pathTo) {
+      setPathError("Aynı düğüm seçildi; iki farklı hesap seçin.");
+      return;
+    }
+
+    const adjacency = new Map<string, { to: string; edgeId: string }[]>();
+    for (const edge of visibleEdges) {
+      if (!adjacency.has(edge.source)) adjacency.set(edge.source, []);
+      if (!adjacency.has(edge.target)) adjacency.set(edge.target, []);
+      adjacency.get(edge.source)!.push({ to: edge.target, edgeId: edge.id });
+      adjacency.get(edge.target)!.push({ to: edge.source, edgeId: edge.id });
+    }
+
+    const queue: string[] = [pathFrom];
+    const previous = new Map<string, { node: string; edgeId: string } | null>();
+    previous.set(pathFrom, null);
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      if (current === pathTo) break;
+      for (const step of adjacency.get(current) ?? []) {
+        if (previous.has(step.to)) continue;
+        previous.set(step.to, { node: current, edgeId: step.edgeId });
+        queue.push(step.to);
+      }
+    }
+
+    if (!previous.has(pathTo)) {
+      setPathNodeIds([]);
+      setPathEdgeIds([]);
+      setPathError(
+        "Görünür kenarlar üzerinden bağlantı yok. Filtreleri gevşetip yeniden deneyin."
+      );
+      return;
+    }
+
+    const nodePath: string[] = [];
+    const edgePath: string[] = [];
+    let cursor: string | null = pathTo;
+    while (cursor) {
+      nodePath.push(cursor);
+      const step = previous.get(cursor);
+      if (!step) break;
+      edgePath.push(step.edgeId);
+      cursor = step.node;
+    }
+    nodePath.reverse();
+    edgePath.reverse();
+    setPathNodeIds(nodePath);
+    setPathEdgeIds(edgePath);
+  };
+
+  const clearPath = () => {
+    setPathNodeIds([]);
+    setPathEdgeIds([]);
+    setPathError(null);
+  };
+
   /* --- erken çıkışlar --- */
   if (error)
     return (
@@ -884,12 +1043,50 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
             </button>
           </div>
 
+          <div className="relative w-full sm:w-56">
+            <Search
+              size={12}
+              aria-hidden
+              className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-3"
+            />
+            <input
+              type="search"
+              list="graph-node-options"
+              value={nodeQuery}
+              onChange={(e) => setNodeQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  jumpToSearch();
+                }
+              }}
+              placeholder="Düğüm ara (Enter)"
+              aria-label="Grafikte düğüm ara"
+              className="input w-full py-1 pl-7 text-[12px]"
+            />
+            <datalist id="graph-node-options">
+              {visibleNodes.slice(0, 200).map((node) => (
+                <option key={node.id} value={node.label} label={node.platform} />
+              ))}
+            </datalist>
+          </div>
+
           <div className="ml-auto flex flex-wrap items-center gap-2">
             <span className="numeric text-ink-3" aria-live="polite">
               {stats.visibleNodes}/{nodes.length} düğüm, {stats.visibleEdges}/{edges.length} kenar
               {multiClusters.length > 0 && ` · ${multiClusters.length} kimlik kümesi`}
               {stats.layoutMs > 0 && ` — yerleşim ${stats.layoutMs} ms`}
             </span>
+            <button
+              type="button"
+              onClick={fitVisible}
+              className="btn-secondary btn-sm"
+              aria-label="Görünür düğümlere sığdır"
+              title="Görünür düğümlere sığdır"
+            >
+              <Focus size={12} aria-hidden />
+              Sığdır
+            </button>
             <button type="button" onClick={() => runExport("PNG", exportPng)}
               className="btn-secondary btn-sm"
               aria-label="PNG olarak indir">
@@ -1044,6 +1241,91 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
             Yalnız bağlı düğümler
           </button>
         </div>
+
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-line pt-4">
+          <span className="text-[12px] text-ink-3">Bağlantı yolu</span>
+          <select
+            value={pathFrom}
+            onChange={(e) => setPathFrom(e.target.value)}
+            aria-label="Yol başlangıç düğümü"
+            className="select w-auto max-w-[190px] py-1 text-[12px]"
+          >
+            <option value="">Başlangıç…</option>
+            {visibleNodes.map((node) => (
+              <option key={node.id} value={node.id}>
+                {node.label} · {platformMeta(node.platform).label}
+              </option>
+            ))}
+          </select>
+          <span className="text-ink-3" aria-hidden>
+            →
+          </span>
+          <select
+            value={pathTo}
+            onChange={(e) => setPathTo(e.target.value)}
+            aria-label="Yol hedef düğümü"
+            className="select w-auto max-w-[190px] py-1 text-[12px]"
+          >
+            <option value="">Hedef…</option>
+            {visibleNodes.map((node) => (
+              <option key={node.id} value={node.id}>
+                {node.label} · {platformMeta(node.platform).label}
+              </option>
+            ))}
+          </select>
+          <button type="button" onClick={findShortestPath} className="btn-secondary btn-sm">
+            Yolu bul
+          </button>
+          {(pathNodeIds.length > 0 || pathError) && (
+            <button type="button" onClick={clearPath} className="btn-quiet btn-sm">
+              <X size={12} aria-hidden />
+              Temizle
+            </button>
+          )}
+        </div>
+
+        {pathError && (
+          <p role="alert" className="rounded-[6px] border border-warn-line bg-warn-soft px-3 py-2 text-[12px] text-warn">
+            {pathError}
+          </p>
+        )}
+
+        {pathNodeIds.length > 0 && (
+          <div className="rounded-[6px] border border-accent-line bg-accent-soft px-3 py-2 text-[12px] text-accent-ink">
+            <p className="font-medium">
+              En kısa yol · {pathNodeIds.length - 1} adım
+            </p>
+            <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-ink-2">
+              {pathNodeIds.map((nodeId, index) => {
+                const node = nodes.find((item) => item.id === nodeId);
+                return (
+                  <span key={`${nodeId}-${index}`} className="inline-flex items-center gap-1.5">
+                    {index > 0 && (
+                      <span className="text-ink-3" aria-hidden>
+                        →
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => jumpToNode(nodeId)}
+                      className="hover:underline"
+                    >
+                      {node?.label ?? nodeId}
+                      {node && (
+                        <span className="ml-1 text-[11px] text-ink-3">
+                          {platformMeta(node.platform).label}
+                        </span>
+                      )}
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
+            <p className="mt-1 text-[11.5px] text-ink-3">
+              Vurgu grafikte sarı kenarlarla gösterilir.
+            </p>
+          </div>
+        )}
 
         {multiClusters.length > 0 && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-line pt-4">
