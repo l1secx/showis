@@ -105,7 +105,22 @@ make lint          # ruff
 make typecheck     # mypy
 make schemas       # JSON Schema export
 make eval          # eval seti precision@3 raporu
+make web-build     # web üretim derlemesi (apps/web)
 ```
+
+`make dev` (→ `scripts/dev.sh`) kök `.env` ile `infra/.env` dosyalarını okur, boş
+değerleri atlar ve docker kimlik bilgilerini `localhost` adresine bağlar
+(`DATABASE_URL`, `REDIS_URL`, `SHOWIS_API_TOKEN`). Postgres/Redis host'a açık
+değilse yığın izi yerine çalıştırılacak tek komutu yazar; iki süreçten biri
+kapanınca diğerini de kapatır (portta öksüz süreç kalmaz).
+
+Kök dizinde `package.json` **yoktur** — monorepo kökünde `npm run build`
+çalışmaz. Web derlemesi için `make web-build` veya `cd apps/web && npm run build`.
+
+> **NixOS:** `pip` ile gelen native uzantılar (greenlet → SQLAlchemy asyncio)
+> sistem yolunda olmayan `libstdc++.so.6` arar. `Makefile` ve `scripts/dev.sh`
+> sistem derleyicisinin kütüphane dizinini `LD_LIBRARY_PATH`'e ekler; ek bir şey
+> yapmanız gerekmez.
 
 Operasyon betikleri (`infra/scripts/backup.sh` vb.) **bash ≥ 4** ister (ilişkisel
 dizi + GNU `date -d`); Alpine host'ta `apk add bash` gerekir.

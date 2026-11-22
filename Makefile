@@ -1,4 +1,4 @@
-.PHONY: help bootstrap dev lint typecheck test schemas docker-up docker-down backup restore demo demo-smoke seed-keys eval gate
+.PHONY: help bootstrap dev web-build lint typecheck test schemas docker-up docker-down backup restore demo demo-smoke seed-keys eval gate
 
 PYTHON ?= .venv/bin/python
 PIP ?= .venv/bin/pip
@@ -6,10 +6,22 @@ RUFF ?= .venv/bin/ruff
 MYPY ?= .venv/bin/mypy
 PYTEST ?= .venv/bin/pytest
 
+# NixOS: pip'in indirdiği/derlediği native uzantılar (greenlet → SQLAlchemy
+# asyncio) sistem kütüphane yolunda olmayan `libstdc++.so.6` arar ve
+# "cannot open shared object file" ile düşer. Sistem derleyicisinin kütüphane
+# dizinini yalnızca gerçekten bir yol döndüğünde ekle; standart dağıtımlarda
+# ve macOS'ta zaten yolda olduğu için bu blok sessizce atlanır.
+LIBSTDCXX := $(shell cc -print-file-name=libstdc++.so.6 2>/dev/null)
+ifneq ($(filter /%,$(LIBSTDCXX)),)
+LD_LIBRARY_PATH := $(dir $(LIBSTDCXX))$(if $(LD_LIBRARY_PATH),:$(LD_LIBRARY_PATH))
+export LD_LIBRARY_PATH
+endif
+
 help:
 	@echo "Showis OSINT Monorepo Komutları:"
 	@echo "  make bootstrap   - .venv kurar ve tüm bağımlılıkları + yerel paketleri kurar (tek komut)"
 	@echo "  make dev          - API ve Web uygulamasını geliştirme modunda başlatır"
+	@echo "  make web-build    - Web (Next.js) üretim derlemesi (apps/web)"
 	@echo "  make lint         - Kod format ve lint kontrollerini çalıştırır"
 	@echo "  make typecheck    - Mypy ile statik tip kontrollerini çalıştırır"
 	@echo "  make test         - Tüm birim ve entegrasyon testlerini çalıştırır"
@@ -39,8 +51,12 @@ test:
 	PYTHONPATH=apps/api:packages/contracts:packages/settings:packages/llm:packages/engine:packages/connectors $(PYTEST)
 
 dev:
-	@echo "Geliştirme sunucuları başlatılıyor..."
-	@bash -c "trap 'kill 0' SIGINT; (cd apps/api && PYTHONPATH=. ../../.venv/bin/uvicorn showis.main:app --reload --port 8000) & (cd apps/web && npm run dev) & wait"
+	@bash scripts/dev.sh
+
+# Web (Next.js) üretim derlemesi. Kök dizinde package.json yoktur — monorepo
+# kökünde `npm run build` çalışmaz; bu hedef doğru dizinde çalıştırır.
+web-build:
+	cd apps/web && npm run build
 
 docker-up:
 	docker compose -f infra/docker-compose.yml up -d
