@@ -219,6 +219,7 @@ interface GCluster {
   max_confidence: number;
   edge_count: number;
   evidence_count: number;
+  reasons: string[];
 }
 
 interface GEdge {
@@ -494,6 +495,7 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
           max_confidence: Number(cluster.max_confidence ?? 0),
           edge_count: Number(cluster.edge_count ?? 0),
           evidence_count: Number(cluster.evidence_count ?? 0),
+          reasons: Array.isArray(cluster.reasons) ? cluster.reasons.map(String) : [],
         }));
         setNodes(gNodes);
         setEdges(gEdges);
@@ -789,6 +791,14 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
   const selectedNode = useMemo(
     () => nodes.find((n) => n.id === selectedId) ?? null,
     [nodes, selectedId]
+  );
+
+  const selectedCluster = useMemo(
+    () =>
+      selectedNode?.clusterId
+        ? clusters.find((cluster) => cluster.id === selectedNode.clusterId) ?? null
+        : null,
+    [clusters, selectedNode]
   );
 
   const visibleEdgeIds = useMemo(() => new Set(visibleEdges.map((e) => e.id)), [visibleEdges]);
@@ -1445,7 +1455,7 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
                   onClick={() =>
                     updatePrefs({ clusterId: active ? null : cluster.id })
                   }
-                  title={`${cluster.platforms.join(", ")} — ${cluster.evidence_count} kanıt`}
+                  title={`${cluster.reasons[0] ?? cluster.platforms.join(", ")} — ${cluster.evidence_count} kanıt`}
                   className={`inline-flex items-center gap-1.5 rounded-[4px] px-1.5 py-0.5 text-[12px] transition-colors ${
                     active
                       ? "bg-accent-soft font-medium text-accent-ink"
@@ -1615,6 +1625,11 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
                   <p className="mt-1 text-ink-3">
                     {selectedNode.clusterPlatforms.join(", ") || "platform bilgisi yok"}
                   </p>
+                  {selectedCluster?.reasons[0] && (
+                    <p className="mt-1 text-[11.5px] text-ink-3">
+                      {selectedCluster.reasons[0]}
+                    </p>
+                  )}
                   <button
                     type="button"
                     onClick={() => updatePrefs({ clusterId: selectedNode.clusterId })}

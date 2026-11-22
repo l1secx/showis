@@ -25,6 +25,7 @@ class _Edge:
     type: str
     confidence: float
     evidence_ids: list[str]
+    reason: str = ""
 
 
 def _entities() -> list[_Entity]:
@@ -40,9 +41,30 @@ def _entities() -> list[_Entity]:
 def test_ayni_kullanici_adi_uclu_kume_olur():
     entities = _entities()
     edges = [
-        _Edge("github:kerem", "gitlab:kerem", "same_person", 0.45, ["ev-9"]),
-        _Edge("github:kerem", "reddit:kerem", "same_person", 0.45, []),
-        _Edge("web:kerem-blog", "github:kerem", "cross_link", 0.7, ["ev-10"]),
+        _Edge(
+            "github:kerem",
+            "gitlab:kerem",
+            "same_person",
+            0.45,
+            ["ev-9"],
+            reason="ortak kullanıcı adı 'kerem' (2 platform)",
+        ),
+        _Edge(
+            "github:kerem",
+            "reddit:kerem",
+            "same_person",
+            0.45,
+            [],
+            reason="ortak kullanıcı adı 'kerem' (2 platform)",
+        ),
+        _Edge(
+            "web:kerem-blog",
+            "github:kerem",
+            "cross_link",
+            0.7,
+            ["ev-10"],
+            reason="bio bağlantısı",
+        ),
     ]
     by_entity, clusters = compute_identity_clusters(entities, edges)
 
@@ -54,6 +76,9 @@ def test_ayni_kullanici_adi_uclu_kume_olur():
     assert by_entity["github:kerem"].edge_count == 3
     # entity + edge kanıtları birleşir
     assert by_entity["github:kerem"].evidence_count == 5
+    # En sık bağlantı gerekçesi küme özetinde görünür
+    assert by_entity["github:kerem"].reasons[0] == "ortak kullanıcı adı 'kerem' (2 platform)"
+    assert "bio bağlantısı" in by_entity["github:kerem"].reasons
 
     # Tek başına kalan entity kendi kümesinde (size=1)
     assert by_entity["github:solo"].size == 1

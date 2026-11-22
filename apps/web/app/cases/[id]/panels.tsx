@@ -1619,6 +1619,14 @@ export function FindingsTab({ caseId }: { caseId: string }) {
                       <span className="numeric">+{cluster.platforms.length - 6}</span>
                     )}
                   </span>
+                  {cluster.reasons?.[0] && (
+                    <span
+                      className="max-w-[320px] truncate text-[11.5px] text-ink-3"
+                      title={cluster.reasons.join(" · ")}
+                    >
+                      {cluster.reasons[0]}
+                    </span>
+                  )}
                   <Link
                     href={`/cases/${caseId}/graph?cluster=${encodeURIComponent(cluster.id)}`}
                     className="ml-auto text-[12px] text-accent-ink hover:underline"

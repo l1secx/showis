@@ -113,6 +113,7 @@ export interface FindingCluster {
   max_confidence: number;
   edge_count: number;
   evidence_count: number;
+  reasons?: string[];
 }
 
 export interface FindingItem {
@@ -158,6 +159,7 @@ export interface GraphCluster {
   max_confidence: number;
   edge_count: number;
   evidence_count: number;
+  reasons?: string[];
 }
 
 export interface GraphData {

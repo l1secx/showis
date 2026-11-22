@@ -15,6 +15,7 @@ Kümeler yalnızca kimlik sinyali taşıyan kenarları dikkate alır; zayıf
 from __future__ import annotations
 
 import hashlib
+from collections import Counter
 from dataclasses import dataclass
 from typing import Iterable
 
@@ -32,6 +33,7 @@ class IdentityCluster:
     max_confidence: float
     edge_count: int
     evidence_count: int
+    reasons: tuple[str, ...] = ()
 
     def as_dict(self) -> dict:
         return {
@@ -41,6 +43,7 @@ class IdentityCluster:
             "max_confidence": self.max_confidence,
             "edge_count": self.edge_count,
             "evidence_count": self.evidence_count,
+            "reasons": list(self.reasons),
         }
 
 
@@ -120,6 +123,7 @@ def compute_identity_clusters(
                 target,
                 float(getattr(edge, "confidence", 0.0) or 0.0),
                 {str(item) for item in (getattr(edge, "evidence_ids", None) or [])},
+                str(getattr(edge, "reason", "") or "").strip(),
             )
         )
 
@@ -129,9 +133,12 @@ def compute_identity_clusters(
 
     # Her kök için kenar özeti
     edges_by_root: dict[str, list[tuple[float, set[str]]]] = {}
-    for source, _target, confidence, evidence_ids in edge_rows:
+    reasons_by_root: dict[str, Counter[str]] = {}
+    for source, _target, confidence, evidence_ids, reason in edge_rows:
         root = _find(parent, source)
         edges_by_root.setdefault(root, []).append((confidence, evidence_ids))
+        if reason:
+            reasons_by_root.setdefault(root, Counter())[reason] += 1
 
     by_entity: dict[str, IdentityCluster] = {}
     clusters: list[IdentityCluster] = []
@@ -146,6 +153,10 @@ def compute_identity_clusters(
             evidence.update(evidence_by_entity.get(member, set()))
         for _, edge_evidence in cluster_edges:
             evidence.update(edge_evidence)
+        reason_counter = reasons_by_root.get(root, Counter())
+        top_reasons = tuple(
+            reason for reason, _count in reason_counter.most_common(3)
+        )
         cluster = IdentityCluster(
             id=cluster_id_for(members),
             entity_ids=tuple(members),
@@ -154,6 +165,7 @@ def compute_identity_clusters(
             max_confidence=max((confidence for confidence, _ in cluster_edges), default=0.0),
             edge_count=len(cluster_edges),
             evidence_count=len(evidence),
+            reasons=top_reasons,
         )
         clusters.append(cluster)
         for member in members:
