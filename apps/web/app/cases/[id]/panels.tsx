@@ -1200,6 +1200,7 @@ export function FindingsTab({ caseId }: { caseId: string }) {
       evidence_count: finding.evidence_count ?? finding.evidence_ids.length,
       cluster_id: finding.cluster_id ?? "",
       cluster_size: finding.cluster?.size ?? 1,
+      cluster_reason: finding.cluster?.reasons?.[0] ?? "",
       verified_at: finding.verified_at ?? "",
       explanation: finding.explanation ?? "",
     }));
@@ -1235,6 +1236,7 @@ export function FindingsTab({ caseId }: { caseId: string }) {
         evidence_count: 0,
         cluster_id: "",
         cluster_size: 1,
+        cluster_reason: "",
         verified_at: "",
         explanation: "",
       });
