@@ -292,3 +292,15 @@ async def test_grafik_kume_ozeti(client, db_factory):
     assert nodes["github:ada"]["cluster_size"] == 3
     assert nodes["github:ada"]["cluster_id"] == big["id"]
     assert nodes["web:ada"]["cluster_size"] == 1
+
+
+async def test_export_kume_ve_corroboration_icerir(client, db_factory):
+    await _seed_clusters(db_factory)
+    res = await client.get(f"/api/v1/cases/{CASE_ID}/export")
+    assert res.status_code == 200, res.text
+    payload = res.json()
+    assert "clusters" in payload
+    big = next(cluster for cluster in payload["clusters"] if cluster["size"] == 3)
+    findings = {row["platform"]: row for row in payload["findings"]}
+    assert findings["github"]["cluster_id"] == big["id"]
+    assert findings["github"]["corroboration"] == 4
