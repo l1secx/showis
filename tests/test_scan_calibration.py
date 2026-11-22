@@ -658,7 +658,7 @@ def test_host_limiter_env_sinirlari_kirpilir(monkeypatch):
 #: provenans (tarih, scan_id, mod, hedef, LLM açık/kapalı) buraya yazılmalı.
 REF_WALL_SECONDS = 362
 REF_TASKS = 164
-REF_REQUESTS = 1176
+REF_REQUESTS = 1492  # 83 sitecheck platformu ile kalibre (164 görev + 16 kullanıcı adı × 83 site)
 
 
 def _smoke_target() -> Target:

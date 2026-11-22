@@ -1,6 +1,7 @@
 """Bulgu doğrulama/reddetme + kanıt görüntüleme uçları."""
 
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
@@ -85,7 +86,9 @@ async def get_finding_evidence(finding_id: str, db: AsyncSession = Depends(get_d
                 "source_url": ev.source_url,
                 "kind": ev.kind,
                 "content_hash": ev.content_hash,
-                "storage_key": ev.storage_key,
+                # SEC-20: sunucu dosya yolu istemciye verilmez, yalnız dosya adı
+                "storage_key": Path(ev.storage_key).name if ev.storage_key else None,
+                "filename": Path(ev.storage_key).name if ev.storage_key else None,
                 "http_status": ev.http_status,
                 "user_agent": ev.user_agent,
                 "fetched_at": ev.fetched_at.isoformat() if ev.fetched_at else None,

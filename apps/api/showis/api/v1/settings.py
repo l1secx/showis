@@ -17,12 +17,12 @@ import logging
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from showis.core.redact import provider_error_message, sanitize_error
 from showis.db.models import Setting
 from showis.db.session import get_db
-from showis.services.audit import record_audit
+from showis.services.audit import record_request_audit
 from showis_engine.policy import SSRFViolationError, guard_url
 from showis_llm.base_url import BaseUrlError, validate_base_url
 from showis_settings.crypto import decrypt_secret, encrypt_secret, mask_secret
@@ -137,7 +137,11 @@ async def list_providers(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("", response_model=ProviderSettingResponse)
-async def upsert_provider(data: ProviderSettingCreate, db: AsyncSession = Depends(get_db)):
+async def upsert_provider(
+    data: ProviderSettingCreate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
     provider = data.provider.strip().lower()
     if provider not in PROVIDER_NAMES:
         raise HTTPException(
@@ -206,8 +210,9 @@ async def upsert_provider(data: ProviderSettingCreate, db: AsyncSession = Depend
 
     # T-112/3 (SEC-13): sır rotasyonu / base_url değişimi iz bırakır.
     # Sır değeri ASLA yazılmaz — yalnız provider + değişen alan adları.
-    await record_audit(
+    await record_request_audit(
         db=db,
+        request=request,
         action="settings.provider.update",
         target=f"Setting: {item.provider}",
         details={
@@ -222,7 +227,9 @@ async def upsert_provider(data: ProviderSettingCreate, db: AsyncSession = Depend
 
 
 @router.delete("/{setting_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_provider(setting_id: str, db: AsyncSession = Depends(get_db)):
+async def delete_provider(
+    setting_id: str, request: Request, db: AsyncSession = Depends(get_db)
+):
     res = await db.execute(select(Setting).where(Setting.id == setting_id))
     item = res.scalar_one_or_none()
     if not item:
@@ -230,8 +237,9 @@ async def delete_provider(setting_id: str, db: AsyncSession = Depends(get_db)):
     provider = item.provider
     await db.delete(item)
     await db.commit()
-    await record_audit(
+    await record_request_audit(
         db=db,
+        request=request,
         action="settings.provider.delete",
         target=f"Setting: {provider}",
         details={"provider": provider},

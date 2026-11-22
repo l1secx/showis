@@ -107,9 +107,11 @@ _PLATFORM_QUERIES: tuple[tuple[str, Platform, str, int], ...] = (
         2,
     ),
     ("site:twitter.com OR site:x.com", Platform.WEB, "Twitter/X üzerinde tam isim araması", 2),
-    ("site:instagram.com", Platform.WEB, "Instagram üzerinde tam isim araması", 2),
+    ("site:instagram.com", Platform.INSTAGRAM, "Instagram üzerinde tam isim araması", 2),
     ("site:facebook.com", Platform.WEB, "Facebook üzerinde tam isim araması", 2),
-    ("site:tiktok.com", Platform.WEB, "TikTok üzerinde tam isim araması", 2),
+    ("site:tiktok.com", Platform.TIKTOK, "TikTok üzerinde tam isim araması", 2),
+    ("site:twitch.tv", Platform.TWITCH, "Twitch üzerinde tam isim araması", 2),
+    ("site:mixcloud.com", Platform.MIXCLOUD, "Mixcloud üzerinde tam isim araması", 2),
     ("site:threads.net", Platform.WEB, "Threads üzerinde tam isim araması", 2),
     # --- Gelistirme / teknoloji platformlari ---
     ("site:medium.com", Platform.MEDIUM, "Medium üzerinde tam isim araması", 2),
@@ -344,23 +346,14 @@ def _finalize_plan(target: Target, queries: list[SearchQuery]) -> QueryPlan:
 def build_template_fallback_queries(
     target: Target, variants: VariantSet | None = None
 ) -> QueryPlan:
-    """LLM mevcut olmadığında veya hata verdiğinde deterministik şablon sorguları üretir.
+    """LLM mevcut olmadığında veya hata verdiğinde deterministik şablon sorguları üretir."""
+    # SEC-07 / K-3: şablon yolu doğrudan çağrıldığında da hedef denetimi zorunludur
+    target = guard_target(target)
+    if target.review_required:
+        raise PolicyViolationError(
+            "Hedef inceleme gerektiriyor: reşit olmayan kişi sinyali (AUP md.7)."
+        )
 
-    30+ platform kapsamı: GitHub, GitLab, Keybase, Reddit, Dev.to, HackerNews, NPM,
-    PyPI, DockerHub, Chess.com, Steam, Gravatar, Wattpad, Flickr, MusicBrainz, Mastodon,
-    Pixelfed, RubyGems, NuGet, Packagist, 9GAG, SpeakerDeck, VS Marketplace, Bluesky,
-    HuggingFace, Kitsu, WordPress.com, LinkedIn, Twitter/X, Instagram, Facebook, TikTok,
-    Threads, Medium, YouTube, Behance, Dribbble, Pinterest, MyAnimeList, Letterboxd,
-    Goodreads, SoundCloud, CodePen, CodeWars, Behance, Dribbble, About.me, Linktree,
-    Telegram, VK, Lichess, Duolingo, Tumblr, itch.io, Substack, DeviantArt, Bitbucket,
-    Codeberg, Hashnode, Kaggle, RootMe.
-
-    Handle modu (``target.kind == "handle"`` ya da ad/soyad birlikte boş): isim
-    biçimli sorgu **üretilmez**; aynı platform kapsamı nick ile kurulur
-    (``"{nick}" site:github.com``, …) ve platform-bağımsız ``"{nick}"`` sorgusu
-    eklenir. İsim modunda nick varsa mevcut isim sorguları **aynen** korunur,
-    nick sorguları listenin sonuna eklenir.
-    """
     fullname = f"{target.first_name} {target.last_name}".strip()
     ad = target.first_name.strip()
     soyad = target.last_name.strip()

@@ -337,21 +337,33 @@ def _case_filters(q: str | None, case_status: str | None) -> list[Any]:
     text = (q or "").strip()
     if text:
         pattern = _escape_like(text)
+        from showis_engine.variants import normalize_turkish
+        norm_text = normalize_turkish(text)
+        norm_pattern = _escape_like(norm_text) if norm_text and norm_text != text.lower() else None
+
         # Hedef ad/soyad/nick için alt sorgu: join ile satır çoğaltmadan arama
-        target_hit = select(DbTarget.case_id).where(
-            or_(
-                DbTarget.first_name.ilike(pattern, escape="\\"),
-                DbTarget.last_name.ilike(pattern, escape="\\"),
-                DbTarget.nickname.ilike(pattern, escape="\\"),
-            )
-        )
-        conditions.append(
-            or_(
-                Case.name.ilike(pattern, escape="\\"),
-                Case.purpose.ilike(pattern, escape="\\"),
-                Case.id.in_(target_hit),
-            )
-        )
+        target_conds = [
+            DbTarget.first_name.ilike(pattern, escape="\\"),
+            DbTarget.last_name.ilike(pattern, escape="\\"),
+            DbTarget.nickname.ilike(pattern, escape="\\"),
+        ]
+        case_conds = [
+            Case.name.ilike(pattern, escape="\\"),
+            Case.purpose.ilike(pattern, escape="\\"),
+        ]
+        if norm_pattern:
+            target_conds.extend([
+                DbTarget.first_name.ilike(norm_pattern, escape="\\"),
+                DbTarget.last_name.ilike(norm_pattern, escape="\\"),
+                DbTarget.nickname.ilike(norm_pattern, escape="\\"),
+            ])
+            case_conds.extend([
+                Case.name.ilike(norm_pattern, escape="\\"),
+                Case.purpose.ilike(norm_pattern, escape="\\"),
+            ])
+
+        target_hit = select(DbTarget.case_id).where(or_(*target_conds))
+        conditions.append(or_(*case_conds, Case.id.in_(target_hit)))
 
     if case_status is not None and case_status.strip():
         value = case_status.strip().lower()
@@ -1012,7 +1024,8 @@ async def get_case_findings(
     ]
 
 
-@router.get("/{case_id}/export")
+@router.post("/{case_id}/export")
+@router.get("/{case_id}/export", deprecated=True)
 async def export_case(
     case_id: str, request: Request, db: AsyncSession = Depends(get_db)
 ):

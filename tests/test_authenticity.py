@@ -295,8 +295,11 @@ def test_resolver_veri_yoksa_notr_authenticity():
 async def test_dusuk_authenticity_aciklamaya_eklenir():
     resolver = Resolver()
     target = Target(first_name="Kerem", last_name="Boz")
+    # T-301: Resolver compute_authenticity için geçerli anı (now) kullanır.
+    # 1 günlük çok yeni hesap sinyali için güncel zamana göre 1 gün öncesi verilir.
+    one_day_ago = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
     finding = resolver.resolve_entity(
-        _entity({"name": "Kerem Boz", "bio": "", "created_at": _age(1)}),
+        _entity({"name": "Kerem Boz", "bio": "", "created_at": one_day_ago}),
         target,
         case_id="c1",
         scan_id="s1",

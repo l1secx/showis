@@ -225,7 +225,9 @@ async def build_report_data(db: AsyncSession, case_id: str) -> dict[str, Any]:
                 "source_url": ev.source_url,
                 "kind": ev.kind,
                 "content_hash": ev.content_hash,
-                "storage_key": ev.storage_key,
+                # SEC-20: sunucu dosya yolu istemciye verilmez, yalnız dosya adı
+                "storage_key": Path(ev.storage_key).name if ev.storage_key else None,
+                "filename": Path(ev.storage_key).name if ev.storage_key else None,
                 "http_status": ev.http_status,
                 "fetched_at": ev.fetched_at.isoformat() if ev.fetched_at else None,
                 "expires_at": ev.expires_at.isoformat() if ev.expires_at else None,
