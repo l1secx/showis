@@ -883,6 +883,8 @@ export function FindingsTab({ caseId }: { caseId: string }) {
   const [verifying, setVerifying] = useState<string | null>(null);
   // T-303 → T-318: grafikten gelen entity (bulgular sekmesinde vurgulanır).
   const [focusEntity, setFocusEntity] = useState<string | null>(null);
+  // Grafikten gelen kimlik kümesi filtresi (`?cluster=`).
+  const [clusterFilter, setClusterFilter] = useState<string | null>(null);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   // Tercih yalnızca istemcide okunur: SSR/CSR hidrasyon uyuşmazlığı olmasın.
@@ -897,8 +899,11 @@ export function FindingsTab({ caseId }: { caseId: string }) {
   useEffect(() => {
     if (typeof window === "undefined") return;
     const readFocus = () => {
-      const value = new URLSearchParams(window.location.search).get("entity");
+      const params = new URLSearchParams(window.location.search);
+      const value = params.get("entity");
       setFocusEntity(value && value.trim() ? value.trim() : null);
+      const cluster = params.get("cluster");
+      setClusterFilter(cluster && cluster.trim() ? cluster.trim() : null);
     };
     readFocus();
     window.addEventListener("popstate", readFocus);
@@ -910,6 +915,15 @@ export function FindingsTab({ caseId }: { caseId: string }) {
     if (typeof window !== "undefined") {
       const url = new URL(window.location.href);
       url.searchParams.delete("entity");
+      window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+    }
+  };
+
+  const clearClusterFilter = () => {
+    setClusterFilter(null);
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("cluster");
       window.history.replaceState(null, "", url.pathname + url.search + url.hash);
     }
   };
@@ -1047,6 +1061,14 @@ export function FindingsTab({ caseId }: { caseId: string }) {
     );
   }, [findings, focusEntity]);
 
+  const activeCluster = useMemo(
+    () =>
+      clusterFilter
+        ? findings.find((f) => f.cluster_id === clusterFilter)?.cluster ?? null
+        : null,
+    [findings, clusterFilter]
+  );
+
   const platformOptions = useMemo(() => {
     const map = new Map<string, number>();
     // Sayılar, o anki durum/güvenilirlik filtresinden geçen kümele uyumlu olmalı;
@@ -1060,12 +1082,13 @@ export function FindingsTab({ caseId }: { caseId: string }) {
     const needle = findingQuery.trim().toLocaleLowerCase("tr");
     const platformSet = new Set(platformFilter);
     return visible.filter((f) => {
+      if (clusterFilter && f.cluster_id !== clusterFilter) return false;
       if (platformSet.size > 0 && !platformSet.has(f.platform)) return false;
       if (!needle) return true;
       const haystack = `${f.label} ${f.url ?? ""} ${f.platform}`.toLocaleLowerCase("tr");
       return haystack.includes(needle);
     });
-  }, [visible, platformFilter, findingQuery]);
+  }, [visible, platformFilter, findingQuery, clusterFilter]);
 
   const sortedVisible = useMemo(() => {
     const rows = [...narrowed];
@@ -1517,6 +1540,33 @@ export function FindingsTab({ caseId }: { caseId: string }) {
             <X size={12} aria-hidden />
             Vurguyu kaldır
           </button>
+        </div>
+      )}
+
+      {clusterFilter && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-[6px] border border-accent-line bg-accent-soft px-3 py-2 text-[12.5px] text-accent-ink">
+          <span>
+            Kimlik kümesi filtresi:{" "}
+            <span className="font-medium">
+              {activeCluster ? `${activeCluster.size} hesap` : clusterFilter}
+            </span>
+            {activeCluster?.reasons?.[0] && (
+              <span className="ml-2 text-ink-3">{activeCluster.reasons[0]}</span>
+            )}
+          </span>
+          <div className="flex items-center gap-2">
+            <Link
+              href={`/cases/${caseId}/graph?cluster=${encodeURIComponent(clusterFilter)}`}
+              className="btn-quiet btn-sm"
+            >
+              <ArrowUpRight size={12} aria-hidden />
+              Grafikte göster
+            </Link>
+            <button type="button" onClick={clearClusterFilter} className="btn-quiet btn-sm">
+              <X size={12} aria-hidden />
+              Kümeyi temizle
+            </button>
+          </div>
         </div>
       )}
 

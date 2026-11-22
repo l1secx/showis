@@ -1630,13 +1630,25 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
                       {selectedCluster.reasons[0]}
                     </p>
                   )}
-                  <button
-                    type="button"
-                    onClick={() => updatePrefs({ clusterId: selectedNode.clusterId })}
-                    className="mt-1.5 text-[12px] font-medium underline decoration-accent-line underline-offset-2 hover:decoration-accent"
-                  >
-                    Kümeyi grafikte izole et
-                  </button>
+                  <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
+                    <button
+                      type="button"
+                      onClick={() => updatePrefs({ clusterId: selectedNode.clusterId })}
+                      className="text-[12px] font-medium underline decoration-accent-line underline-offset-2 hover:decoration-accent"
+                    >
+                      Kümeyi grafikte izole et
+                    </button>
+                    {selectedNode.clusterId && (
+                      <Link
+                        href={`/cases/${caseId}/findings?cluster=${encodeURIComponent(
+                          selectedNode.clusterId
+                        )}`}
+                        className="text-[12px] font-medium underline decoration-accent-line underline-offset-2 hover:decoration-accent"
+                      >
+                        Kümeyi bulgularda aç
+                      </Link>
+                    )}
+                  </div>
                 </div>
               )}
 
