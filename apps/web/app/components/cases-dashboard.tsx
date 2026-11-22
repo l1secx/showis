@@ -165,6 +165,16 @@ export function CasesDashboard() {
     router.push(qs ? `/?${qs}` : "/");
   };
 
+  /**
+   * Satırın tamamını tıklanabilir yapar. Firefox `<tr>` üzerinde
+   * `position: relative` desteklemediği için kaplama (overlay) yerine
+   * doğrudan yönlendirme kullanılır; iç bağlantı ve düğmeler hariç tutulur.
+   */
+  const openCase = (e: React.MouseEvent<HTMLElement>, id: string) => {
+    if ((e.target as HTMLElement).closest("a, button, input, select, textarea, label")) return;
+    router.push(`/cases/${id}/scan`);
+  };
+
   const hasFilters = Boolean(query.trim() || statusFilter);
   const stats = useMemo(
     () => ({
@@ -323,7 +333,11 @@ export function CasesDashboard() {
               Dar ekranda aynı içerik kayıt listesi olarak dizilir. */}
           <ul className="panel divide-y divide-line sm:hidden">
             {items.map((c) => (
-              <li key={c.id} className="px-4 py-3.5">
+              <li
+                key={c.id}
+                onClick={(e) => openCase(e, c.id)}
+                className="cursor-pointer px-4 py-3.5"
+              >
                 <div className="flex items-start justify-between gap-3">
                   <Link
                     href={`/cases/${c.id}/scan`}
@@ -396,7 +410,11 @@ export function CasesDashboard() {
                 </thead>
                 <tbody>
                   {items.map((c) => (
-                    <tr key={c.id}>
+                    <tr
+                      key={c.id}
+                      onClick={(e) => openCase(e, c.id)}
+                      className="cursor-pointer"
+                    >
                       <td className="max-w-[22rem]">
                         <Link
                           href={`/cases/${c.id}/scan`}
