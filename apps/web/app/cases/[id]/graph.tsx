@@ -186,6 +186,8 @@ const EDGE_TYPE_LABEL = edgeTypeLabel;
 
 const LAYOUTS: { value: LayoutName; label: string; hint: string }[] = [
   { value: "cose", label: "Force", hint: "Kuvvet tabanlı (cose) yerleşim" },
+  { value: "concentric", label: "Hubs", hint: "Bağlantı sayısı yüksek düğümler merkezde" },
+  { value: "breadthfirst", label: "Hiyerarşi", hint: "Kenar yönüne göre katmanlı yerleşim" },
   { value: "circle", label: "Circle", hint: "Dairesel yerleşim" },
   { value: "grid", label: "Grid", hint: "Izgara yerleşim" },
 ];
@@ -194,7 +196,7 @@ const LAYOUTS: { value: LayoutName; label: string; hint: string }[] = [
 /* Tipler                                                              */
 /* ------------------------------------------------------------------ */
 
-type LayoutName = "cose" | "circle" | "grid";
+type LayoutName = "cose" | "concentric" | "breadthfirst" | "circle" | "grid";
 
 interface GNode {
   id: string;
@@ -265,7 +267,11 @@ function readPrefs(caseId: string): GraphPrefs | null {
   try {
     const parsed = JSON.parse(raw) as Partial<GraphPrefs>;
     const layout: LayoutName =
-      parsed.layout === "circle" || parsed.layout === "grid" || parsed.layout === "cose"
+      parsed.layout === "circle" ||
+      parsed.layout === "grid" ||
+      parsed.layout === "cose" ||
+      parsed.layout === "concentric" ||
+      parsed.layout === "breadthfirst"
         ? parsed.layout
         : DEFAULT_PREFS.layout;
     const min = Number(parsed.minConfidence);
@@ -563,13 +569,32 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
             idealEdgeLength: total > 300 ? 60 : 90,
             numIter: total > 300 ? 250 : 1000,
           }
-        : {
-            name,
-            animate: false,
-            fit: true,
-            padding: 40,
-            ...(name === "grid" ? { avoidOverlap: true, condense: true } : {}),
-          };
+        : name === "concentric"
+          ? {
+              name: "concentric",
+              animate: false,
+              fit: true,
+              padding: 48,
+              minNodeSpacing: 28,
+              concentric: (node: cytoscape.NodeSingular) => node.degree(),
+              levelWidth: () => [2],
+            }
+          : name === "breadthfirst"
+            ? {
+                name: "breadthfirst",
+                directed: true,
+                animate: false,
+                fit: true,
+                padding: 48,
+                spacingFactor: 1.25,
+              }
+            : {
+                name,
+                animate: false,
+                fit: true,
+                padding: 40,
+                ...(name === "grid" ? { avoidOverlap: true, condense: true } : {}),
+              };
     const startedAt = performance.now();
     cy.one("layoutstop", () => {
       setStats((s) => ({ ...s, layoutMs: Math.round(performance.now() - startedAt) }));
