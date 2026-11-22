@@ -1,3 +1,4 @@
+import re
 from difflib import SequenceMatcher
 
 from showis_contracts import (
@@ -13,8 +14,53 @@ from showis_engine.authenticity import compute_authenticity
 from showis_engine.variants import normalize_turkish
 
 
+_NAME_SPLIT_RE = re.compile(r"[\s._\-]+")
+
+
+def _name_tokens(value: str) -> list[str]:
+    """İsim parçaları: Türkçe katlanmış, noktalama/alt çizgi/tireden ayrılmış."""
+    tokens: list[str] = []
+    for part in _NAME_SPLIT_RE.split(str(value or "")):
+        token = normalize_turkish(part)
+        if token:
+            tokens.append(token)
+    return tokens
+
+
+def _token_overlap(left: list[str], right: list[str]) -> float:
+    """Sıra bağımsız isim örtüşmesi (0..1); baş harf kısaltmasını da kabul eder."""
+    if not left or not right:
+        return 0.0
+    remaining = list(right)
+    matched = 0
+    for token in left:
+        exact = token in remaining
+        if exact:
+            remaining.remove(token)
+            matched += 1
+            continue
+        # "a." / "a" gibi baş harf, tam adın başlangıcıysa eşleşir; ters yönde
+        # de aday baş harf olabilir ("Ahmet" ~ "A.").
+        initial_match = None
+        for candidate in remaining:
+            if len(token) == 1 and candidate.startswith(token):
+                initial_match = candidate
+                break
+            if len(candidate) == 1 and token.startswith(candidate):
+                initial_match = candidate
+                break
+        if initial_match is not None:
+            remaining.remove(initial_match)
+            matched += 1
+    return matched / max(len(left), len(right))
+
+
 def calculate_name_similarity(target_fullname: str, candidate_name: str | None) -> float:
-    """Ad-soyad benzerliğini hesaplar (≥0.92 -> 0.20 tam puan, altı lineer)."""
+    """Ad-soyad benzerliğini hesaplar (≥0.92 -> 0.20 tam puan, altı lineer).
+
+    Sıra bağımsızdır: `Ahmet Yılmaz` ile `Yılmaz Ahmet` tam eşleşir. İkinci ad,
+    baş harf (`A. Yılmaz`) ve profildeki unvan/ek metinler kısmi puan alır.
+    """
     if not candidate_name:
         return 0.0
     s1 = normalize_turkish(target_fullname)
@@ -22,15 +68,29 @@ def calculate_name_similarity(target_fullname: str, candidate_name: str | None) 
     if not s1 or not s2:
         return 0.0
 
+    # 1) Karakter benzerliği (tam eşleşme ve yakın yazımlar)
     ratio = SequenceMatcher(None, s1, s2).ratio()
     if ratio >= 0.92:
         return 0.20
 
-    # Ad-soyad tam alt küme olarak geçiyorsa (örneğin "Ahmet Yılmaz (Developer)")
+    # 2) Kelime tabanlı: sıra bağımsız tam eşleşme (ad-soyad ters yazılmış olabilir)
+    t1 = _name_tokens(target_fullname)
+    t2 = _name_tokens(candidate_name)
+    overlap = _token_overlap(t1, t2)
+    token_score = 0.20 * overlap
+    if len(t1) >= 2 and len(t2) >= 2 and overlap >= 0.999:
+        return 0.20
+
+    # 3) Ad-soyad tam alt küme olarak geçiyorsa (ör. "Ahmet Yılmaz (Developer)")
+    subset_score = 0.0
     if (s1 in s2 or s2 in s1) and len(s1) >= 4 and len(s2) >= 4:
-        overlap = min(len(s1), len(s2)) / max(len(s1), len(s2))
-        if overlap >= 0.60:
-            return round(max(0.14, 0.20 * overlap), 2)
+        subset_overlap = min(len(s1), len(s2)) / max(len(s1), len(s2))
+        if subset_overlap >= 0.60:
+            subset_score = max(0.14, 0.20 * subset_overlap)
+
+    best = max(token_score, subset_score)
+    if best > 0:
+        return round(min(0.20, best), 2)
 
     if ratio <= 0.50:
         return 0.0

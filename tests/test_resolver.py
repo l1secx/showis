@@ -348,3 +348,33 @@ async def test_llm_prompt_never_renders_double_at():
     target_section = client.prompts[0].split("HEDEF:", 1)[1].split("BULGU", 1)[0]
     assert "@@kerem" not in target_section
     assert "@kerem" in target_section
+
+
+# ---------------------------------------------------------------------------
+# İsim benzerliği: sıra bağımsız ve baş harf toleranslı
+# ---------------------------------------------------------------------------
+
+
+def test_isim_soyad_ters_siralama_tam_puan():
+    from showis_engine.resolver import calculate_name_similarity
+
+    assert calculate_name_similarity("Ahmet Yılmaz", "Yılmaz Ahmet") == 0.20
+    assert calculate_name_similarity("Ayşe Nur Yılmaz", "Ayşe Yılmaz") == pytest.approx(
+        0.13, abs=0.01
+    )
+    assert calculate_name_similarity("Ahmet Yılmaz", "A. Yılmaz") == 0.20
+    assert calculate_name_similarity("Ahmet Yılmaz", "Mehmet Yılmaz") < 0.20
+
+
+def test_resolver_ters_isimli_entity_tam_isim_puani_alir():
+    resolver = Resolver()
+    target = Target(first_name="Ahmet", last_name="Yılmaz")
+    entity = Entity(
+        id="github:yilmazahmet",
+        type=EntityType.ACCOUNT,
+        platform=Platform.GITHUB,
+        label="yilmazahmet",
+        attributes={"name": "Yılmaz Ahmet"},
+    )
+    finding = resolver.resolve_entity(entity, target, case_id="c", scan_id="s")
+    assert finding.breakdown.name_similarity == 0.20
