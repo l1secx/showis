@@ -874,6 +874,7 @@ export function FindingsTab({ caseId }: { caseId: string }) {
   const [findingQuery, setFindingQuery] = useState("");
   const [findingSort, setFindingSort] = useState<FindingSort>("score_desc");
   const [grouped, setGrouped] = useState(true);
+  const [collapsedClusters, setCollapsedClusters] = useState<string[]>([]);
   /** Karar eyleminin hatası — boşsa hata yok. */
   const [actionError, setActionError] = useState<{ message: string; detail?: string } | null>(
     null
@@ -1627,14 +1628,43 @@ export function FindingsTab({ caseId }: { caseId: string }) {
                       {cluster.reasons[0]}
                     </span>
                   )}
+                  <button
+                    type="button"
+                    aria-expanded={!collapsedClusters.includes(cluster.id)}
+                    aria-label={`${cluster.size} hesaplı kimlik kümesini ${
+                      collapsedClusters.includes(cluster.id) ? "aç" : "kapat"
+                    }`}
+                    onClick={() =>
+                      setCollapsedClusters((current) =>
+                        current.includes(cluster.id)
+                          ? current.filter((id) => id !== cluster.id)
+                          : [...current, cluster.id]
+                      )
+                    }
+                    className="ml-auto rounded p-1 text-ink-3 transition-colors hover:text-ink"
+                  >
+                    <ChevronDown
+                      size={13}
+                      aria-hidden
+                      className={
+                        collapsedClusters.includes(cluster.id) ? "-rotate-90" : ""
+                      }
+                    />
+                  </button>
                   <Link
                     href={`/cases/${caseId}/graph?cluster=${encodeURIComponent(cluster.id)}`}
-                    className="ml-auto text-[12px] text-accent-ink hover:underline"
+                    className="text-[12px] text-accent-ink hover:underline"
                   >
                     Grafikte aç
                   </Link>
                 </header>
-                <div className="divide-y divide-line">{items.map(renderFinding)}</div>
+                <div
+                  className={`divide-y divide-line ${
+                    collapsedClusters.includes(cluster.id) ? "hidden" : ""
+                  }`}
+                >
+                  {items.map(renderFinding)}
+                </div>
               </section>
             ))}
             {findingGroups.singles.length > 0 && (
