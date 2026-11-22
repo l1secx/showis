@@ -422,10 +422,19 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
     cy.style(buildStyle(theme, prefs.colorMode));
   }, [theme, prefs.colorMode]);
 
-  /* --- tercihleri yükle (yalnız istemci) --- */
+  /* --- tercihleri yükle (yalnız istemci); URL'deki küme önceliklidir --- */
   useEffect(() => {
     const stored = readPrefs(caseId);
-    if (stored) setPrefs(stored);
+    const fromUrl =
+      typeof window !== "undefined"
+        ? new URLSearchParams(window.location.search).get("cluster")
+        : null;
+    const next = stored ?? DEFAULT_PREFS;
+    if (fromUrl && fromUrl.trim()) {
+      setPrefs({ ...next, clusterId: fromUrl.trim() });
+    } else if (stored) {
+      setPrefs(stored);
+    }
     prefsReadyRef.current = true;
   }, [caseId]);
 

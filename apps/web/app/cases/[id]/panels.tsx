@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -1236,8 +1237,32 @@ export function FindingsTab({ caseId }: { caseId: string }) {
     />
   );
 
+  const clusterCount = new Set(
+    findings.filter((f) => (f.cluster?.size ?? 1) > 1).map((f) => f.cluster_id)
+  ).size;
+  const platformCount = new Set(findings.map((f) => f.platform)).size;
+  const evidenceTotal = new Set(findings.flatMap((f) => f.evidence_ids ?? [])).size;
+
   return (
     <div className="space-y-4">
+      <p className="flex flex-wrap items-center gap-x-5 gap-y-1 text-[12px] text-ink-3">
+        <span>
+          <span className="numeric font-medium text-ink">{findings.length}</span> bulgu
+        </span>
+        <span>
+          <span className="numeric font-medium text-ink">{clusterCount}</span> kimlik kümesi
+        </span>
+        <span>
+          <span className="numeric font-medium text-ink">{platformCount}</span> platform
+        </span>
+        <span>
+          <span className="numeric font-medium text-ink">{counts.confirmed}</span> onaylı
+        </span>
+        <span>
+          <span className="numeric font-medium text-ink">{evidenceTotal}</span> kanıt
+        </span>
+      </p>
+
       {/* Filtreler */}
       <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-b border-line pb-3">
         <div
@@ -1575,6 +1600,12 @@ export function FindingsTab({ caseId }: { caseId: string }) {
                       <span className="numeric">+{cluster.platforms.length - 6}</span>
                     )}
                   </span>
+                  <Link
+                    href={`/cases/${caseId}/graph?cluster=${encodeURIComponent(cluster.id)}`}
+                    className="ml-auto text-[12px] text-accent-ink hover:underline"
+                  >
+                    Grafikte aç
+                  </Link>
                 </header>
                 <div className="divide-y divide-line">{items.map(renderFinding)}</div>
               </section>
