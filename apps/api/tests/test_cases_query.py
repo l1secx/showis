@@ -400,9 +400,8 @@ async def test_turkce_harf_katlamasi(client, db_factory):
     # Küçük `inceleme`, büyük `İnceleme` içeren adlarla artık eşleşir.
     expected = {"case-ayse", "case-review"}
     for query in ("inceleme", "İnceleme", "INCELEME"):
-        hit_ids = {
-            c["id"] for c in (await client.get("/api/v1/cases", params={"q": query})).json()["items"]
-        }
+        response = await client.get("/api/v1/cases", params={"q": query})
+        hit_ids = {c["id"] for c in response.json()["items"]}
         assert hit_ids == expected, query
 
     # ASCII karşılığı yazılan `ayse`, `Ayşe` hedefini bulur.
@@ -455,8 +454,12 @@ async def test_ilgi_sirasi(client, db_factory):
         )
         session.add_all(
             [
-                DbTarget(case_id="case-name-match", first_name="Kerem", last_name="Boz", hints={}),
-                DbTarget(case_id="case-purpose-match", first_name="Ali", last_name="Veli", hints={}),
+                DbTarget(
+                    case_id="case-name-match", first_name="Kerem", last_name="Boz", hints={}
+                ),
+                DbTarget(
+                    case_id="case-purpose-match", first_name="Ali", last_name="Veli", hints={}
+                ),
             ]
         )
         await session.commit()

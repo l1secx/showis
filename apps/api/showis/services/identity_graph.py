@@ -129,7 +129,7 @@ def compute_identity_clusters(
 
     # Her kök için kenar özeti
     edges_by_root: dict[str, list[tuple[float, set[str]]]] = {}
-    for source, target, confidence, evidence_ids in edge_rows:
+    for source, _target, confidence, evidence_ids in edge_rows:
         root = _find(parent, source)
         edges_by_root.setdefault(root, []).append((confidence, evidence_ids))
 

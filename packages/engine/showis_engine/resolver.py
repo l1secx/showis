@@ -13,7 +13,6 @@ from showis_contracts import (
 from showis_engine.authenticity import compute_authenticity
 from showis_engine.variants import normalize_turkish
 
-
 _NAME_SPLIT_RE = re.compile(r"[\s._\-]+")
 
 

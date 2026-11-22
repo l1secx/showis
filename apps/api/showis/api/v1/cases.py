@@ -1156,7 +1156,7 @@ def _parse_finding_platforms(raw: str | None) -> set[str]:
 @router.get("/{case_id}/findings")
 async def get_case_findings(
     case_id: str,
-    status: str | None = None,
+    status_query: str | None = Query(None, alias="status"),
     platform: str | None = None,
     min_authenticity: float | None = None,
     sort: Literal[
@@ -1183,7 +1183,7 @@ async def get_case_findings(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Geçersiz sort: {sort} (izinli: {', '.join(sorted(_FINDING_SORTS))})",
         )
-    statuses = _parse_status_filter(status)
+    statuses = _parse_status_filter(status_query)
     platforms = _parse_finding_platforms(platform)
     min_auth = _parse_min_authenticity(min_authenticity)
 
@@ -1206,7 +1206,7 @@ async def get_case_findings(
     ).scalars().all()
     clusters_by_entity, _ = compute_identity_clusters(entities, edges)
 
-    rows = []
+    rows: list[dict[str, Any]] = []
     for finding in findings:
         signals = corroboration_signals(finding.breakdown)
         cluster = clusters_by_entity.get(finding.entity_id)
@@ -1238,29 +1238,33 @@ async def get_case_findings(
             }
         )
 
+    def _authenticity(row: dict[str, Any]) -> float | None:
+        value = row.get("authenticity")
+        return None if value is None else float(value)
+
     if sort == "score_asc":
-        rows.sort(key=lambda row: (row["score"], row["id"]))
+        rows.sort(key=lambda row: (float(row["score"]), str(row["id"])))
     elif sort == "authenticity_desc":
         rows.sort(
             key=lambda row: (
-                row["authenticity"] is None,
-                -(row["authenticity"] or 0.0),
-                -row["score"],
-                row["id"],
+                _authenticity(row) is None,
+                -(_authenticity(row) or 0.0),
+                -float(row["score"]),
+                str(row["id"]),
             )
         )
     elif sort == "corroboration_desc":
         rows.sort(
             key=lambda row: (
-                -row["corroboration"],
-                -row["score"],
-                row["authenticity"] is None,
-                -(row["authenticity"] or 0.0),
-                row["id"],
+                -int(row.get("corroboration") or 0),
+                -float(row["score"]),
+                _authenticity(row) is None,
+                -(_authenticity(row) or 0.0),
+                str(row["id"]),
             )
         )
     else:  # score_desc
-        rows.sort(key=lambda row: (-row["score"], row["id"]))
+        rows.sort(key=lambda row: (-float(row["score"]), str(row["id"])))
     return rows
 
 
