@@ -154,8 +154,12 @@ def compute_identity_clusters(
         for _, edge_evidence in cluster_edges:
             evidence.update(edge_evidence)
         reason_counter = reasons_by_root.get(root, Counter())
+        # Eşit sayıda gerekçe varsa ada göre sırala: küme özeti deterministik olsun.
         top_reasons = tuple(
-            reason for reason, _count in reason_counter.most_common(3)
+            reason
+            for reason, _count in sorted(
+                reason_counter.items(), key=lambda item: (-item[1], item[0])
+            )[:3]
         )
         cluster = IdentityCluster(
             id=cluster_id_for(members),
