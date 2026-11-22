@@ -1,4 +1,14 @@
 /** @type {import('tailwindcss').Config} */
+
+/**
+ * Renk paleti `app/globals.css` içindeki semantik tokenlardan okunur.
+ * Sayfalar `slate-900` gibi kademe adlarıyla değil, anlamsal adlarla
+ * (`surface`, `ink-2`, `line`, `accent`) yazılır; palet değişirse tek yer
+ * değişir. RGB kanal üçlüsü sayesinde Tailwind'in `/50` opaklık
+ * değiştiricileri (`border-accent/30`) çalışır.
+ */
+const token = (name) => `rgb(var(--${name.replace(/^--/, "")}) / <alpha-value>)`;
+
 module.exports = {
   content: [
     "./app/**/*.{js,ts,jsx,tsx,mdx}",
@@ -7,44 +17,83 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        // Tek yerden tema: mevcut slate/blue kullanimlari yeni palete baglanir.
-        slate: {
-          50: "#f6f8fb",
-          100: "#e9eef6",
-          200: "#cfd9e6",
-          300: "#a9b8cb",
-          400: "#7d8ea6",
-          500: "#5b6c84",
-          600: "#3f4f66",
-          700: "#26344a",
-          800: "#161f2e",
-          900: "#0b111b",
-          950: "#05080e",
+        canvas: token("--canvas"),
+        surface: token("--surface"),
+        sunken: token("--sunken"),
+        overlay: token("--overlay"),
+        hover: token("--hover"),
+
+        ink: {
+          DEFAULT: token("--ink"),
+          2: token("--ink-2"),
+          3: token("--ink-3"),
         },
-        blue: {
-          50: "#ecfeff",
-          100: "#cffafe",
-          200: "#a5f3fc",
-          300: "#67e8f9",
-          400: "#22d3ee",
-          500: "#06b6d4",
-          600: "#0891b2",
-          700: "#0e7490",
-          800: "#155e75",
-          900: "#164e63",
-          950: "#083344",
+
+        line: {
+          DEFAULT: token("--line"),
+          2: token("--line-2"),
         },
+
+        accent: {
+          DEFAULT: token("--accent"),
+          hover: token("--accent-hover"),
+          soft: token("--accent-soft"),
+          line: token("--accent-line"),
+          ink: token("--accent-ink"),
+          fg: token("--on-accent"),
+        },
+
+        ok: {
+          DEFAULT: token("--ok"),
+          soft: token("--ok-soft"),
+          line: token("--ok-line"),
+        },
+        warn: {
+          DEFAULT: token("--warn"),
+          soft: token("--warn-soft"),
+          line: token("--warn-line"),
+        },
+        danger: {
+          DEFAULT: token("--danger"),
+          soft: token("--danger-soft"),
+          line: token("--danger-line"),
+        },
+
+        "on-accent": token("--on-accent"),
       },
       fontFamily: {
-        sans: ["Inter", "ui-sans-serif", "system-ui", "-apple-system", "Segoe UI", "sans-serif"],
-        mono: ["JetBrains Mono", "ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
+        sans: ["var(--font-sans)"],
+        mono: ["var(--font-mono)"],
+      },
+      fontSize: {
+        // Tipografi ölçeği — 12px tabanlı, analist aracı yoğunluğu.
+        // 12px'in altına inilmez: küçük metin yüksek DPI ekranlarda okunmaz.
+        "2xs": ["11px", { lineHeight: "1.4" }],
+        xs: ["12px", { lineHeight: "1.45" }],
+        sm: ["13px", { lineHeight: "1.5" }],
+        base: ["13.5px", { lineHeight: "1.55" }],
+      },
+      borderRadius: {
+        panel: "8px",
+        control: "6px",
       },
       boxShadow: {
-        card: "0 1px 0 0 rgba(255,255,255,0.03) inset, 0 18px 40px -24px rgba(0,0,0,0.9)",
-        glow: "0 0 0 1px rgba(34,211,238,0.25), 0 8px 30px -12px rgba(34,211,238,0.35)",
+        // Yükselti bir kez ilan edilir: gölge yalnızca yüzer yüzeylerde.
+        // Değerler CSS tokenı — koyu temada gölge derinleşir.
+        popover: "var(--shadow-popover)",
+        scrim: "var(--shadow-scrim)",
       },
-      letterSpacing: {
-        wider: "0.08em",
+      maxWidth: {
+        prose: "68ch",
+      },
+      keyframes: {
+        "panel-in": {
+          from: { opacity: "0", transform: "translateY(4px)" },
+          to: { opacity: "1", transform: "translateY(0)" },
+        },
+      },
+      animation: {
+        "panel-in": "panel-in 220ms cubic-bezier(0.2, 0.8, 0.3, 1) both",
       },
     },
   },

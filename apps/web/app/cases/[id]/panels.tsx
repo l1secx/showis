@@ -2,28 +2,18 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
-  Activity,
   AlertTriangle,
   ArrowUpRight,
-  BarChart3,
-  CalendarClock,
   Check,
   ChevronDown,
-  Clock,
-  ExternalLink,
   Eye,
   EyeOff,
   FileCode2,
-  FileText,
   Fingerprint,
-  Gauge,
   Loader2,
   Play,
-  Radio,
   RefreshCw,
-  ShieldCheck,
   Square,
-  Users,
   X,
 } from "lucide-react";
 import {
@@ -36,20 +26,25 @@ import {
 import type { CaseReportJson } from "../../../lib/types";
 import { platformMeta } from "./platform-meta";
 import { formatDuration, useScanSession } from "./scan-context";
+import { useTheme } from "../../components/use-theme";
+import { auditActionLabel, edgeTypeLabel, timelineEventLabel } from "./vocabulary";
 
-const STATUS_STYLE: Record<string, string> = {
-  queued: "border-slate-700 bg-slate-800/70 text-slate-300",
-  running: "border-blue-500/40 bg-blue-500/10 text-blue-300",
-  completed: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
-  failed: "border-red-500/40 bg-red-500/10 text-red-300",
-  cancelled: "border-amber-500/40 bg-amber-500/10 text-amber-300",
-  lead: "border-amber-500/40 bg-amber-500/10 text-amber-300",
-  candidate: "border-amber-500/40 bg-amber-500/10 text-amber-300",
-  confirmed: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
-  rejected: "border-red-500/40 bg-red-500/10 text-red-300",
-  done: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
-  error: "border-red-500/40 bg-red-500/10 text-red-300",
-  pending: "border-slate-700 bg-slate-800/70 text-slate-400",
+/** Durum, nokta + metin ile anlatılır. Rozet çorbası yok. */
+const STATUS_TONE: Record<string, { dot: string; text: string }> = {
+  queued: { dot: "bg-ink-4", text: "text-ink-3" },
+  running: { dot: "bg-accent", text: "text-accent-ink" },
+  completed: { dot: "bg-ok", text: "text-ok" },
+  failed: { dot: "bg-danger", text: "text-danger" },
+  cancelled: { dot: "bg-ink-4", text: "text-ink-3" },
+  lead: { dot: "bg-warn", text: "text-warn" },
+  candidate: { dot: "bg-warn", text: "text-warn" },
+  confirmed: { dot: "bg-ok", text: "text-ok" },
+  rejected: { dot: "bg-danger", text: "text-danger" },
+  done: { dot: "bg-ok", text: "text-ok" },
+  error: { dot: "bg-danger", text: "text-danger" },
+  pending: { dot: "bg-ink-4", text: "text-ink-3" },
+  active: { dot: "bg-ok", text: "text-ok" },
+  archived: { dot: "bg-ink-4", text: "text-ink-3" },
 };
 
 const STATUS_TR: Record<string, string> = {
@@ -60,9 +55,9 @@ const STATUS_TR: Record<string, string> = {
   cancelled: "iptal",
   lead: "ipucu",
   candidate: "aday",
-  confirmed: "onaylı",
+  confirmed: "onaylandı",
   rejected: "reddedildi",
-  done: "tamam",
+  done: "tamamlandı",
   error: "hata",
   pending: "bekliyor",
   active: "aktif",
@@ -70,29 +65,30 @@ const STATUS_TR: Record<string, string> = {
 };
 
 export function Badge({ value }: { value: string }) {
+  const tone = STATUS_TONE[value] ?? { dot: "bg-ink-4", text: "text-ink-3" };
   return (
-    <span
-      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${
-        STATUS_STYLE[value] || "border-slate-700 bg-slate-800/70 text-slate-300"
-      }`}
-    >
+    <span className={`status ${tone.text}`}>
+      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${tone.dot}`} aria-hidden />
       {STATUS_TR[value] || value}
     </span>
   );
 }
 
-/** Platform rozeti — `platform-meta.ts` etiket/renklerini kullanır, bilinmeyende nötr fallback. */
+/** Platform rozeti — `platform-meta.ts` etiket/renklerini kullanır, bilinmeyende nötr fallback.
+ *  Açık temada markanın koyu rengi, koyu temada markanın açık tonu (`accent`)
+ *  kullanılır — koyu zeminde koyu marka rengi görünmezdi. */
 export function PlatformBadge({ platform }: { platform: string }) {
   const meta = platformMeta(platform);
+  const theme = useTheme();
+  const dot = theme === "dark" ? meta.accent : meta.color;
   return (
     <span
-      className="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium text-slate-200"
-      style={{ borderColor: `${meta.accent}66`, backgroundColor: `${meta.accent}14` }}
+      className="inline-flex items-center gap-1.5 text-[12px] text-ink-3"
       title={meta.label === platform ? undefined : platform}
     >
       <span
-        className="h-1.5 w-1.5 shrink-0 rounded-full"
-        style={{ backgroundColor: meta.accent }}
+        className="h-2 w-2 shrink-0 rounded-[1px]"
+        style={{ backgroundColor: dot }}
         aria-hidden
       />
       {meta.label}
@@ -101,9 +97,9 @@ export function PlatformBadge({ platform }: { platform: string }) {
 }
 
 const MODES = [
-  { value: "O1", label: "O1 · Hızlı", desc: "Arama + API'ler (site-check yok)" },
-  { value: "O2", label: "O2 · Standart", desc: "Arama + API + 6 kullanıcı adı site-check" },
-  { value: "O3", label: "O3 · Derin", desc: "Standart + tarayıcı render, 10 kullanıcı adı" },
+  { value: "O1", label: "O1 — Hızlı", desc: "Arama ve API çağrıları, site kontrolü yok" },
+  { value: "O2", label: "O2 — Standart", desc: "Arama, API ve 6 kullanıcı adı site kontrolü" },
+  { value: "O3", label: "O3 — Derin", desc: "Standart mod ve tarayıcı ile 10 kullanıcı adı" },
 ];
 
 /* ---------------- Tarama sekmesi ---------------- */
@@ -152,199 +148,242 @@ export function ScanTab({
   const progress = eta ? Math.min(100, (elapsed / eta) * 100) : 0;
 
   return (
-    <div className="grid grid-cols-1 gap-5 lg:grid-cols-5">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
       <div className="space-y-5 lg:col-span-3">
-        <div className="card p-5">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-slate-100">Tarama Modu</h3>
+        {/* Tarama modu */}
+        <section className="panel">
+          <div className="panel-head">
+            <h2 className="panel-title">Tarama modu</h2>
             {running && (
-              <span className="chip border-blue-500/40 bg-blue-500/10 text-blue-300">
-                <span className="live-dot h-1.5 w-1.5 rounded-full bg-blue-400" />
+              <span className="status text-accent-ink">
+                <span className="pulse-live h-1.5 w-1.5 rounded-full bg-accent" aria-hidden />
                 canlı
               </span>
             )}
           </div>
 
-          <div className="mt-3 grid gap-2 sm:grid-cols-3">
-            {MODES.map((m) => {
-              const active = mode === m.value;
-              return (
-                <button
-                  key={m.value}
-                  type="button"
-                  disabled={running}
-                  onClick={() => setMode(m.value)}
-                  className={`rounded-lg border p-3 text-left transition-colors disabled:opacity-60 ${
-                    active
-                      ? "border-blue-500/50 bg-blue-500/10"
-                      : "border-slate-800 bg-slate-950 hover:border-slate-700"
-                  }`}
-                >
-                  <span
-                    className={`block text-sm font-medium ${active ? "text-blue-200" : "text-slate-200"}`}
+          <div className="p-5">
+            <fieldset className="grid gap-2 sm:grid-cols-3">
+              <legend className="sr-only">Tarama modu</legend>
+              {MODES.map((m) => {
+                const active = mode === m.value;
+                return (
+                  <label
+                    key={m.value}
+                    className={`flex cursor-pointer flex-col gap-1 rounded-[6px] border px-3 py-2.5 transition-colors ${
+                      active
+                        ? "border-accent bg-accent-soft"
+                        : "border-line-2 bg-surface hover:border-ink-4"
+                    } ${running ? "cursor-not-allowed opacity-60" : ""}`}
                   >
-                    {m.label}
-                  </span>
-                  <span className="mt-1 block text-[11px] leading-snug text-slate-400">{m.desc}</span>
-                </button>
-              );
-            })}
-          </div>
+                    <span className="flex items-center gap-2">
+                      <input
+                        type="radio"
+                        name="scan-mode"
+                        value={m.value}
+                        checked={active}
+                        disabled={running}
+                        onChange={() => setMode(m.value)}
+                        className="h-3.5 w-3.5 shrink-0 accent-[rgb(var(--accent))]"
+                      />
+                      <span className="text-[13px] font-medium text-ink">{m.label}</span>
+                    </span>
+                    <span className="text-[12px] leading-snug text-ink-3">{m.desc}</span>
+                  </label>
+                );
+              })}
+            </fieldset>
 
-          <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2.5 text-xs text-slate-400">
-            <span className="inline-flex items-center gap-1.5">
-              <Clock size={13} className="text-blue-400" />
-              Tahmini üst sınır{" "}
-              <span className="mono font-medium text-slate-200">
-                ~{estimate ? formatDuration(estimate.seconds) : "hesaplanıyor"}
-              </span>
-            </span>
-            {estimate && (
-              <>
-                <span className="inline-flex items-center gap-1.5">
-                  <Gauge size={13} className="text-blue-400" />
-                  <span className="mono text-slate-200">{estimate.tasks}</span> görev
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <Radio size={13} className="text-blue-400" />
-                  ~<span className="mono text-slate-200">{estimate.requests}</span> istek
-                </span>
-              </>
-            )}
-          </div>
-
-          {estimate && estimate.steps.length > 0 && (
-            <ul className="mt-3 space-y-1 text-[11px] text-slate-500">
-              {estimate.steps.map((s) => (
-                <li key={s.key} className="flex items-center gap-2">
-                  <span className="h-1 w-1 rounded-full bg-slate-600" />
-                  {s.label}
-                  <span className="mono text-slate-600">×{s.tasks}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-
-          <div className="mt-4 flex flex-wrap gap-2">
-            <button onClick={start} disabled={starting || running} className="btn-primary">
-              {starting ? (
-                <Loader2 size={15} className="animate-spin" />
-              ) : (
-                <Play size={15} />
-              )}
-              {running ? "Tarama sürüyor" : scan ? "Yeniden tara" : "Taramayı başlat"}
-            </button>
-            {running && (
-              <button onClick={cancel} className="btn-ghost">
-                <Square size={13} /> İptal
-              </button>
-            )}
-          </div>
-          {error && (
-            <p className="mt-3 flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-300">
-              <AlertTriangle size={14} className="mt-0.5 shrink-0" /> {error}
-            </p>
-          )}
-        </div>
-
-        {scan && (
-          <div className="card p-5">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-slate-100">İlerleme</h3>
+            {/* Tahmin: veri şeridi */}
+            {/* Tahmin: panelin içinde ikinci bir kutu değil, ayraçla ayrılmış
+                bir ölçü satırı. */}
+            <dl className="mt-4 flex flex-wrap items-center gap-x-7 gap-y-2 border-t border-line pt-3.5 text-[12px] text-ink-3">
               <div className="flex items-center gap-2">
+                <dt className="text-[12px] text-ink-3">Tahmini üst sınır</dt>
+                <dd className="numeric font-medium text-ink">
+                  {estimate ? formatDuration(estimate.seconds) : "hesaplanıyor"}
+                </dd>
+              </div>
+              {estimate && (
+                <>
+                  <div className="flex items-center gap-2">
+                    <dt className="text-[12px] text-ink-3">Görev</dt>
+                    <dd className="numeric font-medium text-ink">{estimate.tasks}</dd>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <dt className="text-[12px] text-ink-3">İstek</dt>
+                    <dd className="numeric font-medium text-ink">{estimate.requests}</dd>
+                  </div>
+                </>
+              )}
+            </dl>
+
+            {estimate && estimate.steps.length > 0 && (
+              <ul className="mt-3 space-y-1">
+                {estimate.steps.map((s) => (
+                  <li key={s.key} className="flex items-center justify-between gap-3 text-[12px]">
+                    <span className="text-ink-3">{s.label}</span>
+                    <span className="numeric text-ink-3">{s.tasks}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <div className="mt-5 flex flex-wrap gap-2 border-t border-line pt-4">
+              <button onClick={start} disabled={starting || running} className="btn-primary">
+                {starting ? (
+                  <Loader2 size={14} className="animate-spin" aria-hidden />
+                ) : (
+                  <Play size={14} aria-hidden />
+                )}
+                {running ? "Tarama sürüyor" : scan ? "Yeniden tara" : "Taramayı başlat"}
+              </button>
+              {running && (
+                <button onClick={cancel} className="btn-secondary">
+                  <Square size={12} aria-hidden />
+                  İptal
+                </button>
+              )}
+            </div>
+
+            {error && (
+              <p
+                role="alert"
+                className="mt-4 flex items-start gap-2 rounded-[6px] border border-danger-line bg-danger-soft px-3 py-2 text-[12.5px] text-danger"
+              >
+                <AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden />
+                {error}
+              </p>
+            )}
+          </div>
+        </section>
+
+        {/* İlerleme */}
+        {scan && (
+          <section className="panel">
+            <div className="panel-head">
+              <h2 className="panel-title">İlerleme</h2>
+              <div className="flex items-center gap-3">
                 <Badge value={scan.status} />
-                <span className="mono text-[11px] text-slate-500">{scan.mode}</span>
+                <span className="numeric text-ink-3">{scan.mode}</span>
               </div>
             </div>
 
-            <div className="mt-4">
-              <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
+            <div className="p-5">
+              <div
+                className="meter"
+                role="progressbar"
+                aria-valuenow={Math.round(progress)}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-label="Tarama ilerlemesi"
+              >
                 <div
-                  className={`h-full rounded-full transition-all duration-700 ${
+                  className={`h-full ${
                     scan.status === "failed"
-                      ? "bg-red-500"
+                      ? "bg-danger"
                       : scan.status === "completed"
-                        ? "bg-emerald-500"
-                        : "bg-blue-400"
+                        ? "bg-ok"
+                        : "bg-accent"
                   }`}
                   style={{ width: `${scan.status === "completed" ? 100 : progress}%` }}
                 />
               </div>
-              <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400">
+
+              <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 text-[12px] text-ink-3">
                 <span>
-                  Geçen <span className="mono text-slate-200">{formatDuration(elapsed)}</span>
+                  Geçen{" "}
+                  <span className="numeric text-ink-2">{formatDuration(elapsed)}</span>
                   {running && eta > 0 && (
                     <>
-                      {" · kalan tahmini "}
-                      <span className="mono text-slate-200">{formatDuration(remaining)}</span>
+                      {" — kalan "}
+                      <span className="numeric text-ink-2">{formatDuration(remaining)}</span>
                     </>
                   )}
                 </span>
                 <span>
-                  <span className="mono text-slate-200">{scan.tasks_count}</span> görev ·{" "}
-                  <span className="mono text-slate-200">
+                  <span className="numeric text-ink-2">{scan.tasks_count}</span> görev,{" "}
+                  <span className="numeric text-ink-2">
                     {scan.tasks.filter((t) => t.status === "done").length}
                   </span>{" "}
                   tamam
                 </span>
               </div>
-            </div>
 
-            <div className="mt-4 max-h-80 space-y-1 overflow-y-auto pr-1">
-              {scan.tasks.map((t) => (
-                <div
-                  key={t.id}
-                  className="flex items-center justify-between rounded-md border border-slate-800 bg-slate-950/60 px-3 py-1.5 text-xs"
-                >
-                  <span className="min-w-0 truncate text-slate-300">
-                    <span className="font-mono text-slate-500">{t.connector}</span>
-                    <span className="mx-1.5 text-slate-700">·</span>
-                    {t.kind}
-                    {t.error && <span className="ml-2 text-red-400">{t.error.slice(0, 60)}</span>}
-                  </span>
-                  <span className="flex shrink-0 items-center gap-2">
-                    {t.observation_count > 0 && (
-                      <span className="mono text-slate-500">{t.observation_count} gözlem</span>
+              <div className="mt-4 max-h-80 overflow-y-auto rounded-[6px] border border-line">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Bağlayıcı</th>
+                      <th scope="col" className="hidden sm:table-cell">
+                        Görev
+                      </th>
+                      <th scope="col" className="text-right">Gözlem</th>
+                      <th scope="col">Durum</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {scan.tasks.map((t) => (
+                      <tr key={t.id}>
+                        <td className="numeric text-ink-2">{t.connector}</td>
+                        <td className="hidden text-ink-3 sm:table-cell">
+                          {t.kind}
+                          {t.error && (
+                            <span className="ml-2 text-danger">{t.error.slice(0, 60)}</span>
+                          )}
+                        </td>
+                        <td className="numeric text-right text-ink-3">{t.observation_count}</td>
+                        <td>
+                          <Badge value={t.status} />
+                        </td>
+                      </tr>
+                    ))}
+                    {scan.tasks.length === 0 && (
+                      <tr>
+                        <td colSpan={4} className="px-4 py-6 text-center text-ink-3">
+                          Görev planlanıyor.
+                        </td>
+                      </tr>
                     )}
-                    <Badge value={t.status} />
-                  </span>
-                </div>
-              ))}
-              {scan.tasks.length === 0 && (
-                <p className="text-xs text-slate-500">
-                  Görev planlanıyor… connector&apos;lar hazırlanıyor.
-                </p>
-              )}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
+          </section>
         )}
       </div>
 
-      <div className="card flex flex-col p-5 lg:col-span-2">
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-slate-100">Canlı Olay Akışı</h3>
-          <span className="mono text-[11px] text-slate-500">{events.length} olay</span>
+      {/* Olay akışı */}
+      <section className="panel flex flex-col lg:col-span-2">
+        <div className="panel-head">
+          <h2 className="panel-title">Canlı olay akışı</h2>
+          <span className="numeric text-ink-3">{events.length} olay</span>
         </div>
-        <div className="mt-3 max-h-[560px] flex-1 space-y-1 overflow-y-auto pr-1 font-mono text-[11px]">
-          {events.length === 0 && (
-            <p className="font-sans text-xs text-slate-500">
-              Olay yok — tarama başlatıldığında connector çıktıları burada akar.
+        <div className="max-h-[560px] flex-1 overflow-y-auto p-4 font-mono text-[12px] leading-relaxed">
+          {events.length === 0 ? (
+            <p className="font-sans text-[12.5px] text-ink-3">
+              Tarama başlatıldığında bağlayıcı çıktıları burada akar.
             </p>
+          ) : (
+            <div className="space-y-0.5">
+              {events.map((ev, i) => {
+                const bad = ev.type.includes("fail") || ev.type.includes("error");
+                return (
+                  <div key={i} className="flex gap-2">
+                    <span className="shrink-0 text-ink-3">{ev.at}</span>
+                    <span className={`shrink-0 ${bad ? "text-danger" : "text-accent-ink"}`}>
+                      {ev.type}
+                    </span>
+                    <span className="truncate text-ink-3">
+                      {JSON.stringify(ev.data).slice(0, 140)}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
           )}
-          {events.map((ev, i) => {
-            const bad = ev.type.includes("fail") || ev.type.includes("error");
-            return (
-              <div key={i} className="flex gap-2 leading-relaxed">
-                <span className="shrink-0 text-slate-600">{ev.at}</span>
-                <span className={bad ? "shrink-0 text-red-400" : "shrink-0 text-blue-400"}>
-                  {ev.type}
-                </span>
-                <span className="truncate text-slate-500">{JSON.stringify(ev.data).slice(0, 140)}</span>
-              </div>
-            );
-          })}
         </div>
-      </div>
+      </section>
     </div>
   );
 }
@@ -355,14 +394,14 @@ type FindingFilter = "all" | "confirmed" | "candidate" | "lead" | "rejected";
 
 const FINDING_FILTERS: { value: FindingFilter; label: string; hint: string }[] = [
   { value: "all", label: "Tümü", hint: "Reddedilenler gizliyken kalan tüm bulgular" },
-  { value: "confirmed", label: "Onaylanan", hint: "Güven skoru ≥ 0.80" },
+  { value: "confirmed", label: "Onaylanan", hint: "Güven skoru 0.80 ve üzeri" },
   { value: "candidate", label: "Aday", hint: "Güven skoru 0.50 – 0.79" },
   {
     value: "lead",
     label: "İz",
     hint: "İpucu (lead): isim/okul benzerliği veya birebir kullanıcı adı eşleşmesi olan, doğrulanmamış sonuç",
   },
-  { value: "rejected", label: "Reddedilen", hint: "Güven skoru < 0.50 ve anlamlı sinyal yok" },
+  { value: "rejected", label: "Reddedilen", hint: "Güven skoru 0.50 altı ve anlamlı sinyal yok" },
 ];
 
 /** Skor kırılımı sinyalleri — packages/engine/showis_engine/resolver.py ağırlıkları. */
@@ -381,11 +420,11 @@ const SIGNAL_META: Record<string, { label: string; hint: string }> = {
   },
   cross_link: { label: "Çapraz bağlantı", hint: "Profiller arası doğrulanmış bağlantı (0.25)" },
   bio_location_company: {
-    label: "Bio / konum / şirket / okul",
+    label: "Bio, konum, kurum veya okul",
     hint: "Eşleşen her alan 0.05 puan (en fazla 0.15)",
   },
   commit_email_or_pgp: {
-    label: "Commit e-postası / PGP",
+    label: "Commit e-postası veya PGP",
     hint: "Kod katkısı üzerinden kimlik doğrulama (0.15)",
   },
   avatar_exact_hash: {
@@ -442,32 +481,16 @@ function isLowAuthenticity(f: FindingWithAuth): boolean {
 
 export function authenticityTone(score: number): {
   text: string;
-  border: string;
   bar: string;
   label: string;
 } {
   if (score < LOW_AUTH_THRESHOLD) {
-    return {
-      text: "text-red-300",
-      border: "border-red-500/40 bg-red-500/10",
-      bar: "bg-red-500",
-      label: "düşük güvenilirlik",
-    };
+    return { text: "text-danger", bar: "bg-danger", label: "düşük güvenilirlik" };
   }
   if (score < HIGH_AUTH_THRESHOLD) {
-    return {
-      text: "text-amber-300",
-      border: "border-amber-500/40 bg-amber-500/10",
-      bar: "bg-amber-400",
-      label: "orta güvenilirlik",
-    };
+    return { text: "text-warn", bar: "bg-warn", label: "orta güvenilirlik" };
   }
-  return {
-    text: "text-emerald-300",
-    border: "border-emerald-500/40 bg-emerald-500/10",
-    bar: "bg-emerald-400",
-    label: "güvenilir hesap",
-  };
+  return { text: "text-ok", bar: "bg-ok", label: "güvenilir hesap" };
 }
 
 /**
@@ -490,9 +513,9 @@ function AuthenticityChip({
   const hasReasons = Boolean(reasons && reasons.length > 0);
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
+    <div className="flex flex-wrap items-center gap-2">
       <span
-        className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium ${tone.border} ${tone.text}`}
+        className={`inline-flex items-center gap-1.5 text-[12px] font-medium ${tone.text}`}
         title={
           hasReasons
             ? `Güvenilirlik ${pct}% — ${tone.label}\n${(reasons ?? []).join("\n")}`
@@ -500,13 +523,10 @@ function AuthenticityChip({
         }
       >
         <Fingerprint size={11} aria-hidden />
-        güvenilirlik <span className="mono">{pct}%</span>
+        güvenilirlik <span className="numeric">{pct}%</span>
       </span>
-      <span className="h-1 w-14 overflow-hidden rounded-full bg-slate-800" aria-hidden>
-        <span
-          className={`block h-full rounded-full ${tone.bar}`}
-          style={{ width: `${Math.max(4, pct)}%` }}
-        />
+      <span className="meter w-14" aria-hidden>
+        <span className={`block h-full ${tone.bar}`} style={{ width: `${Math.max(4, pct)}%` }} />
       </span>
       {hasReasons && (
         <button
@@ -514,7 +534,7 @@ function AuthenticityChip({
           aria-expanded={open}
           aria-controls={panelId}
           onClick={() => setOpen((v) => !v)}
-          className={`inline-flex items-center gap-1 rounded text-[10px] ${tone.text} underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40`}
+          className={`inline-flex items-center gap-1 rounded text-[12px] ${tone.text} underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/25`}
         >
           {reasons!.length} neden
           <ChevronDown
@@ -527,14 +547,11 @@ function AuthenticityChip({
       {hasReasons && open && (
         <ul
           id={panelId}
-          className="mt-1 w-full basis-full space-y-0.5 rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-1.5 text-[11px] text-slate-400"
+          className="mt-1 w-full basis-full space-y-1 rounded-[6px] border border-line bg-sunken px-3 py-2 text-[12px] text-ink-3"
         >
           {reasons!.map((reason) => (
-            <li key={reason} className="flex items-start gap-1.5">
-              <span
-                className={`mt-1 h-1 w-1 shrink-0 rounded-full ${tone.bar}`}
-                aria-hidden
-              />
+            <li key={reason} className="flex items-start gap-2">
+              <span className={`mt-1.5 h-1 w-1 shrink-0 rounded-full ${tone.bar}`} aria-hidden />
               {reason}
             </li>
           ))}
@@ -543,7 +560,6 @@ function AuthenticityChip({
     </div>
   );
 }
-
 
 function ScoreBreakdown({
   breakdown,
@@ -568,7 +584,7 @@ function ScoreBreakdown({
         aria-expanded={open}
         aria-controls={panelId}
         onClick={() => setOpen((v) => !v)}
-        className="inline-flex items-center gap-1.5 rounded text-[11px] text-slate-400 transition-colors hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
+        className="inline-flex items-center gap-1.5 rounded text-[12px] text-ink-3 transition-colors hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/25"
       >
         <ChevronDown
           size={12}
@@ -576,15 +592,15 @@ function ScoreBreakdown({
           className={`transition-transform ${open ? "" : "-rotate-90"}`}
         />
         Skor kırılımı
-        <span className="mono text-[10px] text-slate-500">
-          {rows.length} sinyal · toplam {Math.round(total * 100)}%
+        <span className="numeric text-ink-3">
+          {rows.length} sinyal, toplam {Math.round(total * 100)}%
         </span>
       </button>
 
       {open && (
-        <div id={panelId} className="mt-2 rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+        <div id={panelId} className="mt-2 rounded-[6px] border border-line bg-sunken p-3">
           {rows.length === 0 ? (
-            <p className="text-[11px] text-slate-500">Skor sinyali kaydı yok.</p>
+            <p className="text-[12px] text-ink-3">Skor sinyali kaydı yok.</p>
           ) : (
             <ul className="space-y-2">
               {rows.map((row) => {
@@ -593,18 +609,16 @@ function ScoreBreakdown({
                   <li key={row.key} className="grid grid-cols-[1fr_auto] items-center gap-3">
                     <span className="min-w-0">
                       <span
-                        className={`block truncate text-[11px] ${
-                          negative ? "text-red-300" : "text-slate-300"
+                        className={`block truncate text-[12px] ${
+                          negative ? "text-danger" : "text-ink-2"
                         }`}
                         title={row.meta?.hint}
                       >
                         {row.meta?.label ?? row.key.replace(/_/g, " ")}
                       </span>
-                      <span className="mt-1 block h-1 overflow-hidden rounded-full bg-slate-800">
+                      <span className="meter mt-1">
                         <span
-                          className={`block h-full rounded-full ${
-                            negative ? "bg-red-500" : "bg-blue-400"
-                          }`}
+                          className={`block h-full ${negative ? "bg-danger" : "bg-accent"}`}
                           style={{
                             width: `${Math.min(
                               100,
@@ -615,7 +629,7 @@ function ScoreBreakdown({
                       </span>
                     </span>
                     <span
-                      className={`mono text-[11px] ${negative ? "text-red-300" : "text-slate-200"}`}
+                      className={`numeric ${negative ? "text-danger" : "text-ink-2"}`}
                     >
                       {row.value > 0 ? "+" : ""}
                       {Math.round(row.value * 100)} puan
@@ -625,9 +639,9 @@ function ScoreBreakdown({
               })}
             </ul>
           )}
-          <div className="mt-2 flex items-center justify-between border-t border-slate-800 pt-1.5 text-[11px]">
-            <span className="text-slate-500">Toplam güven</span>
-            <span className="mono font-medium text-blue-300">{Math.round(total * 100)}%</span>
+          <div className="mt-3 flex items-center justify-between border-t border-line pt-2 text-[12px]">
+            <span className="text-ink-3">Toplam güven</span>
+            <span className="numeric font-medium text-ink">{Math.round(total * 100)}%</span>
           </div>
         </div>
       )}
@@ -635,11 +649,12 @@ function ScoreBreakdown({
   );
 }
 
-function FindingCard({
+function FindingRecord({
   finding: f,
   evidence,
   expanded,
   highlighted = false,
+  busy = false,
   onToggleEvidence,
   onVerify,
 }: {
@@ -647,6 +662,7 @@ function FindingCard({
   evidence?: EvidenceItem[];
   expanded: boolean;
   highlighted?: boolean;
+  busy?: boolean;
   onToggleEvidence: (id: string) => void;
   onVerify: (id: string, status: "confirmed" | "rejected") => void;
 }) {
@@ -655,72 +671,95 @@ function FindingCard({
   const evidencePanelId = useId();
 
   return (
-    <div
+    <article
       id={`finding-${f.id}`}
       tabIndex={highlighted ? -1 : undefined}
-      className={`card card-hover p-4 ${
-        highlighted ? "ring-2 ring-blue-500/50 border-blue-500/40" : ""
-      } focus:outline-none`}
+      className={`px-5 py-4 transition-colors focus:outline-none ${
+        highlighted ? "bg-accent-soft" : "hover:bg-hover"
+      }`}
     >
-      <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="truncate font-medium text-slate-100">{f.label}</span>
+      <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            <h2 className="truncate text-[14px] font-semibold text-ink">{f.label}</h2>
             <PlatformBadge platform={f.platform} />
             <Badge value={f.status} />
-            <span className="mono text-sm font-medium text-blue-300" title={`Güven skoru ${pct}%`}>
-              {pct}%
-            </span>
-            <AuthenticityChip score={f.authenticity} reasons={f.authenticity_reasons} />
           </div>
+
           {f.url && (
             <a
               href={f.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="mt-1 inline-flex items-center gap-1 break-all font-mono text-[11px] text-slate-400 transition-colors hover:text-blue-400"
+              className="mt-1 inline-flex max-w-full items-center gap-1.5 font-mono text-[12px] text-ink-3 transition-colors hover:text-accent-ink"
             >
-              {f.url}
-              <ExternalLink size={10} className="shrink-0" />
+              <span className="truncate">{f.url}</span>
+              <ArrowUpRight size={11} className="shrink-0 text-ink-3" aria-hidden />
             </a>
           )}
+
           {f.explanation && (
-            <p className="mt-1.5 text-xs leading-relaxed text-slate-400">{f.explanation}</p>
+            <p className="mt-2 max-w-[28rem] text-[12.5px] leading-relaxed text-ink-2">
+              {f.explanation}
+            </p>
           )}
+
           {isLead && (
-            <p className="mt-1 text-[11px] text-amber-300/80">
-              İpucu: isim/okul benzerliği ya da birebir kullanıcı adı eşleşmesi var, tek kaynak —
-              doğrulanmadı.
+            <p className="mt-1.5 text-[12px] font-medium text-warn">
+              Tekil kaynak; henüz doğrulanmadı.
             </p>
           )}
           {f.status === "rejected" && (
-            <p className="mt-1 text-[11px] text-red-300/80">
-              Düşük güvenli sonuç: tek zayıf sinyal (örn. yalnızca kullanıcı adı) — varsayılan olarak
-              gizlenir.
+            <p className="mt-1.5 text-[12px] font-medium text-danger">
+              Düşük güvenilirlikli veya ilgisiz sonuç olarak işaretlendi.
             </p>
           )}
+
+          <div className="mt-2.5">
+            <AuthenticityChip score={f.authenticity} reasons={f.authenticity_reasons} />
+          </div>
         </div>
 
+        {/* Skor: sayının kendisi önde, çubuk yalnızca destek. */}
         <div className="flex shrink-0 flex-col items-end gap-2">
-          <div className="h-1 w-24 overflow-hidden rounded-full bg-slate-800" aria-hidden>
+          <div className="text-right">
+            <p className="tabular text-[19px] font-semibold leading-none text-ink">{pct}</p>
+            <p className="mt-1 text-[12px] text-ink-3">güven puanı</p>
+          </div>
+          <div className="meter w-24" aria-hidden>
             <div
-              className={`h-full rounded-full ${
+              className={`h-full ${
                 f.status === "confirmed"
-                  ? "bg-emerald-400"
+                  ? "bg-ok"
                   : f.status === "rejected"
-                    ? "bg-red-500"
-                    : "bg-blue-400"
+                    ? "bg-danger"
+                    : "bg-accent"
               }`}
-              style={{ width: `${Math.max(3, pct)}%` }}
+              style={{ width: `${Math.max(4, pct)}%` }}
             />
           </div>
+
           {(f.status === "candidate" || f.status === "lead") && (
-            <div className="flex gap-1.5">
-              <button onClick={() => onVerify(f.id, "confirmed")} className="btn-primary btn-sm">
-                <Check size={12} /> Onayla
+            <div className="mt-1 flex gap-2">
+              <button
+                onClick={() => onVerify(f.id, "confirmed")}
+                disabled={busy}
+                className="btn-secondary btn-sm"
+              >
+                {busy ? (
+                  <Loader2 size={13} className="animate-spin" aria-hidden />
+                ) : (
+                  <Check size={13} aria-hidden />
+                )}
+                Onayla
               </button>
-              <button onClick={() => onVerify(f.id, "rejected")} className="btn-ghost btn-sm">
-                <X size={12} /> Reddet
+              <button
+                onClick={() => onVerify(f.id, "rejected")}
+                disabled={busy}
+                className="btn-danger-quiet btn-sm"
+              >
+                <X size={13} aria-hidden />
+                Reddet
               </button>
             </div>
           )}
@@ -734,39 +773,40 @@ function FindingCard({
         aria-expanded={expanded}
         aria-controls={evidencePanelId}
         onClick={() => onToggleEvidence(f.id)}
-        className="mt-3 inline-flex items-center gap-1.5 rounded text-[11px] text-slate-400 transition-colors hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
+        className="mt-3 inline-flex items-center gap-1.5 rounded text-[12px] text-ink-3 transition-colors hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/25"
       >
-        <Eye size={12} />
+        <Eye size={12} aria-hidden />
         {expanded ? "Kanıtları gizle" : `Kanıtlar (${f.evidence_ids.length})`}
       </button>
+
       {expanded && (
-        <div id={evidencePanelId} className="mt-2 space-y-1.5 border-l border-slate-700 pl-3">
-          <p className="section-title flex items-center gap-1.5">
-            <ShieldCheck size={12} /> kanıt zinciri
-          </p>
-          {(evidence || []).map((ev) => (
-            <div key={ev.id} className="space-y-0.5 text-[11px]">
-              <a
-                href={ev.source_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 break-all text-blue-400 hover:underline"
-              >
-                {ev.source_url}
-                <ArrowUpRight size={10} className="shrink-0" />
-              </a>
-              <p className="mono text-slate-500">
-                {ev.kind} · sha256 {ev.content_hash.slice(0, 12)}…{" "}
-                {ev.fetched_at ? new Date(ev.fetched_at).toLocaleString("tr-TR") : ""}
-              </p>
-            </div>
-          ))}
-          {evidence?.length === 0 && (
-            <p className="text-[11px] text-amber-300">Kanıt kaydı yok.</p>
+        <div id={evidencePanelId} className="mt-3 rounded-[6px] border border-line bg-sunken p-3">
+          <p className="text-[12px] font-medium text-ink-2">Kanıt zinciri</p>
+          <div className="mt-2 space-y-2.5">
+            {(evidence || []).map((ev) => (
+              <div key={ev.id} className="space-y-0.5">
+                <a
+                  href={ev.source_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex max-w-full items-center gap-1 break-all font-mono text-[12px] text-accent-ink underline decoration-accent-line underline-offset-2 hover:decoration-accent"
+                >
+                  {ev.source_url}
+                  <ArrowUpRight size={10} className="shrink-0" aria-hidden />
+                </a>
+                <p className="numeric text-ink-3">
+                  {ev.kind} — sha256 {ev.content_hash.slice(0, 16)}
+                  {ev.fetched_at ? ` — ${new Date(ev.fetched_at).toLocaleString("tr-TR")}` : ""}
+                </p>
+              </div>
+            ))}
+          </div>
+          {(evidence || []).length === 0 && (
+            <p className="mt-2 text-[12px] text-warn">Kanıt kaydı yok.</p>
           )}
         </div>
       )}
-    </div>
+    </article>
   );
 }
 
@@ -781,6 +821,12 @@ export function FindingsTab({ caseId }: { caseId: string }) {
   const [showRejected, setShowRejected] = useState(false);
   // T-301: düşük güvenilirlikli hesapları gizle (varsayılan kapalı).
   const [hideLowAuth, setHideLowAuth] = useState(false);
+  /** Karar eyleminin hatası — boşsa hata yok. */
+  const [actionError, setActionError] = useState<{ message: string; detail?: string } | null>(
+    null
+  );
+  /** Kararı gönderilen bulgu — düğmeyi kilitler. */
+  const [verifying, setVerifying] = useState<string | null>(null);
   // T-303 → T-318: grafikten gelen entity (bulgular sekmesinde vurgulanır).
   const [focusEntity, setFocusEntity] = useState<string | null>(null);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -814,11 +860,17 @@ export function FindingsTab({ caseId }: { caseId: string }) {
     }
   };
 
-  const load = useCallback(() => {
-    api.listFindings(caseId).then(setFindings).catch((e) => setErr(e.message));
+  const load = useCallback(async () => {
+    try {
+      setFindings(await api.listFindings(caseId));
+    } catch (e: any) {
+      setErr(e.message);
+    }
   }, [caseId]);
 
-  useEffect(load, [load, findingsVersion]);
+  useEffect(() => {
+    void load();
+  }, [load, findingsVersion]);
 
   const persist = (key: string, value: string) => {
     if (typeof window !== "undefined") window.sessionStorage.setItem(key, value);
@@ -878,9 +930,28 @@ export function FindingsTab({ caseId }: { caseId: string }) {
     }
   };
 
+  /**
+   * Bulgu kararı (onayla / reddet). Hata durumda **sessizce yutulmaz**:
+   * karar kaydedilmediyse analiste bunu söyle, yoksa düğmeye tekrar
+   * basıp "neden değişmedi" diye aramak zorunda kalır.
+   */
   const verify = async (fid: string, status: "confirmed" | "rejected") => {
-    await api.verifyFinding(fid, status);
-    load();
+    setVerifying(fid);
+    setActionError(null);
+    try {
+      await api.verifyFinding(fid, status);
+      await load();
+    } catch (e: any) {
+      setActionError({
+        message:
+          status === "confirmed"
+            ? "Bulgu onaylanamadı. Bağlantıyı kontrol edip yeniden deneyin."
+            : "Bulgu reddedilemedi. Bağlantıyı kontrol edip yeniden deneyin.",
+        detail: e?.message,
+      });
+    } finally {
+      setVerifying(null);
+    }
   };
 
   const counts: Record<FindingFilter, number> = {
@@ -939,7 +1010,12 @@ export function FindingsTab({ caseId }: { caseId: string }) {
     }
   }, [focusFinding]);
 
-  if (err) return <p className="text-sm text-red-300">{err}</p>;
+  if (err)
+    return (
+      <p role="alert" className="rounded-[6px] border border-danger-line bg-danger-soft px-4 py-3 text-[13px] text-danger">
+        {err}
+      </p>
+    );
 
   const running = scan?.status === "running" || scan?.status === "queued";
 
@@ -950,19 +1026,20 @@ export function FindingsTab({ caseId }: { caseId: string }) {
         ? filter === "rejected"
           ? "Reddedilen bulgu yok."
           : hiddenRejected > 0 && filter === "all"
-            ? `${hiddenRejected} reddedilen bulgu gizlendi — düşük güvenli sonuçlar varsayılan olarak gösterilmez.`
+            ? `${hiddenRejected} reddedilen bulgu gizlendi. Düşük güvenli sonuçlar varsayılan olarak gösterilmez.`
             : "Bu filtreye uyan bulgu yok."
         : hiddenLowAuth > 0
           ? `${hiddenLowAuth} düşük güvenilirlikli bulgu gizlendi.`
           : "Bu filtreye uyan bulgu yok.";
 
   return (
-    <div className="space-y-4 animate-fade">
-      <div className="flex flex-wrap items-center gap-2">
+    <div className="space-y-4">
+      {/* Filtreler */}
+      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-b border-line pb-3">
         <div
           role="tablist"
           aria-label="Bulgu durumuna göre filtrele"
-          className="flex flex-wrap items-center gap-1.5"
+          className="flex flex-wrap items-center gap-x-5 gap-y-1"
         >
           {FINDING_FILTERS.map((f, i) => {
             const active = filter === f.value;
@@ -982,20 +1059,20 @@ export function FindingsTab({ caseId }: { caseId: string }) {
                 title={f.hint}
                 onClick={() => applyFilter(f.value)}
                 onKeyDown={(e) => onTabKeyDown(e, i)}
-                className={`rounded-full border px-3 py-1 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 ${
+                className={`relative flex items-center gap-1.5 pb-2 pt-1 text-[13px] transition-colors ${
                   active
-                    ? "border-blue-500/50 bg-blue-500/10 text-blue-200"
-                    : "border-slate-800 bg-slate-900 text-slate-400 hover:border-slate-700 hover:text-slate-200"
+                    ? "font-medium text-ink after:absolute after:inset-x-0 after:bottom-[-1px] after:h-[2px] after:bg-accent"
+                    : "text-ink-3 hover:text-ink"
                 }`}
               >
                 {f.label}
-                <span className="mono ml-1.5 text-[10px] opacity-70">{n}</span>
+                <span className="numeric text-ink-3">{n}</span>
               </button>
             );
           })}
         </div>
 
-        <div className="ml-auto flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-4">
           <button
             type="button"
             aria-pressed={hideLowAuth}
@@ -1005,15 +1082,13 @@ export function FindingsTab({ caseId }: { caseId: string }) {
                 ? "Düşük güvenilirlikli hesapları tekrar göster"
                 : "Güvenilirliği 0.35 altındaki hesapları gizle"
             }
-            className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 ${
-              hideLowAuth
-                ? "border-red-500/40 bg-red-500/10 text-red-200"
-                : "border-slate-800 bg-slate-900 text-slate-400 hover:border-slate-700 hover:text-slate-200"
+            className={`inline-flex items-center gap-1.5 text-[12px] transition-colors ${
+              hideLowAuth ? "text-danger" : "text-ink-3 hover:text-ink"
             }`}
           >
-            <ShieldCheck size={12} />
+            {hideLowAuth ? <Eye size={12} aria-hidden /> : <EyeOff size={12} aria-hidden />}
             Düşük güvenilirliği gizle
-            <span className="mono text-[10px] opacity-70">{lowAuthCount}</span>
+            <span className="numeric text-ink-3">{lowAuthCount}</span>
           </button>
           <button
             type="button"
@@ -1022,130 +1097,142 @@ export function FindingsTab({ caseId }: { caseId: string }) {
             title={
               showRejected
                 ? "Reddedilen bulguları tekrar gizle"
-                : "Düşük güvenli reddedilen bulguları listeye ekle"
+                : "Reddedilen bulguları listeye ekle"
             }
-            className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 ${
-              showRejected
-                ? "border-amber-500/40 bg-amber-500/10 text-amber-200"
-                : "border-slate-800 bg-slate-900 text-slate-400 hover:border-slate-700 hover:text-slate-200"
+            className={`inline-flex items-center gap-1.5 text-[12px] transition-colors ${
+              showRejected ? "text-warn" : "text-ink-3 hover:text-ink"
             }`}
           >
-            {showRejected ? <Eye size={12} /> : <EyeOff size={12} />}
+            {showRejected ? <Eye size={12} aria-hidden /> : <EyeOff size={12} aria-hidden />}
             Reddedilenleri göster
-            <span className="mono text-[10px] opacity-70">{counts.rejected}</span>
+            <span className="numeric text-ink-3">{counts.rejected}</span>
           </button>
           {running && (
-            <span className="chip border-blue-500/40 bg-blue-500/10 text-blue-300">
-              <span className="live-dot h-1.5 w-1.5 rounded-full bg-blue-400" />
-              tarama sürüyor — bulgular canlı ekleniyor
+            <span className="status text-accent-ink">
+              <span className="pulse-live h-1.5 w-1.5 rounded-full bg-accent" aria-hidden />
+              tarama sürüyor
             </span>
           )}
         </div>
       </div>
 
+      {actionError && (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center justify-between gap-2 rounded-[6px] border border-danger-line bg-danger-soft px-3 py-2 text-[12.5px] text-danger"
+        >
+          <span className="inline-flex items-center gap-2" title={actionError.detail}>
+            <AlertTriangle size={13} aria-hidden />
+            {actionError.message}
+          </span>
+          <button
+            type="button"
+            onClick={() => setActionError(null)}
+            className="btn-quiet btn-sm"
+          >
+            <X size={12} aria-hidden />
+            Kapat
+          </button>
+        </div>
+      )}
+
       {focusEntity && (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-blue-500/40 bg-blue-500/5 px-3 py-2 text-xs text-blue-200">
-          <span className="inline-flex items-center gap-1.5">
-            <Eye size={13} className="text-blue-400" />
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-[6px] border border-accent-line bg-accent-soft px-3 py-2 text-[12.5px] text-accent-ink">
+          <span>
             {focusFinding ? (
               <>
                 Grafikten gelen bulgu vurgulanıyor:{" "}
                 <span className="font-medium">{focusFinding.label}</span>
-                <span className="text-blue-300/70">({focusFinding.platform})</span>
               </>
             ) : (
               <>
                 Grafikten gelen entity için bulgu bulunamadı:{" "}
-                <span className="mono">{focusEntity}</span>
+                <span className="numeric">{focusEntity}</span>
               </>
             )}
           </span>
-          <button type="button" onClick={clearFocus} className="btn-ghost btn-sm">
-            <X size={12} /> Vurguyu kaldır
+          <button type="button" onClick={clearFocus} className="btn-quiet btn-sm">
+            <X size={12} aria-hidden />
+            Vurguyu kaldır
           </button>
         </div>
       )}
 
       {hiddenLowAuth > 0 && (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-xs text-slate-400">
-          <span className="inline-flex items-center gap-1.5">
-            <ShieldCheck size={13} className="text-red-400" />
-            <span className="mono font-medium text-slate-200">{hiddenLowAuth}</span> düşük
-            güvenilirlikli hesap gizlendi
-            <span className="hidden text-slate-500 sm:inline">
-              — güvenilirlik &lt; 0.35 (boş/atıl hesap sinyali)
-            </span>
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-[6px] border border-line bg-sunken px-3 py-2 text-[12.5px] text-ink-3">
+          <span>
+            <span className="numeric font-medium text-ink-2">{hiddenLowAuth}</span> düşük
+            güvenilirlikli hesap gizlendi (güvenilirlik 0.35 altı)
           </span>
           <button
             type="button"
             onClick={() => applyHideLowAuth(false)}
-            className="btn-ghost btn-sm"
+            className="btn-secondary btn-sm"
           >
-            <Eye size={12} /> Göster
+            <Eye size={12} aria-hidden />
+            Göster
           </button>
         </div>
       )}
 
       {hiddenRejected > 0 && (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-xs text-slate-400">
-          <span className="inline-flex items-center gap-1.5">
-            <EyeOff size={13} className="text-slate-500" />
-            <span className="mono font-medium text-slate-200">{hiddenRejected}</span> reddedilen bulgu
-            gizlendi
-            <span className="hidden text-slate-500 sm:inline">
-              — yalnızca zayıf sinyal içeren düşük güvenli sonuçlar
-            </span>
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-[6px] border border-line bg-sunken px-3 py-2 text-[12.5px] text-ink-3">
+          <span>
+            <span className="numeric font-medium text-ink-2">{hiddenRejected}</span> reddedilen bulgu
+            gizlendi (yalnızca zayıf sinyal içeren sonuçlar)
           </span>
           <button
             type="button"
             onClick={() => applyShowRejected(true)}
-            className="btn-ghost btn-sm"
+            className="btn-secondary btn-sm"
           >
-            <Eye size={12} /> Göster
+            <Eye size={12} aria-hidden />
+            Göster
           </button>
         </div>
       )}
 
-      <div
-        id="findings-panel"
-        role="tabpanel"
-        aria-labelledby={`findings-tab-${filter}`}
-        className="space-y-4"
-      >
+      {/* Kayıt listesi: ayrı kartlar değil, tek bir sicil */}
+      <div id="findings-panel" role="tabpanel" aria-labelledby={`findings-tab-${filter}`}>
         {shown.length === 0 ? (
-          <div className="card p-10 text-center">
-            <p className="text-sm text-slate-400">{emptyMessage}</p>
+          <div className="panel px-6 py-14 text-center">
+            <p className="text-[13.5px] text-ink-2">{emptyMessage}</p>
             {hiddenLowAuth > 0 && (
               <button
                 type="button"
                 onClick={() => applyHideLowAuth(false)}
-                className="btn-ghost btn-sm mt-3"
+                className="btn-secondary btn-sm mt-4"
               >
-                <Eye size={12} /> {hiddenLowAuth} düşük güvenilirlikli bulguyu göster
+                <Eye size={12} aria-hidden />
+                {hiddenLowAuth} düşük güvenilirlikli bulguyu göster
               </button>
             )}
             {hiddenRejected > 0 && (
               <button
                 type="button"
                 onClick={() => applyShowRejected(true)}
-                className="btn-ghost btn-sm mt-3"
+                className="btn-secondary btn-sm mt-4"
               >
-                <Eye size={12} /> {hiddenRejected} reddedilen bulguyu göster
+                <Eye size={12} aria-hidden />
+                {hiddenRejected} reddedilen bulguyu göster
               </button>
             )}
           </div>
         ) : (
-          shown.map((f) => (
-            <FindingCard
-              key={f.id}
-              finding={f}
-              evidence={evidence[f.id]}
-              expanded={expanded === f.id}
-              highlighted={focusFinding?.id === f.id}
-              onToggleEvidence={toggleEvidence}
-              onVerify={verify}
-            />
-          ))
+          <div className="panel divide-y divide-line">
+            {shown.map((f) => (
+              <FindingRecord
+                key={f.id}
+                finding={f}
+                evidence={evidence[f.id]}
+                expanded={expanded === f.id}
+                highlighted={focusFinding?.id === f.id}
+                busy={verifying === f.id}
+                onToggleEvidence={toggleEvidence}
+                onVerify={verify}
+              />
+            ))}
+          </div>
         )}
       </div>
     </div>
@@ -1170,7 +1257,7 @@ const REPORT_STATUS_ORDER = ["confirmed", "candidate", "lead", "rejected"];
 
 /**
  * T-313 rapor bölümleri. Eski raporlarda alanlar yoktur → `null` döner ve
- * ilgili kart hiç render edilmez (sessiz geriye uyum).
+ * ilgili bölüm hiç render edilmez (sessiz geriye uyum).
  */
 function reportSections(data: CaseReportJson | null) {
   const platforms = data?.platform_distribution ?? data?.platform_breakdown ?? null;
@@ -1199,119 +1286,116 @@ function ReportSummary({ data }: { data: CaseReportJson }) {
   );
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       {summary && (
-        <div className="card space-y-4 p-5">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-100">
-              <BarChart3 size={15} className="text-blue-400" aria-hidden />
-              Yönetici Özeti
-            </h3>
-            <span className="mono text-[11px] text-slate-500">
+        <section className="panel">
+          <div className="panel-head">
+            <h2 className="panel-title">Yönetici özeti</h2>
+            <span className="numeric text-ink-3">
               oluşturuldu {formatDateTime(summary.generated_at)}
             </span>
           </div>
 
-          <dl className="grid gap-x-6 gap-y-1.5 text-xs sm:grid-cols-2">
-            <div className="flex gap-2">
-              <dt className="w-16 shrink-0 text-slate-500">Hedef</dt>
-              <dd className="text-slate-200">{summary.target_name || "—"}</dd>
-            </div>
-            <div className="flex gap-2">
-              <dt className="w-16 shrink-0 text-slate-500">Vaka</dt>
-              <dd className="truncate text-slate-200">{summary.case_name || "—"}</dd>
-            </div>
-            <div className="flex gap-2">
-              <dt className="w-16 shrink-0 text-slate-500">Mod</dt>
-              <dd className="mono text-slate-200">{summary.mode || "—"}</dd>
-            </div>
-            <div className="flex gap-2">
-              <dt className="w-16 shrink-0 text-slate-500">Tarama</dt>
-              <dd className="text-slate-300">
-                {formatDateTime(summary.scan_started_at)} → {formatDateTime(summary.scan_finished_at)}
-              </dd>
-            </div>
-          </dl>
-
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {[
-              { label: "entity", value: totals.entities },
-              { label: "platform", value: totals.platforms },
-              { label: "bulgu", value: totals.findings },
-              { label: "kanıt", value: totals.evidence },
-            ].map((item) => (
-              <div
-                key={item.label}
-                className="rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2"
-              >
-                <p className="mono text-lg font-medium text-slate-100">{item.value ?? 0}</p>
-                <p className="text-[10px] uppercase tracking-wider text-slate-500">{item.label}</p>
+          <div className="p-5">
+            <dl className="grid gap-x-8 gap-y-2 text-[12.5px] sm:grid-cols-2">
+              <div className="flex gap-2">
+                <dt className="w-20 shrink-0 text-ink-3">Hedef</dt>
+                <dd className="text-ink">{summary.target_name || "—"}</dd>
               </div>
-            ))}
+              <div className="flex gap-2">
+                <dt className="w-20 shrink-0 text-ink-3">Vaka</dt>
+                <dd className="truncate text-ink">{summary.case_name || "—"}</dd>
+              </div>
+              <div className="flex gap-2">
+                <dt className="w-20 shrink-0 text-ink-3">Mod</dt>
+                <dd className="numeric text-ink">{summary.mode || "—"}</dd>
+              </div>
+              <div className="flex gap-2">
+                <dt className="w-20 shrink-0 text-ink-3">Tarama</dt>
+                <dd className="numeric text-ink-2">
+                  {formatDateTime(summary.scan_started_at)} — {formatDateTime(summary.scan_finished_at)}
+                </dd>
+              </div>
+            </dl>
+
+            {/* Toplamlar: ölçü satırı, kart ızgarası değil */}
+            <dl className="mt-5 grid grid-cols-2 gap-x-8 gap-y-3 border-t border-line pt-4 sm:grid-cols-4">
+              {[
+                { label: "Hedef kaydı", value: totals.entities },
+                { label: "Platform", value: totals.platforms },
+                { label: "Bulgu", value: totals.findings },
+                { label: "Kanıt", value: totals.evidence },
+              ].map((item) => (
+                <div key={item.label}>
+                  <dd className="tabular text-[20px] font-semibold leading-none text-ink">
+                    {item.value ?? 0}
+                  </dd>
+                  <dt className="mt-1.5 text-[12px] text-ink-3">{item.label}</dt>
+                </div>
+              ))}
+            </dl>
+
+            {(statusEntries.length > 0 || otherStatuses.length > 0) && (
+              <div className="mt-5 border-t border-line pt-4">
+                <p className="section-heading">Durum dağılımı</p>
+                <div className="mt-2.5 flex flex-wrap items-center gap-x-5 gap-y-2">
+                  {statusEntries.map((row) => (
+                    <span key={row.status} className="flex items-center gap-2">
+                      <Badge value={row.status} />
+                      <span className="numeric text-ink-2">{row.count}</span>
+                    </span>
+                  ))}
+                  {otherStatuses.map(([status, count]) => (
+                    <span key={status} className="flex items-center gap-2">
+                      <Badge value={status} />
+                      <span className="numeric text-ink-2">{count}</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {summary.confidence_note && (
+              /* Panelin içinde ikinci bir kutu olmaz: not, ayraçla ayrılmış
+                 düz metindir. */
+              <p className="mt-5 border-t border-line pt-4 text-[12.5px] leading-relaxed text-ink-2">
+                {plainNote(summary.confidence_note)}
+              </p>
+            )}
           </div>
 
-          {(statusEntries.length > 0 || otherStatuses.length > 0) && (
-            <div>
-              <p className="section-title mb-1.5">Durum dağılımı</p>
-              <div className="flex flex-wrap items-center gap-2">
-                {statusEntries.map((row) => (
-                  <span key={row.status} className="inline-flex items-center gap-1.5">
-                    <Badge value={row.status} />
-                    <span className="mono text-[11px] text-slate-300">{row.count}</span>
-                  </span>
-                ))}
-                {otherStatuses.map(([status, count]) => (
-                  <span key={status} className="inline-flex items-center gap-1.5">
-                    <Badge value={status} />
-                    <span className="mono text-[11px] text-slate-300">{count}</span>
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {summary.confidence_note && (
-            <p className="flex items-start gap-2 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-xs leading-relaxed text-slate-400">
-              <Activity size={13} className="mt-0.5 shrink-0 text-blue-400" aria-hidden />
-              {plainNote(summary.confidence_note)}
-            </p>
-          )}
-
           {topFindings.length > 0 && (
-            <div className="overflow-hidden rounded-lg border border-slate-800">
-              <table className="w-full text-left text-xs">
-                <caption className="section-title bg-slate-900/80 px-3 py-2 text-left">
+            <div className="border-t border-line">
+              <table className="data-table">
+                <caption className="px-4 py-2.5 text-left text-[12px] font-medium text-ink-2">
                   En yüksek güvenli 5 bulgu
                 </caption>
-                <thead className="bg-slate-900/60 text-[10px] uppercase tracking-wider text-slate-500">
+                <thead>
                   <tr>
-                    <th scope="col" className="px-3 py-2 font-medium">
-                      Etiket
-                    </th>
-                    <th scope="col" className="px-3 py-2 font-medium">
-                      Platform
-                    </th>
-                    <th scope="col" className="px-3 py-2 font-medium">
-                      Durum
-                    </th>
-                    <th scope="col" className="px-3 py-2 text-right font-medium">
+                    <th scope="col">Etiket</th>
+                    <th scope="col">Platform</th>
+                    <th scope="col">Durum</th>
+                    <th scope="col" className="text-right">
                       Skor
                     </th>
-                    <th scope="col" className="px-3 py-2 font-medium">
+                    <th scope="col" className="hidden lg:table-cell">
                       Gerekçe
                     </th>
                   </tr>
                 </thead>
                 <tbody>
                   {topFindings.slice(0, 5).map((finding, index) => (
-                    <tr key={`${finding.platform}-${finding.label}-${index}`} className="border-t border-slate-800/80">
-                      <th scope="row" className="max-w-[180px] truncate px-3 py-2 font-normal text-slate-200">
+                    <tr key={`${finding.platform}-${finding.label}-${index}`}>
+                      <th
+                        scope="row"
+                        className="max-w-[180px] truncate text-left font-medium text-ink"
+                      >
                         {finding.url ? (
                           <a
                             href={finding.url}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="hover:text-blue-300 hover:underline"
+                            className="link"
                           >
                             {finding.label}
                           </a>
@@ -1319,55 +1403,57 @@ function ReportSummary({ data }: { data: CaseReportJson }) {
                           finding.label
                         )}
                       </th>
-                      <td className="px-3 py-2 text-slate-400">{platformMeta(finding.platform).label}</td>
-                      <td className="px-3 py-2">
+                      <td className="text-ink-3">{platformMeta(finding.platform).label}</td>
+                      <td>
                         <Badge value={finding.status} />
                       </td>
-                      <td className="mono px-3 py-2 text-right text-slate-300">
+                      <td className="numeric text-right text-ink-2">
                         {Math.round((finding.score ?? 0) * 100)}%
                       </td>
-                      <td className="px-3 py-2 text-[11px] text-slate-500">{finding.reason}</td>
+                      <td className="hidden max-w-xs truncate text-[12px] text-ink-3 lg:table-cell">
+                        {finding.reason}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
           )}
-        </div>
+        </section>
       )}
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid gap-5 lg:grid-cols-2">
         {platforms && (
-          <div className="card overflow-hidden">
-            <p className="section-title border-b border-slate-800 px-4 py-2.5">Platform dağılımı</p>
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-900/60 text-[10px] uppercase tracking-wider text-slate-500">
+          <section className="panel overflow-hidden">
+            <div className="panel-head">
+              <h2 className="panel-title">Platform dağılımı</h2>
+            </div>
+            <table className="data-table">
+              <thead>
                 <tr>
-                  <th scope="col" className="px-4 py-2 font-medium">
-                    Platform
-                  </th>
-                  <th scope="col" className="px-4 py-2 text-right font-medium">
+                  <th scope="col">Platform</th>
+                  <th scope="col" className="text-right">
                     Bulgu
                   </th>
-                  <th scope="col" className="px-4 py-2 text-right font-medium">
+                  <th scope="col" className="text-right">
                     En yüksek
                   </th>
-                  <th scope="col" className="px-4 py-2 text-right font-medium">
+                  <th scope="col" className="text-right">
                     Ortalama
                   </th>
                 </tr>
               </thead>
               <tbody>
                 {platforms.slice(0, 12).map((row) => (
-                  <tr key={row.platform} className="border-t border-slate-800/80">
-                    <th scope="row" className="px-4 py-1.5 font-normal text-slate-200">
+                  <tr key={row.platform}>
+                    <th scope="row" className="text-left font-medium text-ink">
                       {platformMeta(row.platform).label}
                     </th>
-                    <td className="mono px-4 py-1.5 text-right text-slate-300">{row.findings}</td>
-                    <td className="mono px-4 py-1.5 text-right text-slate-300">
+                    <td className="numeric text-right text-ink-2">{row.findings}</td>
+                    <td className="numeric text-right text-ink-2">
                       {Math.round((row.max_score ?? 0) * 100)}%
                     </td>
-                    <td className="mono px-4 py-1.5 text-right text-slate-400">
+                    <td className="numeric text-right text-ink-3">
                       {Math.round((row.avg_score ?? 0) * 100)}%
                     </td>
                   </tr>
@@ -1375,38 +1461,32 @@ function ReportSummary({ data }: { data: CaseReportJson }) {
               </tbody>
             </table>
             {platforms.length > 12 && (
-              <p className="border-t border-slate-800 px-4 py-1.5 text-[10px] text-slate-500">
-                +{platforms.length - 12} platform daha
+              <p className="border-t border-line px-4 py-2 text-[12px] text-ink-3">
+                {platforms.length - 12} platform daha
               </p>
             )}
-          </div>
+          </section>
         )}
 
         {(identityEdges.length > 0 || sharedGroups.length > 0 || identity?.confidence_note) && (
-          <div className="card space-y-3 p-4">
-            <p className="section-title flex items-center gap-1.5">
-              <Users size={12} className="text-blue-400" aria-hidden /> Kimlik / çapraz bağlantı özeti
-            </p>
+          <section className="panel p-5">
+            <h2 className="section-heading">Kimlik ve çapraz bağlantı özeti</h2>
             {identity?.confidence_note && (
-              <p className="text-[11px] leading-relaxed text-slate-400">
+              <p className="mt-2 text-[12px] leading-relaxed text-ink-3">
                 {plainNote(identity.confidence_note)}
               </p>
             )}
 
             {sharedGroups.length > 0 && (
-              <div>
-                <p className="mb-1 text-[10px] uppercase tracking-wider text-slate-500">
+              <div className="mt-4">
+                <p className="text-[12px] font-medium text-ink-2">
                   Paylaşılan kullanıcı adları ({sharedGroups.length})
                 </p>
-                <ul className="flex flex-wrap gap-1.5">
+                <ul className="mt-2 space-y-1">
                   {sharedGroups.slice(0, 8).map((group) => (
-                    <li
-                      key={group.username}
-                      className="inline-flex items-center gap-1.5 rounded-full border border-slate-700 bg-slate-800/60 px-2.5 py-0.5 text-[11px] text-slate-200"
-                    >
-                      <span className="mono">{group.username}</span>
-                      <span className="text-slate-500">·</span>
-                      <span className="text-slate-400">{group.platforms.join(", ")}</span>
+                    <li key={group.username} className="flex items-baseline gap-2 text-[12px]">
+                      <span className="numeric text-ink">{group.username}</span>
+                      <span className="text-ink-3">{group.platforms.join(", ")}</span>
                     </li>
                   ))}
                 </ul>
@@ -1414,141 +1494,132 @@ function ReportSummary({ data }: { data: CaseReportJson }) {
             )}
 
             {identityEdges.length > 0 && (
-              <table className="w-full text-left text-xs">
+              <table className="data-table mt-4">
                 <caption className="sr-only">Çapraz bağlantılar</caption>
-                <thead className="text-[10px] uppercase tracking-wider text-slate-500">
+                <thead>
                   <tr>
-                    <th scope="col" className="py-1 font-medium">
-                      Tip
-                    </th>
-                    <th scope="col" className="py-1 text-right font-medium">
+                    <th scope="col">Tip</th>
+                    <th scope="col" className="text-right">
                       Güven
                     </th>
-                    <th scope="col" className="py-1 font-medium">
-                      Gerekçe
-                    </th>
+                    <th scope="col">Gerekçe</th>
                   </tr>
                 </thead>
                 <tbody>
                   {identityEdges.slice(0, 8).map((edge, index) => (
-                    <tr key={`${edge.source}-${edge.target}-${index}`} className="border-t border-slate-800/80">
-                      <th scope="row" className="py-1 font-normal text-slate-300">
-                        {edge.type.replace(/_/g, " ")}
+                    <tr key={`${edge.source}-${edge.target}-${index}`}>
+                      <th scope="row" className="text-left font-normal text-ink-2" title={edge.type}>
+                        {edgeTypeLabel(edge.type)}
                       </th>
-                      <td className="mono py-1 text-right text-slate-300">
+                      <td className="numeric text-right text-ink-2">
                         {Math.round((edge.confidence ?? 0) * 100)}%
                       </td>
-                      <td className="py-1 text-[11px] text-slate-500">{edge.reason || "—"}</td>
+                      <td className="max-w-xs truncate text-[12px] text-ink-3">
+                        {edge.reason || "—"}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             )}
-          </div>
+          </section>
         )}
       </div>
 
       {timeline && (
-        <div className="card overflow-hidden">
-          <p className="section-title flex items-center gap-1.5 border-b border-slate-800 px-4 py-2.5">
-            <CalendarClock size={12} className="text-blue-400" aria-hidden /> Kronoloji (
-            {timeline.length})
-          </p>
-          <div className="max-h-72 overflow-y-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="sticky top-0 bg-slate-900/95 text-[10px] uppercase tracking-wider text-slate-500">
+        <section className="panel overflow-hidden">
+          <div className="panel-head">
+            <h2 className="panel-title">Kronoloji</h2>
+            <span className="numeric text-ink-3">{timeline.length} kayıt</span>
+          </div>
+          <div className="scroll-x max-h-72 overflow-y-auto">
+            <table className="data-table">
+              <thead className="sticky top-0">
                 <tr>
-                  <th scope="col" className="px-4 py-2 font-medium">
-                    Tarih
-                  </th>
-                  <th scope="col" className="px-4 py-2 font-medium">
-                    Platform
-                  </th>
-                  <th scope="col" className="px-4 py-2 font-medium">
-                    Kayıt
-                  </th>
-                  <th scope="col" className="px-4 py-2 font-medium">
+                  <th scope="col">Tarih</th>
+                  <th scope="col">Platform</th>
+                  <th scope="col">Kayıt</th>
+                  <th scope="col" className="hidden sm:table-cell">
                     Olay
                   </th>
                 </tr>
               </thead>
               <tbody>
                 {timeline.slice(0, 30).map((row, index) => (
-                  <tr key={`${row.date}-${row.label}-${index}`} className="border-t border-slate-800/80">
-                    <th scope="row" className="mono whitespace-nowrap px-4 py-1.5 font-normal text-slate-300">
+                  <tr key={`${row.date}-${row.label}-${index}`}>
+                    <th scope="row" className="numeric whitespace-nowrap text-left font-normal text-ink-2">
                       {formatDateTime(row.date)}
                     </th>
-                    <td className="px-4 py-1.5 text-slate-400">{platformMeta(row.platform).label}</td>
-                    <td className="max-w-[220px] truncate px-4 py-1.5 text-slate-200">{row.label}</td>
-                    <td className="mono px-4 py-1.5 text-[11px] text-slate-500">{row.event}</td>
+                    <td className="text-ink-3">{platformMeta(row.platform).label}</td>
+                    <td className="max-w-[220px] truncate text-ink">{row.label}</td>
+                    <td className="hidden text-[12px] text-ink-3 sm:table-cell" title={row.event}>
+                      {timelineEventLabel(row.event)}
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
           {timeline.length > 30 && (
-            <p className="border-t border-slate-800 px-4 py-1.5 text-[10px] text-slate-500">
-              +{timeline.length - 30} kayıt daha
+            <p className="border-t border-line px-4 py-2 text-[12px] text-ink-3">
+              {timeline.length - 30} kayıt daha
             </p>
           )}
-        </div>
+        </section>
       )}
 
       {evidence && (
-        <div className="card space-y-3 p-4">
-          <p className="section-title flex items-center gap-1.5">
-            <FileText size={12} className="text-blue-400" aria-hidden /> Kanıt özeti
-          </p>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-            <div className="rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2">
-              <p className="mono text-lg font-medium text-slate-100">{evidence.total ?? 0}</p>
-              <p className="text-[10px] uppercase tracking-wider text-slate-500">toplam kanıt</p>
+        <section className="panel p-5">
+          <h2 className="section-heading">Kanıt özeti</h2>
+          <dl className="mt-3 grid grid-cols-2 gap-x-8 gap-y-3 sm:grid-cols-3">
+            <div>
+              <dd className="tabular text-[20px] font-semibold leading-none text-ink">
+                {evidence.total ?? 0}
+              </dd>
+              <dt className="mt-1.5 text-[12px] text-ink-3">Toplam kanıt</dt>
             </div>
-            <div className="rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2">
-              <p className="mono text-lg font-medium text-slate-100">
+            <div>
+              <dd className="tabular text-[20px] font-semibold leading-none text-ink">
                 {evidence.linked_to_entities ?? 0}
-              </p>
-              <p className="text-[10px] uppercase tracking-wider text-slate-500">entity&apos;ye bağlı</p>
+              </dd>
+              <dt className="mt-1.5 text-[12px] text-ink-3">Hedefe bağlı</dt>
             </div>
-            <div className="rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2">
-              <p className="mono text-sm font-medium text-slate-200">
+            <div>
+              <dd className="numeric text-[13px] font-medium text-ink">
                 {formatDateTime(evidence.retention_until)}
-              </p>
-              <p className="text-[10px] uppercase tracking-wider text-slate-500">saklama bitişi</p>
+              </dd>
+              <dt className="mt-1.5 text-[12px] text-ink-3">Saklama bitişi</dt>
             </div>
-          </div>
+          </dl>
+
           {evidence.by_entity && evidence.by_entity.length > 0 && (
-            <table className="w-full text-left text-xs">
-              <caption className="section-title pb-1 text-left">
-                En çok kanıtı olan entity&apos;ler
+            <table className="data-table mt-4">
+              <caption className="pb-1 text-left text-[12px] font-medium text-ink-2">
+                En çok kanıtı olan hedef kayıtları
               </caption>
-              <thead className="text-[10px] uppercase tracking-wider text-slate-500">
+              <thead>
                 <tr>
-                  <th scope="col" className="py-1 font-medium">
-                    Entity
-                  </th>
-                  <th scope="col" className="py-1 font-medium">
-                    Platform
-                  </th>
-                  <th scope="col" className="py-1 text-right font-medium">
+                  <th scope="col">Kayıt</th>
+                  <th scope="col">Platform</th>
+                  <th scope="col" className="text-right">
                     Kanıt
                   </th>
                 </tr>
               </thead>
               <tbody>
                 {evidence.by_entity.slice(0, 10).map((row) => (
-                  <tr key={row.entity_id} className="border-t border-slate-800/80">
-                    <th scope="row" className="max-w-[240px] truncate py-1 font-normal text-slate-200">
+                  <tr key={row.entity_id}>
+                    <th scope="row" className="max-w-[240px] truncate text-left font-normal text-ink">
                       {row.label}
                     </th>
-                    <td className="py-1 text-slate-400">{platformMeta(row.platform).label}</td>
-                    <td className="mono py-1 text-right text-slate-300">{row.evidence}</td>
+                    <td className="text-ink-3">{platformMeta(row.platform).label}</td>
+                    <td className="numeric text-right text-ink-2">{row.evidence}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           )}
-        </div>
+        </section>
       )}
     </div>
   );
@@ -1634,32 +1705,34 @@ export function ReportTab({ caseId }: { caseId: string }) {
   );
 
   return (
-    <div className="space-y-4">
-      <div className="card max-w-xl space-y-4 p-5">
-        <h3 className="text-sm font-semibold text-slate-100">Rapor Oluştur</h3>
-        <p className="text-sm leading-relaxed text-slate-400">
-          Rapor; vaka bilgileri, bulgular, skor kırılımları ve kanıt metaverilerini içerir.
+    <div className="space-y-5">
+      <section className="panel max-w-2xl p-5">
+        <h2 className="section-heading">Rapor oluştur</h2>
+        <p className="mt-1.5 text-[12.5px] leading-relaxed text-ink-3">
+          Rapor; vaka bilgilerini, bulguları, skor kırılımlarını ve kanıt metaverilerini içerir.
         </p>
-        <div className="flex gap-2">
+
+        <div className="mt-4 flex flex-wrap gap-2">
           <button onClick={() => generate("pdf")} disabled={busy !== null} className="btn-primary">
-            {busy === "pdf" ? "Oluşturuluyor…" : "PDF Rapor"}
+            {busy === "pdf" ? "Oluşturuluyor" : "PDF rapor"}
           </button>
-          <button onClick={() => generate("json")} disabled={busy !== null} className="btn-ghost">
-            {busy === "json" ? "Oluşturuluyor…" : "JSON Rapor"}
+          <button onClick={() => generate("json")} disabled={busy !== null} className="btn-secondary">
+            {busy === "json" ? "Oluşturuluyor" : "JSON rapor"}
           </button>
           <button
             type="button"
             onClick={() => generate("html")}
             disabled={busy !== null}
-            className="btn-ghost"
-            aria-label="HTML raporu indir (sayfada açılmaz)"
-            title="HTML raporu indirir; tarayıcıda açmaz"
+            className="btn-secondary"
+            aria-label="HTML raporunu indir (sayfada açılmaz)"
+            title="HTML raporunu indirir; tarayıcıda açmaz"
           >
             {busy === "html" ? (
-              "Oluşturuluyor…"
+              "Oluşturuluyor"
             ) : (
               <>
-                <FileCode2 size={13} /> HTML indir
+                <FileCode2 size={13} aria-hidden />
+                HTML indir
               </>
             )}
           </button>
@@ -1667,52 +1740,51 @@ export function ReportTab({ caseId }: { caseId: string }) {
             type="button"
             onClick={loadSummary}
             disabled={summaryBusy}
-            className="btn-ghost"
+            className="btn-quiet"
             aria-label="Yönetici özetini yenile"
           >
-            <RefreshCw size={13} className={summaryBusy ? "animate-spin" : ""} />
-            {summaryBusy ? "Özet hazırlanıyor…" : "Özeti yenile"}
+            <RefreshCw size={13} className={summaryBusy ? "animate-spin" : ""} aria-hidden />
+            Özeti yenile
           </button>
         </div>
-        {err && <p className="text-sm text-red-300">{err}</p>}
+
+        {err && (
+          <p role="alert" className="mt-4 text-[12.5px] text-danger">
+            {err}
+          </p>
+        )}
+
         {reports.length > 0 && (
-          <div className="space-y-1">
-            <p className="section-title">Son oluşturulanlar</p>
-            {reports.map((r) => (
-              <a
-                key={r.id}
-                href={r.download_url}
-                className="block text-sm text-blue-400 hover:underline"
-              >
-                {r.format.toUpperCase()} —{" "}
-                {r.created_at ? new Date(r.created_at).toLocaleString("tr-TR") : r.id}
-              </a>
-            ))}
+          <div className="mt-5 border-t border-line pt-4">
+            <p className="text-[12px] font-medium text-ink-2">Son oluşturulanlar</p>
+            <ul className="mt-2 space-y-1">
+              {reports.map((r) => (
+                <li key={r.id}>
+                  <a href={r.download_url} className="link text-[12.5px]">
+                    {r.format.toUpperCase()} —{" "}
+                    {r.created_at ? new Date(r.created_at).toLocaleString("tr-TR") : r.id}
+                  </a>
+                </li>
+              ))}
+            </ul>
           </div>
         )}
-      </div>
+      </section>
 
       {!summary && summaryBusy && (
-        <div className="card flex items-center gap-2 p-5 text-sm text-slate-400">
-          <Loader2 size={14} className="animate-spin" aria-hidden /> Yönetici özeti hazırlanıyor…
+        <div className="panel flex items-center gap-2 px-5 py-6 text-[13px] text-ink-3">
+          <Loader2 size={14} className="animate-spin" aria-hidden />
+          Yönetici özeti hazırlanıyor
         </div>
       )}
 
       {!summary && !summaryBusy && summaryErr && (
-        <p className="text-sm text-amber-300">Yönetici özeti yüklenemedi: {summaryErr}</p>
+        <p className="rounded-[6px] border border-warn-line bg-warn-soft px-4 py-3 text-[13px] text-warn">
+          Yönetici özeti yüklenemedi: {summaryErr}
+        </p>
       )}
 
-      {summary && hasSections && (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <p className="section-title">Yönetici özeti</p>
-            {summaryBusy && (
-              <span className="mono text-[10px] text-slate-500">güncelleniyor…</span>
-            )}
-          </div>
-          <ReportSummary data={summary} />
-        </div>
-      )}
+      {summary && hasSections && <ReportSummary data={summary} />}
     </div>
   );
 }
@@ -1727,45 +1799,58 @@ export function AuditTab({ caseId }: { caseId: string }) {
     api.getAudit(caseId).then(setLogs).catch((e) => setErr(e.message));
   }, [caseId]);
 
-  if (err) return <p className="text-sm text-red-300">{err}</p>;
+  if (err)
+    return (
+      <p role="alert" className="rounded-[6px] border border-danger-line bg-danger-soft px-4 py-3 text-[13px] text-danger">
+        {err}
+      </p>
+    );
 
   return (
-    <div className="card overflow-hidden">
-      <table className="w-full text-sm">
-        <thead className="bg-slate-900/80 text-left">
-          <tr className="text-[11px] uppercase tracking-wider text-slate-500">
-            <th className="px-4 py-2.5 font-medium">Zaman</th>
-            <th className="px-4 py-2.5 font-medium">Aktör</th>
-            <th className="px-4 py-2.5 font-medium">Aksiyon</th>
-            <th className="px-4 py-2.5 font-medium">Hedef</th>
-            <th className="px-4 py-2.5 font-medium">Detay</th>
-          </tr>
-        </thead>
-        <tbody>
-          {logs.map((l) => (
-            <tr key={l.id} className="border-t border-slate-800/80">
-              <td className="mono whitespace-nowrap px-4 py-2 text-[11px] text-slate-400">
-                {l.created_at ? new Date(l.created_at).toLocaleString("tr-TR") : ""}
-              </td>
-              <td className="px-4 py-2 text-slate-300">{l.actor || "—"}</td>
-              <td className="px-4 py-2">
-                <Badge value={l.action} />
-              </td>
-              <td className="px-4 py-2 text-slate-400">{l.target || "—"}</td>
-              <td className="max-w-xs truncate px-4 py-2 font-mono text-[11px] text-slate-500">
-                {l.details ? JSON.stringify(l.details) : ""}
-              </td>
-            </tr>
-          ))}
-          {logs.length === 0 && (
+    <div className="panel overflow-hidden">
+      <div className="scroll-x">
+        <table className="data-table">
+          <thead>
             <tr>
-              <td colSpan={5} className="px-4 py-8 text-center text-slate-500">
-                Kayıt yok.
-              </td>
+              <th scope="col">Zaman</th>
+              <th scope="col">Aktör</th>
+              <th scope="col">Aksiyon</th>
+              <th scope="col" className="hidden md:table-cell">
+                Hedef
+              </th>
+              <th scope="col" className="hidden lg:table-cell">
+                Detay
+              </th>
             </tr>
-          )}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {logs.map((l) => (
+              <tr key={l.id}>
+                <td className="numeric whitespace-nowrap text-ink-3">
+                  {l.created_at ? new Date(l.created_at).toLocaleString("tr-TR") : ""}
+                </td>
+                <td className="text-ink-2">{l.actor || "—"}</td>
+                <td className="text-ink-2">
+                  <span title={l.action}>{auditActionLabel(l.action)}</span>
+                </td>
+                <td className="hidden max-w-[16rem] truncate font-mono text-[12px] text-ink-3 md:table-cell">
+                  {l.target || "—"}
+                </td>
+                <td className="hidden max-w-xs truncate font-mono text-[12px] text-ink-3 lg:table-cell">
+                  {l.details ? JSON.stringify(l.details) : ""}
+                </td>
+              </tr>
+            ))}
+            {logs.length === 0 && (
+              <tr>
+                <td colSpan={5} className="px-4 py-10 text-center text-ink-3">
+                  Bu vaka için denetim kaydı yok.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

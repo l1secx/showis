@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import cytoscape from "cytoscape";
 import {
+  AlertTriangle,
   Download,
   ExternalLink,
   FileCode2,
@@ -11,29 +12,133 @@ import {
   Image as ImageIcon,
   Info,
   RotateCcw,
-  SlidersHorizontal,
   X,
 } from "lucide-react";
 import { api, type GraphData } from "../../../lib/api";
 import { platformMeta } from "./platform-meta";
+import { readTheme, useTheme, type Theme } from "../../components/use-theme";
+import { edgeTypeLabel } from "./vocabulary";
 
 /* ------------------------------------------------------------------ */
 /* Sabitler                                                            */
 /* ------------------------------------------------------------------ */
 
-const EDGE_TYPES: { value: string; label: string; color: string }[] = [
-  { value: "same_person", label: "Aynı kişi", color: "#34d399" },
-  { value: "cross_link", label: "Çapraz bağlantı", color: "#22d3ee" },
-  { value: "has_account", label: "Hesap", color: "#94a3b8" },
-  { value: "mentions", label: "Bahsetme", color: "#fbbf24" },
-  { value: "owned_domain", label: "Alan adı", color: "#a78bfa" },
-];
+/** `#rrggbb` → `rgba(...)`. Açık zeminde marka rengini dolgu yerine kenar olarak kullanırız. */
+function tint(hex: string, alpha: number): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+}
 
-const EDGE_TYPE_LABEL = (type: string) =>
-  EDGE_TYPES.find((t) => t.value === type)?.label ?? type.replace(/_/g, " ");
+/** Platform marka rengi — açık temada koyu ton, koyu temada açık ton. */
+function platformColor(platform: string, theme: Theme): string {
+  const meta = platformMeta(platform);
+  return theme === "dark" ? meta.accent : meta.color;
+}
 
-const EDGE_TYPE_COLOR = (type: string) =>
-  EDGE_TYPES.find((t) => t.value === type)?.color ?? "#475569";
+/**
+ * Cytoscape stil sayfası — temaya göre üretilir.
+ *
+ * Düğümlerde marka rengi kenar olarak kullanılır, dolgu markanın düşük
+ * opaklıklı tonudur; böylece açık zeminde ağır lekeler oluşmaz.
+ */
+function buildStyle(theme: Theme): cytoscape.StylesheetStyle[] {
+  const dark = theme === "dark";
+  const textColor = dark ? "#edeff2" : "#15181d";
+  const halo = dark ? "#22262c" : "#ffffff";
+  const edgeText = dark ? "#8d96a2" : "#6e7784";
+  const selectColor = dark ? "#84aad1" : "#1b3a5b";
+
+  return [
+    {
+      selector: "node",
+      style: {
+        "background-color": (ele: cytoscape.NodeSingular) =>
+          tint(platformColor(String(ele.data("platform")), theme), dark ? 0.2 : 0.16),
+        "border-width": 2,
+        "border-color": (ele: cytoscape.NodeSingular) =>
+          platformColor(String(ele.data("platform")), theme),
+        width: "mapData(score, 0, 1, 20, 44)",
+        height: "mapData(score, 0, 1, 20, 44)",
+        label: "data(label)",
+        color: textColor,
+        "font-size": 9,
+        "min-zoomed-font-size": 7,
+        "text-valign": "bottom",
+        "text-margin-y": 4,
+        "text-wrap": "wrap",
+        "text-max-width": "120px",
+        "text-outline-color": halo,
+        "text-outline-width": 3,
+      },
+    },
+    {
+      selector: "node:selected",
+      style: {
+        "border-width": 4,
+        "border-color": selectColor,
+        "background-opacity": 1,
+      },
+    },
+    {
+      selector: "edge",
+      style: {
+        width: "mapData(confidence, 0, 1, 0.6, 3.5)",
+        "line-color": (ele: cytoscape.EdgeSingular) =>
+          EDGE_TYPE_COLORS[theme][String(ele.data("type"))] ?? edgeText,
+        "target-arrow-color": (ele: cytoscape.EdgeSingular) =>
+          EDGE_TYPE_COLORS[theme][String(ele.data("type"))] ?? edgeText,
+        "target-arrow-shape": "triangle",
+        "arrow-scale": 0.7,
+        "curve-style": "bezier",
+        opacity: (ele: cytoscape.EdgeSingular) =>
+          0.4 + Math.min(1, Number(ele.data("confidence") ?? 0)) * 0.5,
+        label: "",
+        "font-size": 7,
+        color: edgeText,
+        "text-outline-color": halo,
+        "text-outline-width": 3,
+      },
+    },
+    {
+      selector: "edge.labelled",
+      style: {
+        label: "data(label)",
+        "text-rotation": "autorotate",
+      },
+    },
+  ];
+}
+
+/** Dışa aktarılan görselin arka planı — ekrandaki yüzeyin rengi. */
+const EXPORT_BG: Record<Theme, string> = {
+  light: "#ffffff",
+  dark: "#22262c",
+};
+
+/**
+ * Kenar tipleri. Renkleri temaya göre değişir: koyu zeminde koyu renkler
+ * kaybolduğu için açık tonları kullanılır.
+ */
+const EDGE_TYPE_COLORS: Record<Theme, Record<string, string>> = {
+  light: {
+    same_person: "#2a5b3f",
+    cross_link: "#1b3a5b",
+    has_account: "#6e7784",
+    mentions: "#8a5a14",
+    owned_domain: "#5b3e7a",
+  },
+  dark: {
+    same_person: "#6fbf8e",
+    cross_link: "#84aad1",
+    has_account: "#8d96a2",
+    mentions: "#d9a441",
+    owned_domain: "#b79ce0",
+  },
+};
+
+const EDGE_TYPE_LABEL = edgeTypeLabel;
 
 const LAYOUTS: { value: LayoutName; label: string; hint: string }[] = [
   { value: "cose", label: "Force", hint: "Kuvvet tabanlı (cose) yerleşim" },
@@ -210,6 +315,25 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [hover, setHover] = useState<HoverEdge | null>(null);
   const [stats, setStats] = useState({ visibleNodes: 0, visibleEdges: 0, layoutMs: 0 });
+  /** Dışa aktarma hatası — boşsa hata yok. */
+  const [exportError, setExportError] = useState<{ message: string; detail?: string } | null>(
+    null
+  );
+  const theme = useTheme();
+
+  /** Kenar rengi — tema ve tipe göre. */
+  const edgeColor = (type: string) =>
+    EDGE_TYPE_COLORS[theme][type] ?? (theme === "dark" ? "#8d96a2" : "#6e7784");
+
+  /** Filtrelenmiş öğelerin noktası — tema ile sönümlenir. */
+  const mutedDot = theme === "dark" ? "#4e5660" : "#c8ced6";
+
+  /* --- tema değişince grafiği yeniden boyamak (yerleşim korunur) --- */
+  useEffect(() => {
+    const cy = cyRef.current;
+    if (!cy) return;
+    cy.style(buildStyle(theme));
+  }, [theme]);
 
   /* --- tercihleri yükle (yalnız istemci) --- */
   useEffect(() => {
@@ -357,69 +481,15 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
     const cy = cytoscape({
       container: containerRef.current,
       elements,
-      wheelSensitivity: 0.2,
+      // `wheelSensitivity` bilinçli olarak ayarlanmaz: kütüphane, özel değerin
+      // standart farelerde doğal olmayan (ani) yakınlaştırma yaptığını uyarır.
       minZoom: 0.08,
       maxZoom: 3,
       motionBlur: false,
       textureOnViewport: false,
       hideEdgesOnViewport: dense,
       pixelRatio: dense ? 1 : "auto",
-      style: [
-        {
-          selector: "node",
-          style: {
-            "background-color": (ele: cytoscape.NodeSingular) =>
-              platformMeta(String(ele.data("platform"))).color,
-            "border-width": 1.5,
-            "border-color": "#8b98ab",
-            width: "mapData(score, 0, 1, 20, 44)",
-            height: "mapData(score, 0, 1, 20, 44)",
-            label: "data(label)",
-            color: "#cfd9e6",
-            "font-size": 9,
-            "min-zoomed-font-size": 7,
-            "text-valign": "bottom",
-            "text-margin-y": 4,
-            "text-wrap": "wrap",
-            "text-max-width": "120px",
-            "text-outline-color": "#05080e",
-            "text-outline-width": 2,
-          },
-        },
-        {
-          selector: "node:selected",
-          style: {
-            "border-width": 3,
-            "border-color": "#22d3ee",
-            "background-opacity": 1,
-          },
-        },
-        {
-          selector: "edge",
-          style: {
-            width: "mapData(confidence, 0, 1, 0.6, 3.5)",
-            "line-color": (ele: cytoscape.EdgeSingular) => EDGE_TYPE_COLOR(String(ele.data("type"))),
-            "target-arrow-color": (ele: cytoscape.EdgeSingular) => EDGE_TYPE_COLOR(String(ele.data("type"))),
-            "target-arrow-shape": "triangle",
-            "arrow-scale": 0.7,
-            "curve-style": "bezier",
-            opacity: (ele: cytoscape.EdgeSingular) =>
-              0.35 + Math.min(1, Number(ele.data("confidence") ?? 0)) * 0.55,
-            label: "",
-            "font-size": 8,
-            color: "#94a3b8",
-            "text-outline-color": "#05080e",
-            "text-outline-width": 2,
-          },
-        },
-        {
-          selector: "edge.labelled",
-          style: {
-            label: "data(label)",
-            "text-rotation": "autorotate",
-          },
-        },
-      ],
+      style: buildStyle(readTheme()),
       layout: { name: "preset" },
     });
 
@@ -433,13 +503,17 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
     });
     cy.on("mouseover", "edge", (evt) => {
       const edge = evt.target as cytoscape.EdgeSingular;
+      edge.addClass("labelled");
       const position = (evt as unknown as { renderedPosition?: { x: number; y: number } })
         .renderedPosition;
       const found = edges.find((e) => e.id === edge.id());
       if (!found || !position) return;
       setHover({ x: position.x, y: position.y, edge: found });
     });
-    cy.on("mouseout", "edge", () => setHover(null));
+    cy.on("mouseout", "edge", (evt) => {
+      (evt.target as cytoscape.EdgeSingular).removeClass("labelled");
+      setHover(null);
+    });
     cy.on("grab", () => setHover(null));
 
     return () => {
@@ -487,8 +561,9 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
       });
     });
 
-    // Kalabalık grafiklerde kenar etiketi çizimi pahalı: 200'ün altında göster.
-    cy.edges().toggleClass("labelled", keptEdges <= 200);
+    // Kenar etiketleri dinlenme anında görünür: dinlenme hâlinde düğüm
+    // yazılarıyla çakışıyor ve grafiğin okunmasını zorlaştırıyordu.
+    cy.edges().removeClass("labelled");
     setStats((s) => ({ ...s, visibleNodes: keepNodes.size, visibleEdges: keptEdges }));
   }, [prefs.minConfidence, prefs.platforms, prefs.edgeTypes, nodes, edges]);
 
@@ -497,9 +572,14 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
     const cy = cyRef.current;
     if (!cy) return;
     cy.nodes().unselect();
+    cy.edges().removeClass("labelled");
     if (selectedId) {
       const node = cy.$id(selectedId);
-      if (node.nonempty()) node.select();
+      if (node.nonempty()) {
+        node.select();
+        // Seçili kaydın bağlantılarının güven değerleri etiketlenir.
+        node.connectedEdges().addClass("labelled");
+      }
     }
   }, [selectedId, nodes]);
 
@@ -551,11 +631,28 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
   /* --- dışa aktarma --- */
   const exportBase = `showis-graph-${caseId.slice(0, 8)}`;
 
+  /**
+   * Dışa aktarım hatası — sessizce yutulmaz. Görsel, JSON ve GEXF üretimi
+   * tarayıcıda çalışır; başarısızlıkta kullanıcıya söylenmelidir.
+   */
+  const runExport = (kind: "PNG" | "JSON" | "GEXF", fn: () => void) => {
+    setExportError(null);
+    try {
+      fn();
+    } catch (e: any) {
+      setExportError({
+        message: `${kind} dışa aktarımı başarısız oldu. Tarayıcıyı ve ağ bağlantısını kontrol edip yeniden deneyin.`,
+        detail: e?.message,
+      });
+    }
+  };
+
   const exportPng = () => {
     const cy = cyRef.current;
     if (!cy) return;
     const dense = nodes.length > 300;
-    const uri = cy.png({ full: true, scale: dense ? 1 : 2, bg: "#05080e" });
+    // Arka plan, ekrandaki yüzeyle aynı olmalı — eski koyu temanın siyahı değil.
+    const uri = cy.png({ full: true, scale: dense ? 1 : 2, bg: EXPORT_BG[theme] });
     downloadHref(`${exportBase}.png`, uri);
   };
 
@@ -631,9 +728,18 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
   };
 
   /* --- erken çıkışlar --- */
-  if (error) return <p className="text-sm text-red-300">Grafik yüklenemedi: {error}</p>;
+  if (error)
+    return (
+      <p role="alert" className="rounded-[6px] border border-danger-line bg-danger-soft px-4 py-3 text-[13px] text-danger">
+        Grafik yüklenemedi: {error}
+      </p>
+    );
   if (!loading && nodes.length === 0) {
-    return <p className="text-sm text-slate-400">Henüz entity/edge yok — önce tarama çalıştırın.</p>;
+    return (
+      <p className="rounded-[6px] border border-line bg-sunken px-4 py-3 text-[13px] text-ink-3">
+        Henüz kayıt veya bağlantı yok. Önce bir tarama çalıştırın.
+      </p>
+    );
   }
 
   const togglePlatform = (platform: string) => {
@@ -656,14 +762,17 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
   const hiddenEdges = edges.length - visibleEdges.length;
 
   return (
-    <div className="space-y-4 animate-fade">
+    <div className="space-y-5">
       {/* ---------- Araç çubuğu ---------- */}
-      <div className="card space-y-4 p-4">
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
+      <section className="panel space-y-4 p-4">
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
           <div className="flex items-center gap-2">
-            <SlidersHorizontal size={14} className="text-blue-400" aria-hidden />
-            <span className="section-title">Yerleşim</span>
-            <div role="group" aria-label="Grafik yerleşimi" className="flex gap-1.5">
+            <span className="text-[12px] text-ink-3">Yerleşim</span>
+            <div
+              role="group"
+              aria-label="Grafik yerleşimi"
+              className="flex items-center gap-0.5 rounded-[6px] border border-line-2 bg-sunken p-0.5"
+            >
               {LAYOUTS.map((l) => (
                 <button
                   key={l.value}
@@ -672,10 +781,10 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
                   aria-label={`${l.label} yerleşimi`}
                   title={l.hint}
                   onClick={() => updatePrefs({ layout: l.value })}
-                  className={`rounded-full border px-3 py-1 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 ${
+                  className={`rounded-[4px] px-2.5 py-1 text-[12px] transition-colors ${
                     prefs.layout === l.value
-                      ? "border-blue-500/50 bg-blue-500/10 text-blue-200"
-                      : "border-slate-800 bg-slate-900 text-slate-400 hover:border-slate-700 hover:text-slate-200"
+                      ? "bg-surface font-medium text-ink shadow-scrim"
+                      : "text-ink-3 hover:text-ink"
                   }`}
                 >
                   {l.label}
@@ -685,36 +794,45 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
             <button
               type="button"
               onClick={() => runLayout(prefs.layout)}
-              className="btn-ghost btn-sm"
+              className="btn-quiet btn-sm"
               aria-label="Grafiği yeniden yerleştir"
               title="Yeniden yerleştir"
             >
-              <RotateCcw size={12} />
+              <RotateCcw size={12} aria-hidden />
             </button>
           </div>
 
           <div className="ml-auto flex flex-wrap items-center gap-2">
-            <span className="mono text-[11px] text-slate-500" aria-live="polite">
-              {stats.visibleNodes}/{nodes.length} düğüm · {stats.visibleEdges}/{edges.length} kenar
-              {stats.layoutMs > 0 && ` · yerleşim ${stats.layoutMs} ms`}
+            <span className="numeric text-ink-3" aria-live="polite">
+              {stats.visibleNodes}/{nodes.length} düğüm, {stats.visibleEdges}/{edges.length} kenar
+              {stats.layoutMs > 0 && ` — yerleşim ${stats.layoutMs} ms`}
             </span>
-            <button type="button" onClick={exportPng} className="btn-ghost btn-sm" aria-label="PNG olarak indir">
-              <ImageIcon size={12} /> PNG
+            <button type="button" onClick={() => runExport("PNG", exportPng)}
+              className="btn-secondary btn-sm"
+              aria-label="PNG olarak indir">
+              <ImageIcon size={12} aria-hidden />
+              PNG
             </button>
-            <button type="button" onClick={exportJson} className="btn-ghost btn-sm" aria-label="JSON olarak indir">
-              <Download size={12} /> JSON
+            <button type="button" onClick={() => runExport("JSON", exportJson)}
+              className="btn-secondary btn-sm"
+              aria-label="JSON olarak indir">
+              <Download size={12} aria-hidden />
+              JSON
             </button>
-            <button type="button" onClick={exportGexf} className="btn-ghost btn-sm" aria-label="GEXF olarak indir">
-              <FileCode2 size={12} /> GEXF
+            <button type="button" onClick={() => runExport("GEXF", exportGexf)}
+              className="btn-secondary btn-sm"
+              aria-label="GEXF olarak indir">
+              <FileCode2 size={12} aria-hidden />
+              GEXF
             </button>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
-          <label className="flex min-w-[280px] flex-1 items-center gap-3 text-xs text-slate-400">
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-3 border-t border-line pt-4">
+          <label className="flex min-w-[280px] flex-1 items-center gap-3 text-[12px] text-ink-3">
             <span className="whitespace-nowrap">
               Güven eşiği{" "}
-              <span className="mono text-slate-200">{prefs.minConfidence.toFixed(2)}</span>
+              <span className="numeric text-ink">{prefs.minConfidence.toFixed(2)}</span>
             </span>
             <input
               type="range"
@@ -724,18 +842,17 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
               value={prefs.minConfidence}
               onChange={(e) => updatePrefs({ minConfidence: Number(e.target.value) })}
               aria-label="Kenar güven eşiği"
-              className="h-1 w-full max-w-xs cursor-pointer accent-blue-400"
+              className="h-1 w-full max-w-xs cursor-pointer accent-[rgb(var(--accent))]"
             />
-            <span className="mono whitespace-nowrap text-[11px] text-slate-500">
+            <span className="numeric whitespace-nowrap text-ink-3">
               {hiddenEdges > 0 ? `${hiddenEdges} gizli` : "tümü görünür"}
             </span>
           </label>
 
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="section-title mr-1">Kenar tipi</span>
-            <span className="mr-1 text-[10px] text-slate-600">seçim yoksa tümü</span>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <span className="text-[12px] text-ink-3">Kenar tipi</span>
             {edgeTypeCounts.length === 0 && (
-              <span className="text-[11px] text-slate-500">kenar yok</span>
+              <span className="text-[12px] text-ink-3">kenar yok</span>
             )}
             {edgeTypeCounts.map(([type, count]) => {
               const included = prefs.edgeTypes.includes(type);
@@ -749,28 +866,25 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
                     included ? "filtreden çıkar" : "filtreye ekle"
                   }`}
                   onClick={() => toggleEdgeType(type)}
-                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 ${
-                    active
-                      ? "border-slate-700 bg-slate-800/60 text-slate-200"
-                      : "border-slate-900 bg-slate-950 text-slate-600"
+                  className={`inline-flex items-center gap-1.5 text-[12px] transition-colors ${
+                    active ? "text-ink-2" : "text-ink-3 line-through"
                   }`}
                 >
                   <span
-                    className="h-1.5 w-1.5 rounded-full"
-                    style={{ backgroundColor: active ? EDGE_TYPE_COLOR(type) : "#334155" }}
+                    className="h-2 w-2 shrink-0 rounded-[1px]"
+                    style={{ backgroundColor: active ? edgeColor(type) : mutedDot }}
                     aria-hidden
                   />
                   {EDGE_TYPE_LABEL(type)}
-                  <span className="mono opacity-70">{count}</span>
+                  <span className="numeric text-ink-3">{count}</span>
                 </button>
               );
             })}
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-1.5 border-t border-slate-800/80 pt-3">
-          <span className="section-title mr-1">Platform</span>
-          <span className="mr-1 text-[10px] text-slate-600">seçim yoksa tümü</span>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-line pt-4">
+          <span className="text-[12px] text-ink-3">Platform</span>
           {platformCounts.map(([platform, count]) => {
             const included = prefs.platforms.includes(platform);
             const active = prefs.platforms.length === 0 || included;
@@ -783,21 +897,19 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
                   included ? "filtreden çıkar" : "filtreye ekle"
                 }`}
                 onClick={() => togglePlatform(platform)}
-                className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 ${
-                  active
-                    ? "border-slate-700 bg-slate-800/60 text-slate-200"
-                    : "border-slate-900 bg-slate-950 text-slate-600"
+                className={`inline-flex items-center gap-1.5 text-[12px] transition-colors ${
+                  active ? "text-ink-2" : "text-ink-3 line-through"
                 }`}
               >
                 <span
-                  className="h-1.5 w-1.5 rounded-full"
+                  className="h-2 w-2 shrink-0 rounded-[1px]"
                   style={{
-                    backgroundColor: active ? platformMeta(platform).accent : "#334155",
+                    backgroundColor: active ? platformColor(platform, theme) : mutedDot,
                   }}
                   aria-hidden
                 />
                 {platformMeta(platform).label}
-                <span className="mono opacity-70">{count}</span>
+                <span className="numeric text-ink-3">{count}</span>
               </button>
             );
           })}
@@ -805,57 +917,79 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
             <button
               type="button"
               onClick={resetFilters}
-              className="btn-ghost btn-sm ml-1"
+              className="btn-quiet btn-sm"
               aria-label="Filtreleri sıfırla"
             >
-              <X size={12} /> Sıfırla
+              <X size={12} aria-hidden />
+              Sıfırla
             </button>
           )}
         </div>
-      </div>
+      </section>
+
+      {exportError && (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center justify-between gap-2 rounded-[6px] border border-danger-line bg-danger-soft px-3 py-2 text-[12.5px] text-danger"
+        >
+          <span className="inline-flex items-center gap-2" title={exportError.detail}>
+            <AlertTriangle size={13} aria-hidden />
+            {exportError.message}
+          </span>
+          <button
+            type="button"
+            onClick={() => setExportError(null)}
+            className="btn-quiet btn-sm"
+          >
+            <X size={12} aria-hidden />
+            Kapat
+          </button>
+        </div>
+      )}
 
       {/* ---------- Tuval + detay paneli ---------- */}
-      <div className={`grid gap-4 ${selectedNode ? "xl:grid-cols-[minmax(0,1fr)_380px]" : ""}`}>
+      <div className={`grid gap-5 ${selectedNode ? "xl:grid-cols-[minmax(0,1fr)_380px]" : ""}`}>
         <div
-          className="relative overflow-hidden rounded-xl border border-slate-800 bg-slate-950"
+          className="relative overflow-hidden rounded-[8px] border border-line bg-surface"
           onMouseLeave={() => setHover(null)}
         >
           <div ref={containerRef} className="h-[560px] w-full xl:h-[620px]" />
 
           {edges.length === 0 && (
-            <p className="pointer-events-none absolute left-3 top-3 flex items-center gap-1.5 rounded-lg border border-slate-800 bg-slate-950/90 px-2.5 py-1.5 text-[11px] text-slate-400">
-              <Info size={12} className="text-slate-500" /> Kenar yok — yalnızca entity&apos;ler gösteriliyor.
+            <p className="pointer-events-none absolute left-3 top-3 flex items-center gap-1.5 rounded-[6px] border border-line bg-surface/95 px-2.5 py-1.5 text-[12px] text-ink-3">
+              <Info size={12} className="text-ink-3" aria-hidden />
+              Kenar yok, yalnızca kayıtlar gösteriliyor.
             </p>
           )}
 
           {hover && (
             <div
-              className="pointer-events-none absolute z-20 max-w-[280px] -translate-x-1/2 -translate-y-[calc(100%+10px)] rounded-lg border border-slate-700 bg-slate-950/95 px-3 py-2 shadow-card"
+              className="pointer-events-none absolute z-20 max-w-[280px] -translate-x-1/2 -translate-y-[calc(100%+10px)] rounded-[6px] border border-line-2 bg-overlay px-3 py-2 shadow-popover"
               style={{ left: hover.x, top: hover.y }}
               role="tooltip"
             >
-              <p className="flex items-center gap-1.5 text-[11px] font-medium text-slate-200">
+              <p className="flex items-center gap-1.5 text-[12px] font-medium text-ink">
                 <span
-                  className="h-1.5 w-1.5 rounded-full"
-                  style={{ backgroundColor: EDGE_TYPE_COLOR(hover.edge.type) }}
+                  className="h-2 w-2 shrink-0 rounded-[1px]"
+                  style={{ backgroundColor: edgeColor(hover.edge.type) }}
                   aria-hidden
                 />
                 {EDGE_TYPE_LABEL(hover.edge.type)}
-                <span className="mono ml-auto text-blue-300">
+                <span className="numeric ml-auto text-ink-2">
                   {Math.round(hover.edge.confidence * 100)}%
                 </span>
               </p>
               {hover.edge.reason ? (
-                <p className="mt-1 text-[11px] leading-snug text-slate-400">{hover.edge.reason}</p>
+                <p className="mt-1 text-[12px] leading-snug text-ink-3">{hover.edge.reason}</p>
               ) : (
-                <p className="mt-1 text-[11px] text-slate-500">Gerekçe kaydı yok.</p>
+                <p className="mt-1 text-[12px] text-ink-3">Gerekçe kaydı yok.</p>
               )}
             </div>
           )}
 
           {selectedNode && (
-            <p className="pointer-events-none absolute bottom-3 left-3 text-[10px] text-slate-600">
-              Bir düğüme tıklayın · Esc ile paneli kapatın
+            <p className="pointer-events-none absolute bottom-3 left-3 text-[12px] text-ink-3">
+              Bir düğüme tıklayın — Esc ile paneli kapatın
             </p>
           )}
         </div>
@@ -867,28 +1001,24 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
             aria-modal="false"
             aria-labelledby="entity-panel-title"
             tabIndex={-1}
-            className="card flex max-h-[620px] flex-col overflow-hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
+            className="panel flex max-h-[620px] flex-col overflow-hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/25"
           >
-            <div className="flex items-start justify-between gap-3 border-b border-slate-800 px-4 py-3">
+            <div className="flex items-start justify-between gap-3 border-b border-line px-4 py-3">
               <div className="min-w-0">
-                <p className="section-title">Entity</p>
-                <h3 id="entity-panel-title" className="mt-0.5 truncate text-sm font-semibold text-slate-100">
+                <h3 id="entity-panel-title" className="truncate text-[14px] font-semibold text-ink">
                   {selectedNode.label}
                 </h3>
-                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                  <span
-                    className="chip"
-                    style={{ borderColor: `${platformMeta(selectedNode.platform).accent}66` }}
-                  >
+                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <span className="inline-flex items-center gap-1.5 text-[12px] text-ink-3">
                     <span
-                      className="h-1.5 w-1.5 rounded-full"
-                      style={{ backgroundColor: platformMeta(selectedNode.platform).accent }}
+                      className="h-2 w-2 shrink-0 rounded-[1px]"
+                      style={{ backgroundColor: platformColor(selectedNode.platform, theme) }}
                       aria-hidden
                     />
                     {platformMeta(selectedNode.platform).label}
                   </span>
-                  <span className="chip">{selectedNode.type}</span>
-                  <span className="mono text-sm font-medium text-blue-300">
+                  <span className="text-[12px] text-ink-3">{selectedNode.type}</span>
+                  <span className="numeric text-[13px] font-medium text-ink">
                     {Math.round(selectedNode.score * 100)}%
                   </span>
                 </div>
@@ -896,11 +1026,11 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
               <button
                 type="button"
                 onClick={() => setSelectedId(null)}
-                className="btn-ghost btn-sm shrink-0"
+                className="btn-quiet btn-sm shrink-0"
                 aria-label="Entity panelini kapat"
                 title="Kapat (Esc)"
               >
-                <X size={13} />
+                <X size={13} aria-hidden />
               </button>
             </div>
 
@@ -908,46 +1038,57 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
               <div className="flex flex-wrap gap-2">
                 <Link
                   href={`/cases/${caseId}/findings?entity=${encodeURIComponent(selectedNode.id)}`}
-                  className="btn-ghost btn-sm"
+                  className="btn-secondary btn-sm"
                   title={`Bulgular sekmesinde bu entity'yi vurgular (${selectedFindingId ?? ""})`}
                 >
-                  <ExternalLink size={12} /> Bulgular sekmesinde aç
+                  <ExternalLink size={12} aria-hidden />
+                  Bulgular sekmesinde aç
                 </Link>
-                <button type="button" onClick={focusSelected} className="btn-ghost btn-sm" aria-label="Düğüme odaklan">
-                  <Focus size={12} /> Odakla
+                <button
+                  type="button"
+                  onClick={focusSelected}
+                  className="btn-secondary btn-sm"
+                  aria-label="Düğüme odaklan"
+                >
+                  <Focus size={12} aria-hidden />
+                  Odakla
                 </button>
                 {safeUrl(selectedNode.url) && (
                   <a
                     href={safeUrl(selectedNode.url) as string}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="btn-ghost btn-sm"
+                    className="btn-secondary btn-sm"
                   >
-                    <ExternalLink size={12} /> Profil
+                    <ExternalLink size={12} aria-hidden />
+                    Profil
                   </a>
                 )}
               </div>
 
               {selectedFindingId && (
-                <p className="mono break-all rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-1.5 text-[10px] text-slate-500">
+                <p className="numeric break-all rounded-[6px] border border-line bg-sunken px-2.5 py-1.5 text-[12px] text-ink-3">
                   bulgu kimliği: {selectedFindingId}
                 </p>
               )}
 
               <div>
-                <p className="section-title mb-1.5">Nitelikler</p>
+                <p className="section-heading">Nitelikler</p>
                 {Object.keys(selectedNode.attributes).length === 0 ? (
-                  <p className="text-[11px] text-slate-500">Nitelik kaydı yok.</p>
+                  <p className="mt-1.5 text-[12px] text-ink-3">Nitelik kaydı yok.</p>
                 ) : (
-                  <dl className="space-y-1.5">
+                  <dl className="mt-2 space-y-1.5">
                     {sortedAttributes(selectedNode.attributes)
                       .slice(0, 24)
                       .map(([key, value]) => (
-                        <div key={key} className="grid grid-cols-[104px_minmax(0,1fr)] gap-2 text-[11px]">
-                          <dt className="truncate font-mono text-slate-500" title={key}>
+                        <div
+                          key={key}
+                          className="grid grid-cols-[104px_minmax(0,1fr)] gap-2 text-[12px]"
+                        >
+                          <dt className="truncate font-mono text-ink-3" title={key}>
                             {key}
                           </dt>
-                          <dd className="break-words text-slate-300">{attrText(value)}</dd>
+                          <dd className="break-words text-ink-2">{attrText(value)}</dd>
                         </div>
                       ))}
                   </dl>
@@ -955,36 +1096,36 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
               </div>
 
               <div>
-                <p className="section-title mb-1.5">Bağlantılar ({linkedEdges.length})</p>
+                <p className="section-heading">Bağlantılar ({linkedEdges.length})</p>
                 {hiddenLinkedCount > 0 && (
-                  <p className="mb-2 text-[10px] text-slate-500">
+                  <p className="mt-1.5 text-[12px] text-ink-3">
                     {hiddenLinkedCount} bağlantı filtre nedeniyle gizli.
                   </p>
                 )}
                 {linkedEdges.length === 0 ? (
-                  <p className="text-[11px] text-slate-500">
-                    {hiddenLinkedCount > 0 ? "Görünür kenar yok." : "Bu entity'nin kenarı yok."}
+                  <p className="mt-1.5 text-[12px] text-ink-3">
+                    {hiddenLinkedCount > 0 ? "Görünür kenar yok." : "Bu kaydın kenarı yok."}
                   </p>
                 ) : (
-                  <ul className="space-y-2">
+                  <ul className="mt-2 space-y-2">
                     {linkedEdges.map(({ edge, outgoing, other }) => (
                       <li
                         key={edge.id}
-                        className="rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2"
+                        className="rounded-[6px] border border-line bg-sunken px-2.5 py-2"
                       >
                         <div className="flex items-center gap-1.5">
                           <span
-                            className="h-1.5 w-1.5 shrink-0 rounded-full"
-                            style={{ backgroundColor: EDGE_TYPE_COLOR(edge.type) }}
+                            className="h-2 w-2 shrink-0 rounded-[1px]"
+                            style={{ backgroundColor: edgeColor(edge.type) }}
                             aria-hidden
                           />
-                          <span className="text-[11px] font-medium text-slate-200">
+                          <span className="text-[12px] font-medium text-ink-2">
                             {EDGE_TYPE_LABEL(edge.type)}
                           </span>
-                          <span className="mono text-[11px] text-blue-300">
+                          <span className="numeric text-[12px] text-ink-2">
                             {Math.round(edge.confidence * 100)}%
                           </span>
-                          <span className="ml-auto text-[10px] text-slate-500">
+                          <span className="ml-auto text-[12px] text-ink-3">
                             {outgoing ? "giden" : "gelen"}
                           </span>
                         </div>
@@ -992,14 +1133,14 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
                           <button
                             type="button"
                             onClick={() => setSelectedId(other.id)}
-                            className="mt-1 block max-w-full truncate text-left text-[11px] text-blue-400 hover:underline"
+                            className="mt-1 block max-w-full truncate text-left text-[12px] text-accent-ink hover:underline"
                             title={`${other.label} — ${other.platform}`}
                           >
                             {other.label}
                           </button>
                         )}
                         {edge.reason && (
-                          <p className="mt-1 text-[11px] leading-snug text-slate-400">{edge.reason}</p>
+                          <p className="mt-1 text-[12px] leading-snug text-ink-3">{edge.reason}</p>
                         )}
                       </li>
                     ))}

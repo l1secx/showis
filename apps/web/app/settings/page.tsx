@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import { Loader2 } from "lucide-react";
 
 interface ProviderSetting {
   id: string;
@@ -10,6 +11,13 @@ interface ProviderSetting {
   secret_masked?: string | null;
   enabled: boolean;
 }
+
+const TABS = [
+  { key: "github", label: "GitHub" },
+  { key: "llm", label: "LLM" },
+  { key: "brave", label: "Brave Search" },
+  { key: "serpapi", label: "SerpAPI" },
+];
 
 export default function SettingsPage() {
   const [providers, setProviders] = useState<ProviderSetting[]>([]);
@@ -32,7 +40,7 @@ export default function SettingsPage() {
         setProviders(data);
       }
     } catch {
-      // fallback for dev
+      // API erişilemezse ayar formları boş kalır; sayfa çökmmez.
     } finally {
       setLoading(false);
     }
@@ -46,7 +54,6 @@ export default function SettingsPage() {
 
   const handleSave = async (providerKey: string) => {
     setStatusMsg(null);
-    const existing = getProvider(providerKey);
     const config: Record<string, any> = {};
 
     if (providerKey === "llm") {
@@ -69,7 +76,7 @@ export default function SettingsPage() {
       });
 
       if (res.ok) {
-        setStatusMsg({ type: "success", text: `${providerKey.toUpperCase()} ayarları başarıyla kaydedildi.` });
+        setStatusMsg({ type: "success", text: "Ayar kaydedildi." });
         setSecretInput("");
         fetchProviders();
       } else {
@@ -83,7 +90,7 @@ export default function SettingsPage() {
   const handleTest = async (providerKey: string) => {
     const existing = getProvider(providerKey);
     if (!existing) {
-      setStatusMsg({ type: "error", text: "Önce anahtarı kaydediniz." });
+      setStatusMsg({ type: "error", text: "Önce anahtarı kaydedin." });
       return;
     }
     setTesting(true);
@@ -94,265 +101,288 @@ export default function SettingsPage() {
       });
       const data = await res.json();
       if (data.ok) {
-        setStatusMsg({ type: "success", text: `Bağlantı testi başarılı! ${data.message || ""}` });
+        setStatusMsg({ type: "success", text: "Bağlantı doğrulandı." });
       } else {
-        setStatusMsg({ type: "error", text: `Bağlantı testi başarısız: ${data.error || "Bilinmeyen hata"}` });
+        setStatusMsg({
+          type: "error",
+          text: `Bağlantı testi başarısız: ${data.error || "bilinmeyen hata"}`,
+        });
       }
     } catch (e: any) {
-      setStatusMsg({ type: "error", text: `Test hatası: ${e.message}` });
+      setStatusMsg({ type: "error", text: e.message || "Bağlantı hatası" });
     } finally {
       setTesting(false);
     }
   };
 
+  const masked = (key: string) => getProvider(key)?.secret_masked;
+
   return (
-    <div className="max-w-4xl mx-auto animate-in">
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold tracking-tight text-slate-100 mb-2">Ayarlar & Sağlayıcılar (BYOK)</h1>
-        <p className="text-slate-400">
-          Dış servis anahtarlarınızı buraya girebilirsiniz. Anahtarlarınız sunucuda Fernet (AES-128-CBC) ile şifrelenir ve maskeli gösterilir.
+    <div className="max-w-3xl space-y-6">
+      <div>
+        <h1 className="page-title">Sağlayıcı ayarları</h1>
+        <p className="page-subtitle">
+          Dış servis anahtarlarınızı bu ekrandan girersiniz. Anahtarlar sunucuda Fernet
+          (AES-128-CBC) ile şifrelenir ve yalnızca maskeli biçimde gösterilir.
         </p>
       </div>
 
       {statusMsg && (
         <div
-          className={`p-4 rounded-lg mb-6 border ${
+          role="status"
+          className={`rounded-[6px] border px-4 py-2.5 text-[13px] ${
             statusMsg.type === "success"
-              ? "bg-emerald-50 border-emerald-300 text-emerald-800"
-              : "bg-rose-50 border-rose-200 text-rose-800"
+              ? "border-ok-line bg-ok-soft text-ok"
+              : "border-danger-line bg-danger-soft text-danger"
           }`}
         >
           {statusMsg.text}
         </div>
       )}
 
-      {/* Tabs */}
-      <div className="flex border-b border-slate-800 mb-6 gap-2">
-        {["github", "llm", "brave", "serpapi"].map((tab) => (
-          <button
-            key={tab}
-            onClick={() => {
-              setActiveTab(tab);
-              setStatusMsg(null);
-              setSecretInput("");
-            }}
-            className={`px-4 py-2 font-medium text-sm transition-colors border-b-2 -mb-px ${
-              activeTab === tab
-                ? "border-blue-500 text-blue-400"
-                : "border-transparent text-slate-400 hover:text-slate-200"
-            }`}
-          >
-            {tab.toUpperCase()}
-          </button>
-        ))}
-      </div>
+      <div>
+        <div className="flex gap-6 border-b border-line">
+          {TABS.map((tab) => (
+            <button
+              key={tab.key}
+              onClick={() => {
+                setActiveTab(tab.key);
+                setStatusMsg(null);
+                setSecretInput("");
+              }}
+              aria-current={activeTab === tab.key ? "page" : undefined}
+              className={`relative pb-2.5 pt-1 text-[13px] transition-colors ${
+                activeTab === tab.key
+                  ? "font-medium text-ink after:absolute after:inset-x-0 after:bottom-[-1px] after:h-[2px] after:bg-accent"
+                  : "text-ink-3 hover:text-ink"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
 
-      {/* Tab Content */}
-      <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 shadow-sm">
-        {activeTab === "github" && (
-          <div className="space-y-4">
-            <h2 className="text-lg font-semibold text-slate-100">GitHub Personal Access Token (PAT)</h2>
-            <p className="text-sm text-slate-400">
-              API limitini 60 istek/saat seviyesinden 5.000 istek/saat seviyesine çıkarır. Yalnızca public okuma izni yeterlidir.
+        <div className="panel mt-5">
+          {loading ? (
+            <p className="flex items-center gap-2 px-5 py-8 text-[13px] text-ink-3">
+              <Loader2 size={14} className="animate-spin" aria-hidden />
+              Ayarlar yükleniyor
             </p>
-            {getProvider("github")?.secret_masked && (
-              <div className="text-xs bg-slate-900 p-2 rounded border border-slate-800 text-slate-300 font-mono">
-                Mevcut Token: {getProvider("github")?.secret_masked}
-              </div>
-            )}
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1">
-                {getProvider("github")?.secret_masked ? "Yeni Token (değiştirmek istemiyorsanız boş bırakın)" : "GitHub PAT"}
-              </label>
-              <input
-                type="password"
-                placeholder="ghp_..."
-                value={secretInput}
-                onChange={(e) => setSecretInput(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-2 text-slate-200 text-sm focus:border-blue-500 focus:outline-none"
-              />
-            </div>
-            <div className="flex gap-3 pt-2">
-              <button
-                onClick={() => handleSave("github")}
-                className="bg-blue-600 hover:bg-blue-500 text-white font-medium px-4 py-2 rounded-lg text-sm transition-colors"
-              >
-                Kaydet
-              </button>
-              <button
-                onClick={() => handleTest("github")}
-                disabled={testing}
-                className="bg-slate-800 hover:bg-slate-800 text-slate-200 font-medium px-4 py-2 rounded-lg text-sm transition-colors disabled:opacity-50"
-              >
-                {testing ? "Test Ediliyor..." : "Bağlantıyı Test Et"}
-              </button>
-            </div>
-          </div>
-        )}
+          ) : (
+            <>
+              {activeTab === "github" && (
+                <div className="p-5">
+                  <h2 className="section-heading">GitHub Personal Access Token</h2>
+                  <p className="mt-1.5 text-[12.5px] leading-relaxed text-ink-3">
+                    API limitini saatte 60 istek seviyesinden 5.000 istek seviyesine çıkarır.
+                    Yalnızca herkese açık veri okuma izni yeterlidir.
+                  </p>
 
-        {activeTab === "llm" && (
-          <div className="space-y-4">
-            <h2 className="text-lg font-semibold text-slate-100">OpenAI-Uyumlu LLM Sağlayıcısı</h2>
-            <p className="text-sm text-slate-400">
-              OpenCode Go veya standart OpenAI uç noktasını yapılandırın.
-            </p>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1">Preset</label>
-                <select
-                  value={llmPreset}
-                  onChange={(e) => {
-                    setLlmPreset(e.target.value);
-                    if (e.target.value === "opencode-go") {
-                      setLlmBaseUrl("https://opencode.ai/inference/go/openai/v1");
-                      setLlmModel("minimax-m3.1-flash");
-                    } else if (e.target.value === "opencode-zen") {
-                      setLlmBaseUrl("https://opencode.ai/inference/openai/v1");
-                      setLlmModel("gpt-4o-mini");
-                    }
-                  }}
-                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-2 text-slate-200 text-sm focus:border-blue-500 focus:outline-none"
-                >
-                  <option value="opencode-go">OpenCode Go ($10/ay)</option>
-                  <option value="opencode-zen">OpenCode Zen</option>
-                  <option value="custom">Özel OpenAI-Uyumlu</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1">Model Adı</label>
-                <input
-                  type="text"
-                  value={llmModel}
-                  onChange={(e) => setLlmModel(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-2 text-slate-200 text-sm focus:border-blue-500 focus:outline-none"
-                />
-              </div>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1">Base URL</label>
-              <input
-                type="text"
-                value={llmBaseUrl}
-                onChange={(e) => setLlmBaseUrl(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-2 text-slate-200 text-sm focus:border-blue-500 focus:outline-none"
-              />
-            </div>
-            {getProvider("llm")?.secret_masked && (
-              <div className="text-xs bg-slate-900 p-2 rounded border border-slate-800 text-slate-300 font-mono">
-                Mevcut API Key: {getProvider("llm")?.secret_masked}
-              </div>
-            )}
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1">
-                {getProvider("llm")?.secret_masked ? "Yeni API Key (boş bırakılırsa mevcut korunur)" : "API Key"}
-              </label>
-              <input
-                type="password"
-                placeholder="sk-..."
-                value={secretInput}
-                onChange={(e) => setSecretInput(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-2 text-slate-200 text-sm focus:border-blue-500 focus:outline-none"
-              />
-            </div>
-            <div className="flex gap-3 pt-2">
-              <button
-                onClick={() => handleSave("llm")}
-                className="bg-blue-600 hover:bg-blue-500 text-white font-medium px-4 py-2 rounded-lg text-sm transition-colors"
-              >
-                Kaydet
-              </button>
-              <button
-                onClick={() => handleTest("llm")}
-                disabled={testing}
-                className="bg-slate-800 hover:bg-slate-800 text-slate-200 font-medium px-4 py-2 rounded-lg text-sm transition-colors disabled:opacity-50"
-              >
-                {testing ? "Test Ediliyor..." : "Bağlantıyı Test Et"}
-              </button>
-            </div>
-          </div>
-        )}
+                  {masked("github") && (
+                    <p className="numeric mt-4 rounded-[6px] border border-line bg-sunken px-3 py-2 text-ink-2">
+                      Kayıtlı token: {masked("github")}
+                    </p>
+                  )}
 
-        {activeTab === "brave" && (
-          <div className="space-y-4">
-            <h2 className="text-lg font-semibold text-slate-100">Brave Search API</h2>
-            <p className="text-sm text-slate-400">
-              Web ve platform arama motoru desteği için Brave Search API anahtarı (önerilen).
-            </p>
-            {getProvider("brave")?.secret_masked && (
-              <div className="text-xs bg-slate-900 p-2 rounded border border-slate-800 text-slate-300 font-mono">
-                Mevcut Anahtar: {getProvider("brave")?.secret_masked}
-              </div>
-            )}
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1">
-                {getProvider("brave")?.secret_masked ? "Yeni Token (boş bırakılırsa korunur)" : "Brave API Key"}
-              </label>
-              <input
-                type="password"
-                placeholder="BSA..."
-                value={secretInput}
-                onChange={(e) => setSecretInput(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-2 text-slate-200 text-sm focus:border-blue-500 focus:outline-none"
-              />
-            </div>
-            <div className="flex gap-3 pt-2">
-              <button
-                onClick={() => handleSave("brave")}
-                className="bg-blue-600 hover:bg-blue-500 text-white font-medium px-4 py-2 rounded-lg text-sm transition-colors"
-              >
-                Kaydet
-              </button>
-              <button
-                onClick={() => handleTest("brave")}
-                disabled={testing}
-                className="bg-slate-800 hover:bg-slate-800 text-slate-200 font-medium px-4 py-2 rounded-lg text-sm transition-colors disabled:opacity-50"
-              >
-                {testing ? "Test Ediliyor..." : "Bağlantıyı Test Et"}
-              </button>
-            </div>
-          </div>
-        )}
+                  <label className="mt-4 block">
+                    <span className="label">
+                      {masked("github")
+                        ? "Yeni token — değiştirmek istemiyorsanız boş bırakın"
+                        : "GitHub token"}
+                    </span>
+                    <input
+                      type="password"
+                      placeholder="ghp_…"
+                      value={secretInput}
+                      onChange={(e) => setSecretInput(e.target.value)}
+                      className="input font-mono"
+                    />
+                  </label>
 
-        {activeTab === "serpapi" && (
-          <div className="space-y-4">
-            <h2 className="text-lg font-semibold text-slate-100">SerpAPI (Google Arama)</h2>
-            <p className="text-sm text-slate-400">
-              Google arama sonuçları için alternatif sağlayıcı.
-            </p>
-            {getProvider("serpapi")?.secret_masked && (
-              <div className="text-xs bg-slate-900 p-2 rounded border border-slate-800 text-slate-300 font-mono">
-                Mevcut Anahtar: {getProvider("serpapi")?.secret_masked}
-              </div>
-            )}
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1">
-                {getProvider("serpapi")?.secret_masked ? "Yeni Token (boş bırakılırsa korunur)" : "SerpAPI Key"}
-              </label>
-              <input
-                type="password"
-                placeholder="serpapi key..."
-                value={secretInput}
-                onChange={(e) => setSecretInput(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-2 text-slate-200 text-sm focus:border-blue-500 focus:outline-none"
-              />
-            </div>
-            <div className="flex gap-3 pt-2">
-              <button
-                onClick={() => handleSave("serpapi")}
-                className="bg-blue-600 hover:bg-blue-500 text-white font-medium px-4 py-2 rounded-lg text-sm transition-colors"
-              >
-                Kaydet
-              </button>
-              <button
-                onClick={() => handleTest("serpapi")}
-                disabled={testing}
-                className="bg-slate-800 hover:bg-slate-800 text-slate-200 font-medium px-4 py-2 rounded-lg text-sm transition-colors disabled:opacity-50"
-              >
-                {testing ? "Test Ediliyor..." : "Bağlantıyı Test Et"}
-              </button>
-            </div>
-          </div>
-        )}
+                  <div className="mt-5 flex flex-wrap gap-2">
+                    <button onClick={() => handleSave("github")} className="btn-primary btn-sm">
+                      Kaydet
+                    </button>
+                    <button
+                      onClick={() => handleTest("github")}
+                      disabled={testing}
+                      className="btn-secondary btn-sm"
+                    >
+                      {testing ? "Test ediliyor" : "Bağlantıyı test et"}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {activeTab === "llm" && (
+                <div className="p-5">
+                  <h2 className="section-heading">OpenAI uyumlu LLM sağlayıcısı</h2>
+                  <p className="mt-1.5 text-[12.5px] leading-relaxed text-ink-3">
+                    OpenCode Go veya standart bir OpenAI uç noktası yapılandırılabilir. Anahtar
+                    sunucuda tutulur; tarama verisi LLM'e gönderilmeden önce redaksiyondan
+                    geçirilir.
+                  </p>
+
+                  <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                    <label className="block">
+                      <span className="label">Hazır ayar</span>
+                      <select
+                        value={llmPreset}
+                        onChange={(e) => {
+                          setLlmPreset(e.target.value);
+                          if (e.target.value === "opencode-go") {
+                            setLlmBaseUrl("https://opencode.ai/inference/go/openai/v1");
+                            setLlmModel("minimax-m3.1-flash");
+                          } else if (e.target.value === "opencode-zen") {
+                            setLlmBaseUrl("https://opencode.ai/inference/openai/v1");
+                            setLlmModel("gpt-4o-mini");
+                          }
+                        }}
+                        className="select"
+                      >
+                        <option value="opencode-go">OpenCode Go (10 USD / ay)</option>
+                        <option value="opencode-zen">OpenCode Zen</option>
+                        <option value="custom">Özel OpenAI uyumlu</option>
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className="label">Model adı</span>
+                      <input
+                        type="text"
+                        value={llmModel}
+                        onChange={(e) => setLlmModel(e.target.value)}
+                        className="input font-mono"
+                      />
+                    </label>
+                  </div>
+
+                  <label className="mt-4 block">
+                    <span className="label">Base URL</span>
+                    <input
+                      type="text"
+                      value={llmBaseUrl}
+                      onChange={(e) => setLlmBaseUrl(e.target.value)}
+                      className="input font-mono"
+                    />
+                  </label>
+
+                  {masked("llm") && (
+                    <p className="numeric mt-4 rounded-[6px] border border-line bg-sunken px-3 py-2 text-ink-2">
+                      Kayıtlı anahtar: {masked("llm")}
+                    </p>
+                  )}
+
+                  <label className="mt-4 block">
+                    <span className="label">
+                      {masked("llm")
+                        ? "Yeni API anahtarı — boş bırakılırsa mevcut korunur"
+                        : "API anahtarı"}
+                    </span>
+                    <input
+                      type="password"
+                      placeholder="sk-…"
+                      value={secretInput}
+                      onChange={(e) => setSecretInput(e.target.value)}
+                      className="input font-mono"
+                    />
+                  </label>
+
+                  <div className="mt-5 flex flex-wrap gap-2">
+                    <button onClick={() => handleSave("llm")} className="btn-primary btn-sm">
+                      Kaydet
+                    </button>
+                    <button onClick={() => handleTest("llm")} disabled={testing} className="btn-secondary btn-sm">
+                      {testing ? "Test ediliyor" : "Bağlantıyı test et"}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {activeTab === "brave" && (
+                <div className="p-5">
+                  <h2 className="section-heading">Brave Search API</h2>
+                  <p className="mt-1.5 text-[12.5px] leading-relaxed text-ink-3">
+                    Web ve platform arama motoru desteği için Brave Search API anahtarı.
+                  </p>
+
+                  {masked("brave") && (
+                    <p className="numeric mt-4 rounded-[6px] border border-line bg-sunken px-3 py-2 text-ink-2">
+                      Kayıtlı anahtar: {masked("brave")}
+                    </p>
+                  )}
+
+                  <label className="mt-4 block">
+                    <span className="label">
+                      {masked("brave")
+                        ? "Yeni anahtar — boş bırakılırsa korunur"
+                        : "Brave API anahtarı"}
+                    </span>
+                    <input
+                      type="password"
+                      placeholder="BSA…"
+                      value={secretInput}
+                      onChange={(e) => setSecretInput(e.target.value)}
+                      className="input font-mono"
+                    />
+                  </label>
+
+                  <div className="mt-5 flex flex-wrap gap-2">
+                    <button onClick={() => handleSave("brave")} className="btn-primary btn-sm">
+                      Kaydet
+                    </button>
+                    <button onClick={() => handleTest("brave")} disabled={testing} className="btn-secondary btn-sm">
+                      {testing ? "Test ediliyor" : "Bağlantıyı test et"}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {activeTab === "serpapi" && (
+                <div className="p-5">
+                  <h2 className="section-heading">SerpAPI (Google araması)</h2>
+                  <p className="mt-1.5 text-[12.5px] leading-relaxed text-ink-3">
+                    Google arama sonuçları için alternatif sağlayıcı. Brave kullanılamadığında
+                    devreye girer.
+                  </p>
+
+                  {masked("serpapi") && (
+                    <p className="numeric mt-4 rounded-[6px] border border-line bg-sunken px-3 py-2 text-ink-2">
+                      Kayıtlı anahtar: {masked("serpapi")}
+                    </p>
+                  )}
+
+                  <label className="mt-4 block">
+                    <span className="label">
+                      {masked("serpapi")
+                        ? "Yeni anahtar — boş bırakılırsa korunur"
+                        : "SerpAPI anahtarı"}
+                    </span>
+                    <input
+                      type="password"
+                      placeholder="serpapi key…"
+                      value={secretInput}
+                      onChange={(e) => setSecretInput(e.target.value)}
+                      className="input font-mono"
+                    />
+                  </label>
+
+                  <div className="mt-5 flex flex-wrap gap-2">
+                    <button onClick={() => handleSave("serpapi")} className="btn-primary btn-sm">
+                      Kaydet
+                    </button>
+                    <button
+                      onClick={() => handleTest("serpapi")}
+                      disabled={testing}
+                      className="btn-secondary btn-sm"
+                    >
+                      {testing ? "Test ediliyor" : "Bağlantıyı test et"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
       </div>
     </div>
   );

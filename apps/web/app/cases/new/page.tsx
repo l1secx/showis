@@ -1,16 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import {
-  AtSign,
-  GraduationCap,
-  MapPin,
-  Radar,
-  ShieldCheck,
-  Sparkles,
-  UserRound,
-} from "lucide-react";
+import { Check, ChevronDown, Loader2 } from "lucide-react";
 import { api, type TargetKind } from "../../../lib/api";
 
 interface SeedRow {
@@ -23,7 +16,11 @@ const PLATFORMS = [
   "github", "gitlab", "reddit", "keybase", "steam", "devto",
   "dockerhub", "npm", "pypi", "chess", "hackernews", "gravatar",
   "instagram", "tiktok", "youtube", "medium", "telegram", "tryhackme",
-  "hackthebox", "web", "unknown",
+  "hackthebox", "bitbucket", "codeberg", "codepen", "codewars", "leetcode",
+  "stackoverflow", "bluesky", "mastodon", "huggingface", "kaggle", "twitch",
+  "kick", "discord", "behance", "dribbble", "pinterest", "tumblr", "linktr.ee",
+  "about.me", "substack", "soundcloud", "duolingo", "lichess", "patreon",
+  "kofi", "buymeacoffee", "gumroad", "hackerone", "bugcrowd", "web", "unknown",
 ];
 
 const DRAFT_KEY = "showis:new-case-draft";
@@ -64,7 +61,13 @@ function nickError(raw: string, required: boolean): string | null {
   return null;
 }
 
-const NICK_RULE_HINT = "en az 3 karakter, en az 1 harf/rakam";
+const NICK_RULE_HINT = "en az 3 karakter, en az 1 harf veya rakam";
+
+const SCAN_MODES = [
+  { value: "O1", label: "Hızlı", hint: "Arama ve API çağrıları, site kontrolü yok" },
+  { value: "O2", label: "Standart", hint: "Arama, API ve 6 kullanıcı adı site kontrolü" },
+  { value: "O3", label: "Derin", hint: "Standart mod ve tarayıcı ile 10 kullanıcı adı" },
+];
 
 export default function NewCasePage() {
   const router = useRouter();
@@ -159,245 +162,246 @@ export default function NewCasePage() {
   };
 
   return (
-    <div className="animate-in">
-      <div className="mb-6 flex items-center gap-2 text-xs text-slate-500">
-        <span>Vakalar</span>
-        <span>/</span>
-        <span className="text-slate-300">Yeni vaka</span>
+    <div className="space-y-6">
+      <div>
+        <nav className="flex items-center gap-1.5 text-[12px] text-ink-3">
+          <Link href="/" className="transition-colors hover:text-ink">
+            Vakalar
+          </Link>
+          <span className="text-ink-3" aria-hidden>
+            /
+          </span>
+          <span className="text-ink-2">Yeni vaka</span>
+        </nav>
+        <h1 className="page-title mt-1.5">Yeni vaka</h1>
+        <p className="page-subtitle">
+          Kamuya açık kaynaklarda araştırılacak hedefi tanımlayın. Hukuki dayanak ve saklama
+          süresi kayıtla birlikte saklanır.
+        </p>
       </div>
 
-      <form onSubmit={submit} className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <div className="space-y-5 lg:col-span-2">
-          <section className="card p-5">
-            <div className="flex items-center gap-2">
-              <UserRound size={15} className="text-blue-400" />
-              <h2 className="text-sm font-semibold text-slate-100">Hedef</h2>
-              <span className="ml-auto text-[11px] text-slate-500">
+      <form onSubmit={submit} className="grid grid-cols-1 gap-8 lg:grid-cols-3">
+        <div className="space-y-6 lg:col-span-2">
+          {/* --- Hedef --- */}
+          <section className="panel">
+            <div className="panel-head">
+              <h2 className="panel-title">Hedef</h2>
+              <p className="text-[12px] text-ink-3">
                 {mode === "handle"
-                  ? "kullanıcı adı tek başına yeterli"
-                  : "sadece isim yeterli — ipuçları eşleşmeyi daraltır"}
-              </span>
-            </div>
-
-            <div
-              role="radiogroup"
-              aria-label="Hedef türü"
-              className="mt-4 inline-flex rounded-lg border border-slate-800 bg-slate-950 p-0.5"
-            >
-              {[
-                { value: "name" as const, label: "İsimle ara", icon: UserRound },
-                { value: "handle" as const, label: "Kullanıcı adıyla ara", icon: AtSign },
-              ].map((m) => {
-                const Icon = m.icon;
-                const active = mode === m.value;
-                return (
-                  <button
-                    key={m.value}
-                    type="button"
-                    role="radio"
-                    aria-checked={active}
-                    onClick={() => setMode(m.value)}
-                    className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-colors ${
-                      active
-                        ? "bg-blue-500/15 text-blue-200"
-                        : "text-slate-400 hover:text-slate-200"
-                    }`}
-                  >
-                    <Icon size={13} className={active ? "text-blue-400" : ""} />
-                    {m.label}
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="mt-4 grid gap-4 sm:grid-cols-2">
-              {mode === "handle" && (
-                <label className="block sm:col-span-2">
-                  <span className="label">
-                    Kullanıcı adı <span aria-hidden="true" className="text-blue-400">*</span>
-                  </span>
-                  <div className="relative">
-                    {!form.nickname.startsWith("@") && (
-                      <span
-                        aria-hidden="true"
-                        className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 font-mono text-sm text-slate-500"
-                      >
-                        @
-                      </span>
-                    )}
-                    <input
-                      ref={nicknameRef}
-                      required
-                      minLength={3}
-                      aria-invalid={nickInvalid}
-                      aria-describedby={NICK_HINT_ID}
-                      className="input pl-7 font-mono"
-                      placeholder="abdulkeremdemir"
-                      value={form.nickname}
-                      onChange={(e) => set("nickname", e.target.value)}
-                    />
-                  </div>
-                  <span
-                    id={NICK_HINT_ID}
-                    aria-live="polite"
-                    className={`mt-1 block text-[11px] ${
-                      nickInvalid ? "text-red-300" : "text-slate-500"
-                    }`}
-                  >
-                    {handleNickError ?? NICK_RULE_HINT}
-                  </span>
-                </label>
-              )}
-              <label className="block">
-                <span className="label">
-                  Ad{" "}
-                  {mode === "name" ? (
-                    <span aria-hidden="true" className="text-blue-400">*</span>
-                  ) : (
-                    <span className="font-normal tracking-normal text-slate-600">(ops.)</span>
-                  )}
-                </span>
-                <input
-                  ref={firstNameRef}
-                  required={mode === "name"}
-                  aria-describedby={mode === "handle" ? NAME_HINT_ID : undefined}
-                  className="input"
-                  placeholder="Kerem"
-                  value={form.first_name}
-                  onChange={(e) => set("first_name", e.target.value)}
-                />
-              </label>
-              <label className="block">
-                <span className="label">
-                  Soyad <span className="font-normal tracking-normal text-slate-600">(ops.)</span>
-                </span>
-                <input
-                  aria-describedby={mode === "handle" ? NAME_HINT_ID : undefined}
-                  className="input"
-                  placeholder="Boz"
-                  value={form.last_name}
-                  onChange={(e) => set("last_name", e.target.value)}
-                />
-              </label>
-              {mode === "name" && (
-                <label className="block sm:col-span-2">
-                  <span className="label">
-                    Nick <span className="font-normal tracking-normal text-slate-600">(ops.)</span>
-                  </span>
-                  <div className="relative">
-                    {!form.nickname.startsWith("@") && (
-                      <span
-                        aria-hidden="true"
-                        className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 font-mono text-sm text-slate-500"
-                      >
-                        @
-                      </span>
-                    )}
-                    <input
-                      ref={nicknameRef}
-                      minLength={3}
-                      aria-invalid={nickInvalid}
-                      aria-describedby={NICK_HINT_ID_NAME}
-                      className="input pl-7 font-mono"
-                      placeholder="kerem"
-                      value={form.nickname}
-                      onChange={(e) => set("nickname", e.target.value)}
-                    />
-                  </div>
-                  <span
-                    id={NICK_HINT_ID_NAME}
-                    aria-live="polite"
-                    className={`mt-1 block text-[11px] ${
-                      nickInvalid ? "text-red-300" : "text-slate-500"
-                    }`}
-                  >
-                    {handleNickError ?? `opsiyonel — ${NICK_RULE_HINT}`}
-                  </span>
-                </label>
-              )}
-            </div>
-            {mode === "handle" && (
-              <p id={NAME_HINT_ID} className="mt-3 text-[11px] text-slate-500">
-                Ad ve soyad opsiyonel — bulunan hesapların size ait olduğunu doğrulamak için kullanılır.
+                  ? "Kullanıcı adı tek başına yeterlidir"
+                  : "İsim tek başına yeterlidir, ipuçları doğrulamayı güçlendirir"}
               </p>
-            )}
-            <div className="mt-4 grid gap-4 sm:grid-cols-3">
-              <label className="block">
-                <span className="label">
-                  <GraduationCap size={11} className="mr-1 inline" />
-                  Okul
-                </span>
-                <input
-                  className="input"
-                  placeholder="ODTÜ"
-                  value={form.school}
-                  onChange={(e) => set("school", e.target.value)}
-                />
-              </label>
-              <label className="block">
-                <span className="label">
-                  <MapPin size={11} className="mr-1 inline" />
-                  Şehir
-                </span>
-                <input
-                  className="input"
-                  placeholder="Ankara"
-                  value={form.city}
-                  onChange={(e) => set("city", e.target.value)}
-                />
-              </label>
-              <label className="block">
-                <span className="label">Şirket</span>
-                <input
-                  className="input"
-                  placeholder="CyberSec Inc"
-                  value={form.company}
-                  onChange={(e) => set("company", e.target.value)}
-                />
-              </label>
+            </div>
+
+            <div className="p-5">
+              <div
+                role="radiogroup"
+                aria-label="Hedef türü"
+                className="inline-flex rounded-[6px] border border-line-2 bg-sunken p-0.5"
+              >
+                {[
+                  { value: "name" as const, label: "İsim ve soyisim" },
+                  { value: "handle" as const, label: "Kullanıcı adı" },
+                ].map((m) => {
+                  const active = mode === m.value;
+                  return (
+                    <button
+                      key={m.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      onClick={() => setMode(m.value)}
+                      className={`rounded-[4px] px-3 py-1.5 text-[12.5px] transition-colors ${
+                        active
+                          ? "bg-surface font-medium text-ink shadow-scrim"
+                          : "text-ink-3 hover:text-ink"
+                      }`}
+                    >
+                      {m.label}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="mt-5 grid gap-4 sm:grid-cols-2">
+                {mode === "handle" && (
+                  <label className="block sm:col-span-2">
+                    <span className="label">
+                      Kullanıcı adı <span aria-hidden="true" className="text-danger">*</span>
+                    </span>
+                    <div className="relative">
+                      {!form.nickname.startsWith("@") && (
+                        <span
+                          aria-hidden="true"
+                          className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 font-mono text-[13px] text-ink-3"
+                        >
+                          @
+                        </span>
+                      )}
+                      <input
+                        ref={nicknameRef}
+                        required
+                        minLength={3}
+                        aria-invalid={nickInvalid}
+                        aria-describedby={NICK_HINT_ID}
+                        className="input pl-7 font-mono"
+                        placeholder="abdulkeremdemir"
+                        value={form.nickname}
+                        onChange={(e) => set("nickname", e.target.value)}
+                      />
+                    </div>
+                    <span
+                      id={NICK_HINT_ID}
+                      aria-live="polite"
+                      className={nickInvalid ? "hint-error" : "hint"}
+                    >
+                      {handleNickError ?? NICK_RULE_HINT}
+                    </span>
+                  </label>
+                )}
+                <label className="block">
+                  <span className="label">
+                    Ad{" "}
+                    {mode === "name" ? (
+                      <span aria-hidden="true" className="text-danger">*</span>
+                    ) : (
+                      <span className="font-normal text-ink-3">(opsiyonel)</span>
+                    )}
+                  </span>
+                  <input
+                    ref={firstNameRef}
+                    required={mode === "name"}
+                    aria-describedby={mode === "handle" ? NAME_HINT_ID : undefined}
+                    className="input"
+                    placeholder="Kerem"
+                    value={form.first_name}
+                    onChange={(e) => set("first_name", e.target.value)}
+                  />
+                </label>
+                <label className="block">
+                  <span className="label">
+                    Soyad <span className="font-normal text-ink-3">(opsiyonel)</span>
+                  </span>
+                  <input
+                    aria-describedby={mode === "handle" ? NAME_HINT_ID : undefined}
+                    className="input"
+                    placeholder="Boz"
+                    value={form.last_name}
+                    onChange={(e) => set("last_name", e.target.value)}
+                  />
+                </label>
+                {mode === "name" && (
+                  <label className="block sm:col-span-2">
+                    <span className="label">
+                      Kullanıcı adı <span className="font-normal text-ink-3">(opsiyonel)</span>
+                    </span>
+                    <div className="relative">
+                      {!form.nickname.startsWith("@") && (
+                        <span
+                          aria-hidden="true"
+                          className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 font-mono text-[13px] text-ink-3"
+                        >
+                          @
+                        </span>
+                      )}
+                      <input
+                        ref={nicknameRef}
+                        minLength={3}
+                        aria-invalid={nickInvalid}
+                        aria-describedby={NICK_HINT_ID_NAME}
+                        className="input pl-7 font-mono"
+                        placeholder="kerem"
+                        value={form.nickname}
+                        onChange={(e) => set("nickname", e.target.value)}
+                      />
+                    </div>
+                    <span
+                      id={NICK_HINT_ID_NAME}
+                      aria-live="polite"
+                      className={nickInvalid ? "hint-error" : "hint"}
+                    >
+                      {handleNickError ?? `opsiyonel — ${NICK_RULE_HINT}`}
+                    </span>
+                  </label>
+                )}
+              </div>
+              {mode === "handle" && (
+                <p id={NAME_HINT_ID} className="hint">
+                  Ad ve soyad isteğe bağlıdır; bulunan hesapların size ait olduğunu
+                  doğrulamak için kullanılır.
+                </p>
+              )}
+
+              <div className="mt-5 grid gap-4 sm:grid-cols-3">
+                <label className="block">
+                  <span className="label">Okul</span>
+                  <input
+                    className="input"
+                    placeholder="ODTÜ"
+                    value={form.school}
+                    onChange={(e) => set("school", e.target.value)}
+                  />
+                </label>
+                <label className="block">
+                  <span className="label">Şehir</span>
+                  <input
+                    className="input"
+                    placeholder="Ankara"
+                    value={form.city}
+                    onChange={(e) => set("city", e.target.value)}
+                  />
+                </label>
+                <label className="block">
+                  <span className="label">Kurum</span>
+                  <input
+                    className="input"
+                    placeholder="CyberSec Inc"
+                    value={form.company}
+                    onChange={(e) => set("company", e.target.value)}
+                  />
+                </label>
+              </div>
             </div>
           </section>
 
-          <section className="card p-5">
-            <div className="flex items-center gap-2">
-              <ShieldCheck size={15} className="text-blue-400" />
-              <h2 className="text-sm font-semibold text-slate-100">Vaka Bilgileri</h2>
+          {/* --- Kayıt bilgileri --- */}
+          <section className="panel">
+            <div className="panel-head">
+              <h2 className="panel-title">Kayıt bilgileri</h2>
             </div>
-            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-4 p-5 sm:grid-cols-2">
               <label className="block">
                 <span className="label">Vaka adı</span>
                 <input
                   className="input"
-                  placeholder="boş bırakılırsa hedeften üretilir"
+                  placeholder="Boş bırakılırsa hedeften üretilir"
                   value={form.name}
                   onChange={(e) => set("name", e.target.value)}
                 />
               </label>
               <label className="block">
                 <span className="label">
-                  Hukuki dayanak <span aria-hidden="true">*</span>
+                  Hukuki dayanak <span aria-hidden="true" className="text-danger">*</span>
                 </span>
                 <select
-                  className="input"
+                  className="select"
                   value={form.legal_basis}
                   onChange={(e) => set("legal_basis", e.target.value)}
                 >
-                  <option value="self_check">Öz kontrol (kendi hesabım)</option>
+                  <option value="self_check">Öz kontrol — kendi hesabım</option>
                   <option value="consent">Açık rıza</option>
                   <option value="legitimate_interest">Meşru menfaat</option>
                 </select>
               </label>
-            </div>
-            <label className="mt-4 block">
-              <span className="label">Amaç</span>
-              <input
-                className="input"
-                placeholder="Örn: Kendi hesaplarımın görünürlüğünü ölçmek"
-                value={form.purpose}
-                onChange={(e) => set("purpose", e.target.value)}
-              />
-            </label>
-            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              <label className="block sm:col-span-2">
+                <span className="label">Amaç</span>
+                <input
+                  className="input"
+                  placeholder="Örn: Kendi hesaplarımın görünürlüğünü ölçmek"
+                  value={form.purpose}
+                  onChange={(e) => set("purpose", e.target.value)}
+                />
+              </label>
               <label className="block">
                 <span className="label">Notlar</span>
                 <input
@@ -420,17 +424,24 @@ export default function NewCasePage() {
             </div>
           </section>
 
-          <details className="card p-5">
-            <summary className="cursor-pointer text-sm font-semibold text-slate-100">
-              Seed hesaplar <span className="font-normal text-slate-500">(opsiyonel)</span>
+          {/* --- Seed hesaplar --- */}
+          <details className="panel group">
+            <summary className="flex cursor-pointer list-none items-center gap-2 px-5 py-4 text-[13.5px] font-medium text-ink marker:content-none">
+              <ChevronDown
+                size={14}
+                aria-hidden
+                className="text-ink-3 transition-transform group-open:rotate-180"
+              />
+              Seed hesaplar
+              <span className="text-[12px] font-normal text-ink-3">opsiyonel</span>
             </summary>
-            <div className="mt-4 space-y-3">
+            <div className="space-y-3 border-t border-line p-5">
               {seeds.map((s, i) => (
                 <div key={i} className="grid grid-cols-3 items-end gap-3">
                   <label className="block">
                     <span className="label">Platform</span>
                     <select
-                      className="input"
+                      className="select"
                       value={s.platform}
                       onChange={(e) => updateSeed(i, "platform", e.target.value)}
                     >
@@ -462,86 +473,121 @@ export default function NewCasePage() {
               <button
                 type="button"
                 onClick={() => setSeeds((s) => [...s, { platform: "github", username: "", url: "" }])}
-                className="btn-ghost btn-sm"
+                className="btn-secondary btn-sm"
               >
-                + Seed ekle
+                Seed ekle
               </button>
             </div>
           </details>
         </div>
 
-        <aside className="space-y-4 lg:sticky lg:top-24 lg:self-start">
-          <div className="card p-5">
-            <div className="flex items-center gap-2">
-              <Radar size={15} className="text-blue-400" />
-              <h2 className="text-sm font-semibold text-slate-100">Tarama</h2>
+        {/* --- Yan panel: tarama modu ve kaydı oluştur --- */}
+        <aside className="space-y-5 lg:sticky lg:top-20 lg:self-start">
+          <div className="panel">
+            <div className="panel-head">
+              <h2 className="panel-title">Tarama modu</h2>
             </div>
-            <div className="mt-3 space-y-2">
-              {[
-                { value: "O1", label: "O1 · Hızlı", hint: "~30 sn · arama + API" },
-                { value: "O2", label: "O2 · Standart", hint: "~2 dk · + site-check" },
-                { value: "O3", label: "O3 · Derin", hint: "~3 dk · + tarayıcı render" },
-              ].map((m) => (
-                <button
-                  key={m.value}
-                  type="button"
-                  onClick={() => setScanMode(m.value)}
-                  className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-left transition-colors ${
-                    scanMode === m.value
-                      ? "border-blue-500/50 bg-blue-500/10"
-                      : "border-slate-800 bg-slate-950 hover:border-slate-700"
-                  }`}
+
+            <div className="p-5">
+              <fieldset className="space-y-2">
+                <legend className="sr-only">Tarama modu</legend>
+                {SCAN_MODES.map((m) => {
+                  const active = scanMode === m.value;
+                  return (
+                    <label
+                      key={m.value}
+                      className={`flex cursor-pointer items-start gap-2.5 rounded-[6px] border px-3 py-2.5 transition-colors ${
+                        active
+                          ? "border-accent bg-accent-soft"
+                          : "border-line-2 bg-surface hover:border-ink-4"
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="scan-mode"
+                        value={m.value}
+                        checked={active}
+                        onChange={() => setScanMode(m.value)}
+                        className="mt-[3px] h-3.5 w-3.5 shrink-0 accent-[rgb(var(--accent))]"
+                      />
+                      <span className="min-w-0">
+                        <span className="block text-[13px] font-medium text-ink">
+                          {m.value} — {m.label}
+                        </span>
+                        <span className="mt-0.5 block text-[12px] leading-snug text-ink-3">
+                          {m.hint}
+                        </span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </fieldset>
+
+              <label className="mt-4 flex cursor-pointer items-start gap-2.5 border-t border-line pt-4 text-[12.5px] text-ink-2">
+                <input
+                  type="checkbox"
+                  checked={autoScan}
+                  onChange={(e) => setAutoScan(e.target.checked)}
+                  className="mt-[3px] h-3.5 w-3.5 shrink-0 rounded-[3px] accent-[rgb(var(--accent))]"
+                />
+                <span>Kayıt oluşturulunca taramayı hemen başlat</span>
+              </label>
+
+              {error && (
+                <p
+                  role="alert"
+                  className="mt-4 rounded-[6px] border border-danger-line bg-danger-soft px-3 py-2 text-[12.5px] text-danger"
                 >
-                  <span className={scanMode === m.value ? "text-sm text-blue-200" : "text-sm text-slate-300"}>
-                    {m.label}
-                  </span>
-                  <span className="font-mono text-[10px] text-slate-500">{m.hint}</span>
-                </button>
-              ))}
-            </div>
-
-            <label className="mt-4 flex cursor-pointer items-start gap-2 text-xs text-slate-400">
-              <input
-                type="checkbox"
-                checked={autoScan}
-                onChange={(e) => setAutoScan(e.target.checked)}
-                className="mt-0.5 accent-[#06b6d4]"
-              />
-              Vaka oluşturulunca taramayı hemen başlat
-            </label>
-
-            <button
-              type="submit"
-              disabled={saving || nickInvalid}
-              className="btn-primary mt-4 w-full"
-            >
-              {saving ? (
-                "Oluşturuluyor…"
-              ) : (
-                <>
-                  <Sparkles size={15} /> {autoScan ? "Oluştur ve tara" : "Vakayı oluştur"}
-                </>
+                  {error}
+                </p>
               )}
-            </button>
-            <button type="button" onClick={() => router.back()} className="btn-ghost mt-2 w-full">
-              İptal
-            </button>
-            {error && (
-              <p className="mt-3 rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-300">
-                {error}
-              </p>
-            )}
+
+              <button
+                type="submit"
+                disabled={saving || nickInvalid}
+                className="btn-primary mt-5 w-full"
+              >
+                {saving ? (
+                  <>
+                    <Loader2 size={14} className="animate-spin" aria-hidden />
+                    Kayıt oluşturuluyor
+                  </>
+                ) : autoScan ? (
+                  "Oluştur ve taramayı başlat"
+                ) : (
+                  <>
+                    <Check size={14} aria-hidden />
+                    Vakayı oluştur
+                  </>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => router.back()}
+                className="btn-quiet mt-1 w-full"
+              >
+                Vazgeç
+              </button>
+            </div>
           </div>
 
-          <div className="card p-5 text-xs leading-relaxed text-slate-400">
-            <p className="section-title mb-2">Nasıl çalışır</p>
-            <ol className="space-y-1.5">
-              <li>1. Hedef kimliği (isim veya kullanıcı adı) ve ipuçlarıyla arama motoru sorguları üretilir.</li>
-              <li>2. Her sonuç isim/kullanıcı adı benzerliği ve ipuçlarıyla skorlanır.</li>
-              <li>3. Bulunan kullanıcı adları 48 sitede doğrulanır.</li>
-              <li>4. Sonuçlar onaylı / aday / ipucu olarak Bulgular&apos;a düşer.</li>
+          {/* Süreç: gerçekten sıralı bir adım dizisi olduğu için numaralı. */}
+          <div className="panel p-5">
+            <h2 className="section-heading">Nasıl çalışır</h2>
+            <ol className="mt-3 space-y-2.5">
+              {[
+                "Hedef kimliği ve ipuçlarından arama sorguları üretilir.",
+                "Her sonuç isim ve kullanıcı adı benzerliğiyle skorlanır.",
+                "Bulunan kullanıcı adları 48 sitede doğrulanır.",
+                "Sonuçlar onaylı, aday veya ipucu olarak kayda düşer.",
+              ].map((step, i) => (
+                <li key={i} className="flex gap-2.5 text-[12.5px] leading-relaxed text-ink-3">
+                  <span className="numeric w-4 shrink-0 text-ink-3">{i + 1}.</span>
+                  <span>{step}</span>
+                </li>
+              ))}
             </ol>
-            <p className="mt-3 text-[11px] text-slate-500">
+            <p className="mt-3 border-t border-line pt-3 text-[12px] leading-relaxed text-ink-3">
               Yalnızca herkese açık kaynaklar taranır; giriş duvarı aşılmaz.
             </p>
           </div>

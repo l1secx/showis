@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowRight, FolderSearch, Loader2, Plus, Search, Trash2, X } from "lucide-react";
+import { ArrowDown, Loader2, Plus, Search, Trash2, X } from "lucide-react";
 import { api, type CaseListItem, type CaseSort } from "../../lib/api";
 
 const LEGAL_LABELS: Record<string, string> = {
@@ -13,10 +13,18 @@ const LEGAL_LABELS: Record<string, string> = {
 };
 
 const CASE_STATUS_LABELS: Record<string, string> = {
-  active: "aktif",
-  review_pending: "inceleme",
-  deleted: "silinmiş",
-  archived: "arşiv",
+  active: "Aktif",
+  review_pending: "İnceleme bekliyor",
+  deleted: "Silinmiş",
+  archived: "Arşivde",
+};
+
+/** Durum rengi yalnızca anlam taşır: nokta + metin. Rozet çorbası yok. */
+const CASE_STATUS_TONE: Record<string, string> = {
+  active: "bg-ok",
+  review_pending: "bg-warn",
+  deleted: "bg-danger",
+  archived: "bg-ink-4",
 };
 
 const SCAN_STATUS_LABELS: Record<string, string> = {
@@ -25,6 +33,14 @@ const SCAN_STATUS_LABELS: Record<string, string> = {
   completed: "tamamlandı",
   failed: "başarısız",
   cancelled: "iptal",
+};
+
+const SCAN_STATUS_TONE: Record<string, string> = {
+  queued: "bg-ink-4",
+  running: "bg-accent",
+  completed: "bg-ok",
+  failed: "bg-danger",
+  cancelled: "bg-ink-4",
 };
 
 const STATUS_FILTERS = [
@@ -121,7 +137,8 @@ export function CasesDashboard() {
   };
 
   const deleteCase = async (c: CaseListItem) => {
-    if (!confirm(`"${c.name}" vakasını ve tüm verilerini silmek istediğinize emin misiniz?`)) return;
+    if (!confirm(`"${c.name}" vakasını ve tüm verilerini silmek istediğinize emin misiniz?`))
+      return;
     try {
       await api.deleteCase(c.id);
       setItems((prev) => prev.filter((x) => x.id !== c.id));
@@ -158,59 +175,43 @@ export function CasesDashboard() {
     [grandTotal, total, items.length]
   );
 
-  const countLabel = hasFilters
-    ? `${total}${grandTotal != null ? ` / ${grandTotal}` : ""} vaka · filtreli`
-    : `${total} vaka`;
-
   return (
-    <div className="space-y-6 animate-in">
+    <div className="space-y-6">
+      {/* Başlık: etiket yok, başlık kendi ağırlığını taşır. */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="section-title">operasyon paneli</p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-100">Vakalar</h1>
-          <p className="mt-1 max-w-xl text-sm text-slate-400">
-            Kamuya açık kaynaklarda hesap tespiti, cross-platform ilişkilendirme ve kanıt zinciri.
+          <h1 className="page-title">Vakalar</h1>
+          <p className="page-subtitle">
+            Açık kaynak istihbarat kayıtları, kimlik profilleri ve çapraz platform
+            doğrulamaları.
           </p>
         </div>
-        <Link href="/cases/new" className="btn-primary shrink-0">
-          <Plus size={15} /> Yeni Vaka
-        </Link>
+        <div className="flex items-center gap-5">
+          <p className="text-[12px] text-ink-3">
+            Toplam{" "}
+            <span className="numeric ml-0.5 font-medium text-ink">{stats.total}</span> kayıt
+          </p>
+          <Link href="/cases/new" className="btn-primary shrink-0">
+            <Plus size={15} aria-hidden />
+            Yeni vaka
+          </Link>
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        {[
-          { label: "Toplam vaka", value: stats.total, icon: FolderSearch },
-          { label: hasFilters ? "Eşleşen" : "Listelenen", value: stats.matched, icon: ArrowRight },
-          { label: "Bu sayfada", value: stats.shown, icon: Search },
-        ].map((s, i) => {
-          const Icon = s.icon;
-          return (
-            <div key={s.label} className={`card p-4 animate-in stagger-${i + 1}`}>
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] uppercase tracking-wider text-slate-500">
-                  {s.label}
-                </span>
-                <Icon size={14} className="text-slate-600" />
-              </div>
-              <p className="mono mt-2 text-2xl font-semibold text-slate-100">{s.value}</p>
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="card space-y-3 p-3">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+      {/* Kayıt üstü kontrol çubuğu */}
+      <div className="panel">
+        <div className="flex flex-col gap-3 p-3 lg:flex-row lg:items-center">
           <div className="relative flex-1">
             <Search
-              size={14}
+              size={15}
               aria-hidden
-              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"
+              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-3"
             />
             <input
               type="search"
               role="searchbox"
-              aria-label="Vaka ara (ad, amaç veya hedef adı)"
-              placeholder="Vaka adı, amaç veya hedef adı…"
+              aria-label="Vaka ara"
+              placeholder="Vaka adı, yasal amaç veya hedef kimliği ile arayın"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               className="input pl-9"
@@ -220,199 +221,270 @@ export function CasesDashboard() {
                 type="button"
                 onClick={() => setQuery("")}
                 aria-label="Aramayı temizle"
-                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-500 hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-ink-3 transition-colors hover:text-ink"
               >
-                <X size={13} />
+                <X size={13} aria-hidden />
               </button>
             )}
           </div>
 
-          <div className="flex items-center gap-2">
-            <label className="flex items-center gap-2 text-xs text-slate-400">
-              <span className="whitespace-nowrap">Sırala</span>
-              <select
-                value={sort}
-                onChange={(e) => setSort(e.target.value as CaseSort)}
-                aria-label="Vaka sıralaması"
-                className="rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-xs text-slate-200 focus:border-blue-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/20"
-              >
-                {SORT_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <span className="mono text-[11px] text-slate-500" aria-live="polite">
-              {loading ? "yükleniyor…" : countLabel}
-            </span>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <div role="group" aria-label="Vaka durumu filtresi" className="flex flex-wrap gap-1.5">
+          <div
+            role="group"
+            aria-label="Vaka durumu filtresi"
+            className="flex items-center gap-0.5 rounded-[6px] border border-line-2 bg-sunken p-0.5"
+          >
             {STATUS_FILTERS.map((f) => (
               <button
                 key={f.value}
                 type="button"
                 aria-pressed={statusFilter === f.value}
                 onClick={() => setFilter(f.value)}
-                className={`rounded-full border px-3 py-1 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 ${
+                className={`rounded-[4px] px-2.5 py-1 text-[12px] transition-colors ${
                   statusFilter === f.value
-                    ? "border-blue-500/50 bg-blue-500/10 text-blue-200"
-                    : "border-slate-800 bg-slate-900 text-slate-400 hover:border-slate-700 hover:text-slate-200"
+                    ? "bg-surface font-medium text-ink shadow-scrim"
+                    : "text-ink-3 hover:text-ink"
                 }`}
               >
                 {f.label}
               </button>
             ))}
           </div>
+
+          <label className="flex items-center gap-2 text-[12px] text-ink-3">
+            Sırala
+            <select
+              value={sort}
+              onChange={(e) => setSort(e.target.value as CaseSort)}
+              aria-label="Vaka sıralaması"
+              className="select w-auto py-1 text-[12px]"
+            >
+              {SORT_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line px-3 py-2">
+          <p className="numeric text-ink-3" aria-live="polite">
+            {loading
+              ? "yükleniyor"
+              : hasFilters
+                ? `${stats.matched} eşleşme / ${stats.total} kayıt`
+                : `${stats.total} kayıt`}
+          </p>
           {hasFilters && (
-            <button type="button" onClick={clearFilters} className="btn-ghost btn-sm ml-auto">
-              <X size={12} /> Filtreyi temizle
+            <button type="button" onClick={clearFilters} className="btn-quiet btn-sm">
+              <X size={12} aria-hidden />
+              Filtreyi temizle
             </button>
           )}
         </div>
       </div>
 
       {error && (
-        <div className="card border-red-500/40 bg-red-500/5 p-4 text-sm text-red-300">
+        <div
+          role="alert"
+          className="rounded-[6px] border border-danger-line bg-danger-soft px-4 py-3 text-[13px] text-danger"
+        >
           API&apos;ye ulaşılamadı: {error}. API servisinin çalıştığından emin olun.
         </div>
       )}
 
       {loading ? (
-        <p className="flex items-center gap-2 text-sm text-slate-400">
-          <Loader2 size={14} className="animate-spin" aria-hidden /> Yükleniyor…
-        </p>
+        <div className="panel flex items-center gap-2 px-5 py-8 text-[13px] text-ink-3">
+          <Loader2 size={14} className="animate-spin" aria-hidden />
+          Kayıtlar yükleniyor
+        </div>
       ) : items.length === 0 ? (
-        <div className="card p-12 text-center">
-          <p className="text-sm text-slate-400">
-            {hasFilters ? "Aramanla eşleşen vaka yok." : "Henüz vaka yok."}
+        <div className="panel px-6 py-14 text-center">
+          <p className="text-[13.5px] text-ink-2">
+            {hasFilters
+              ? "Aramanla eşleşen vaka yok. Filtreyi gevşetip yeniden deneyin."
+              : "Henüz vaka kaydı yok. İlk incelemeyi başlatmak için hedefi tanımlayın."}
           </p>
           {hasFilters ? (
-            <button type="button" onClick={clearFilters} className="btn-ghost btn-sm mt-3">
-              <X size={12} /> Filtreyi temizle
+            <button type="button" onClick={clearFilters} className="btn-secondary btn-sm mt-4">
+              <X size={12} aria-hidden />
+              Filtreyi temizle
             </button>
           ) : (
-            <Link href="/cases/new" className="mt-3 inline-flex text-sm text-blue-400 hover:underline">
-              İlk vakayı oluştur →
+            <Link href="/cases/new" className="btn-primary btn-sm mt-4">
+              <Plus size={14} aria-hidden />
+              Yeni vaka oluştur
             </Link>
           )}
         </div>
       ) : (
         <div className="space-y-3">
-          {/* 375px'te tablo belgeyi genişletmesin: kart kırpar, iç katman kaydırır */}
-          <div className="card overflow-hidden">
-            <div className="w-full max-w-full overflow-x-auto">
-            <table className="w-full text-sm sm:min-w-[560px]">
-              <thead className="bg-slate-900/80 text-left">
-                <tr className="text-[11px] uppercase tracking-wider text-slate-500">
-                  <th scope="col" className="px-4 py-2.5 font-medium">
-                    Vaka
-                  </th>
-                  <th scope="col" className="hidden px-4 py-2.5 font-medium md:table-cell">
-                    Amaç
-                  </th>
-                  <th scope="col" className="hidden px-4 py-2.5 font-medium sm:table-cell">
-                    Dayanak
-                  </th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">
-                    Durum
-                  </th>
-                  <th scope="col" className="hidden px-4 py-2.5 font-medium sm:table-cell">
-                    Son tarama
-                  </th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">
-                    Oluşturma
-                  </th>
-                  <th scope="col" className="w-10 px-4 py-2.5">
-                    <span className="sr-only">İşlemler</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((c) => (
-                  <tr
-                    key={c.id}
-                    className="group border-t border-slate-800/80 transition-colors hover:bg-slate-800/30"
+          {/* Telefonda tablo yatay kaydırma gerektirir ve durum görünmez.
+              Dar ekranda aynı içerik kayıt listesi olarak dizilir. */}
+          <ul className="panel divide-y divide-line sm:hidden">
+            {items.map((c) => (
+              <li key={c.id} className="px-4 py-3.5">
+                <div className="flex items-start justify-between gap-3">
+                  <Link
+                    href={`/cases/${c.id}/scan`}
+                    className="min-w-0 flex-1 text-[13.5px] font-medium text-ink"
                   >
-                    <td className="px-4 py-3">
-                      <Link
-                        href={`/cases/${c.id}/scan`}
-                        className="font-medium text-slate-100 transition-colors hover:text-blue-300"
-                      >
-                        {c.name}
-                      </Link>
-                      <p className="mono text-[10px] text-slate-600">{c.id.slice(0, 8)}</p>
-                    </td>
-                    <td className="hidden max-w-xs truncate px-4 py-3 text-slate-400 md:table-cell">
-                      {c.purpose}
-                    </td>
-                    <td className="hidden px-4 py-3 text-slate-400 sm:table-cell">
-                      {LEGAL_LABELS[c.legal_basis] || c.legal_basis}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className="chip">{CASE_STATUS_LABELS[c.status] || c.status}</span>
-                    </td>
-                    <td className="hidden px-4 py-3 sm:table-cell">
-                      {c.last_scan?.mode || c.last_scan?.status ? (
-                        <span className="flex items-center gap-1.5">
-                          {c.last_scan?.mode && (
-                            <span className="chip border-blue-500/30 bg-blue-500/10 text-blue-200">
-                              {c.last_scan.mode}
-                            </span>
-                          )}
-                          {c.last_scan?.status && (
-                            <span className="mono text-[10px] text-slate-500">
-                              {SCAN_STATUS_LABELS[c.last_scan.status] || c.last_scan.status}
-                            </span>
-                          )}
-                        </span>
-                      ) : (
-                        <span className="text-slate-600">—</span>
-                      )}
-                    </td>
-                    <td className="mono px-4 py-3 text-[11px] text-slate-400">
-                      {new Date(c.created_at).toLocaleString("tr-TR", {
-                        dateStyle: "short",
-                        timeStyle: "short",
-                      })}
-                    </td>
-                    <td className="px-4 py-3">
-                      <button
-                        onClick={() => deleteCase(c)}
-                        title="Vakayı sil"
-                        aria-label={`${c.name} vakasını sil`}
-                        className="rounded-md p-1.5 text-slate-600 transition-colors hover:bg-red-500/10 hover:text-red-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500/40 sm:opacity-0 sm:group-hover:opacity-100"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </td>
+                    {c.name}
+                  </Link>
+                  <button
+                    onClick={() => deleteCase(c)}
+                    title="Kaydı sil"
+                    aria-label={`${c.name} kaydını sil`}
+                    className="-mr-1 shrink-0 rounded p-1 text-ink-3 transition-colors hover:bg-danger-soft hover:text-danger"
+                  >
+                    <Trash2 size={14} aria-hidden />
+                  </button>
+                </div>
+                <p className="numeric mt-1 truncate text-ink-3">
+                  {c.target?.nickname ? `@${c.target.nickname}` : null}
+                  {c.target?.nickname && c.target?.first_name ? ", " : null}
+                  {c.target?.first_name ? `${c.target.first_name} ${c.target.last_name ?? ""}` : null}
+                  {!c.target?.nickname && !c.target?.first_name ? c.id.slice(0, 8) : null}
+                </p>
+                <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1.5">
+                  <span className="status text-ink-2">
+                    <span
+                      className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                        CASE_STATUS_TONE[c.status] ?? "bg-ink-3"
+                      }`}
+                      aria-hidden
+                    />
+                    {CASE_STATUS_LABELS[c.status] || c.status}
+                  </span>
+                  <span className="text-[12px] text-ink-3">
+                    {LEGAL_LABELS[c.legal_basis] || c.legal_basis}
+                  </span>
+                  {c.last_scan?.mode && (
+                    <span className="numeric text-ink-3">{c.last_scan.mode}</span>
+                  )}
+                  <span className="numeric ml-auto text-ink-3">
+                    {new Date(c.created_at).toLocaleDateString("tr-TR", {
+                      day: "2-digit",
+                      month: "2-digit",
+                      year: "numeric",
+                    })}
+                  </span>
+                </div>
+              </li>
+            ))}
+          </ul>
+
+          {/* Geniş ekranda sicil tablosu */}
+          <div className="panel hidden overflow-hidden sm:block">
+            <div className="scroll-x">
+              <table className="data-table sm:min-w-[720px]">
+                <thead>
+                  <tr>
+                    <th scope="col">Kayıt ve hedef</th>
+                    <th scope="col" className="hidden md:table-cell">
+                      Yasal dayanak
+                    </th>
+                    <th scope="col">Durum</th>
+                    <th scope="col" className="hidden sm:table-cell">
+                      Son tarama
+                    </th>
+                    <th scope="col">Oluşturma</th>
+                    <th scope="col" className="w-10">
+                      <span className="sr-only">İşlemler</span>
+                    </th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {items.map((c) => (
+                    <tr key={c.id}>
+                      <td className="max-w-[22rem]">
+                        <Link
+                          href={`/cases/${c.id}/scan`}
+                          className="block truncate text-[13.5px] font-medium text-ink transition-colors hover:text-accent-ink"
+                        >
+                          {c.name}
+                        </Link>
+                        <p className="numeric mt-0.5 truncate text-ink-3">
+                          {c.target?.nickname ? `@${c.target.nickname}` : null}
+                          {c.target?.nickname && c.target?.first_name ? ", " : null}
+                          {c.target?.first_name ? `${c.target.first_name} ${c.target.last_name ?? ""}` : null}
+                          {!c.target?.nickname && !c.target?.first_name ? c.id.slice(0, 8) : null}
+                        </p>
+                      </td>
+                      <td className="hidden max-w-[14rem] truncate text-ink-2 md:table-cell">
+                        {LEGAL_LABELS[c.legal_basis] || c.legal_basis}
+                      </td>
+                      <td>
+                        <span className="status text-ink-2">
+                          <span
+                            className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                              CASE_STATUS_TONE[c.status] ?? "bg-ink-4"
+                            }`}
+                            aria-hidden
+                          />
+                          {CASE_STATUS_LABELS[c.status] || c.status}
+                        </span>
+                      </td>
+                      <td className="hidden sm:table-cell">
+                        {c.last_scan?.mode || c.last_scan?.status ? (
+                          <span className="status text-ink-3">
+                            <span
+                              className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                                SCAN_STATUS_TONE[c.last_scan?.status ?? ""] ?? "bg-ink-4"
+                              }`}
+                              aria-hidden
+                            />
+                            <span className="numeric">{c.last_scan?.mode}</span>
+                            <span className="text-ink-3">
+                              {SCAN_STATUS_LABELS[c.last_scan?.status ?? ""] ||
+                                c.last_scan?.status}
+                            </span>
+                          </span>
+                        ) : (
+                          <span className="text-ink-3">—</span>
+                        )}
+                      </td>
+                      <td className="numeric whitespace-nowrap text-ink-3">
+                        {new Date(c.created_at).toLocaleDateString("tr-TR", {
+                          day: "2-digit",
+                          month: "2-digit",
+                          year: "numeric",
+                        })}
+                      </td>
+                      <td className="text-right">
+                        <button
+                          onClick={() => deleteCase(c)}
+                          title="Kaydı sil"
+                          aria-label={`${c.name} kaydını sil`}
+                          className="rounded p-1.5 text-ink-3 transition-colors hover:bg-danger-soft hover:text-danger"
+                        >
+                          <Trash2 size={14} aria-hidden />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
 
           {items.length < total && (
             <div className="flex items-center justify-between gap-3">
-              <p className="mono text-[11px] text-slate-500">
-                {items.length}/{total} vaka gösteriliyor
+              <p className="numeric text-ink-3">
+                {items.length} / {total} kayıt gösteriliyor
               </p>
               <button
                 type="button"
                 onClick={loadMore}
                 disabled={loadingMore}
-                className="btn-ghost btn-sm"
+                className="btn-secondary btn-sm"
               >
                 {loadingMore ? (
                   <Loader2 size={12} className="animate-spin" aria-hidden />
                 ) : (
-                  <ArrowRight size={12} />
+                  <ArrowDown size={12} aria-hidden />
                 )}
-                Daha fazla yükle
+                Daha fazla kayıt yükle
               </button>
             </div>
           )}

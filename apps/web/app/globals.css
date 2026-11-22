@@ -2,97 +2,399 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ==========================================================================
+   Showis — görsel dünya: "dosya masası" (kayıt/kanıt yönetimi yüzeyi)
+
+   Tek kaynak: semantik tokenlar. Palet yalnızca burada değişir; sayfalar
+   `bg-surface`, `text-ink-2`, `border-line` gibi anlamsal adlar kullanır.
+   Renkler RGB kanalları olarak tanımlanır ki Tailwind'in `/50` opaklık
+   değiştiricileri çalışsın.
+   ========================================================================== */
+
 :root {
-  --background: #05080e;
-  --foreground: #e9eef6;
-  --panel: #0b111b;
-  --panel-2: #101a27;
-  --border: #1b2739;
-  --accent: #22d3ee;
+  color-scheme: light;
+
+  /* --- yüzeyler ------------------------------------------------------- */
+  --canvas: 236 238 241;        /* soğuk kâğıt grisi — sayfa zemini        */
+  --surface: 255 255 255;       /* yükseltilmiş yüzey (panel, tablo)      */
+  --sunken: 243 245 247;        /* gömülü yüzey (tablo başlığı, kuyu)      */
+  --hover: 241 243 246;         /* satır hover                             */
+  --overlay: 255 255 255;       /* açılır menü / popover                   */
+
+  /* --- mürekkep -------------------------------------------------------- */
+  --ink: 21 24 29;              /* birincil metin                          */
+  --ink-2: 74 82 94;            /* ikincil metin                           */
+  --ink-3: 97 106 118;          /* üçüncül metin — WCAG AA'yı geçer        */
+  --on-accent: 255 255 255;     /* aksan dolgu üstündeki metin             */
+
+  /* --- çizgiler ------------------------------------------------------- */
+  --line: 214 218 224;          /* ana ayraç                               */
+  --line-2: 180 187 196;        /* güçlü ayraç / tablo başlığı             */
+
+  /* --- eylem aksanı: mürekkep lacivert -------------------------------- */
+  --accent: 27 58 91;
+  --accent-hover: 20 44 68;
+  --accent-soft: 233 239 245;   /* seçili/ikincil dolgu                   */
+  --accent-line: 175 197 219;   /* seçili/ikincil çizgi                    */
+  --accent-ink: 27 58 91;       /* metin olarak kullanılan aksan           */
+
+  /* --- anlamsal durum renkleri ---------------------------------------- */
+  --ok: 42 91 63;               /* onaylandı / güvenilir                    */
+  --ok-soft: 232 240 234;
+  --ok-line: 176 205 187;
+  --warn: 133 95 20;            /* aday / dikkat                            */
+  --warn-soft: 246 240 226;
+  --warn-line: 222 205 167;
+  --danger: 147 52 42;          /* reddedildi / hata                        */
+  --danger-soft: 247 235 233;
+  --danger-line: 224 190 186;
+  --neutral-soft: 240 242 245;
+  --neutral-line: 214 218 224;
+
+  /* --- tipografi ------------------------------------------------------ */
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono",
+    Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* --- ölçü ----------------------------------------------------------- */
+  --radius-panel: 8px;
+  --radius-control: 6px;
+  --header-h: 56px;
+
+  /* --- gölge ----------------------------------------------------------- */
+  /* Yükselti bir kez ilan edilir; gölge yalnız yüzer yüzeyde. */
+  --shadow-popover: 0 1px 2px 0 rgb(21 24 29 / 0.06), 0 8px 24px -6px rgb(21 24 29 / 0.16);
+  --shadow-scrim: 0 1px 2px 0 rgb(21 24 29 / 0.10);
 }
 
-html {
+/* ==========================================================================
+   Koyu tema — aynı dünyanın gece hâli.
+
+   Renkler ters çevrilmez; dünya ters çevrilir. Zemin derin grafit olur,
+   yüzeyler ondan bir ton açık kalır, mürekkep kâğıda dönüp açık olur.
+   Aynı anda: neon yok (eski "koyu zemin + parlak aksan" klişesine dönülmez),
+   durum renkleri koyu zeminde okunacak açıklığa getirilir.
+   ========================================================================== */
+
+[data-theme="dark"] {
   color-scheme: dark;
+
+  /* --- yüzeyler ------------------------------------------------------- */
+  --canvas: 26 29 34;          /* derin grafit — siyah değil              */
+  --surface: 34 38 44;         /* panel, tablo                             */
+  --sunken: 28 32 38;          /* gömülü yüzey (tablo başlığı)            */
+  --hover: 42 47 54;           /* satır hover                             */
+  --overlay: 38 43 50;         /* popover                                 */
+
+  /* --- mürekkep -------------------------------------------------------- */
+  --ink: 237 239 242;
+  --ink-2: 184 192 202;
+  --ink-3: 141 150 162;        /* koyu zeminde de AA'yı geçer             */
+  --on-accent: 255 255 255;
+
+  /* --- çizgiler ------------------------------------------------------- */
+  --line: 54 60 68;
+  --line-2: 78 86 96;
+
+  /* --- eylem aksanı: tozlu mavi (neon değil) --------------------------- */
+  --accent: 53 97 143;
+  --accent-hover: 44 82 122;
+  --accent-soft: 31 46 63;
+  --accent-line: 58 88 119;
+  --accent-ink: 132 170 209;   /* metin olarak kullanılan aksan           */
+
+  /* --- anlamsal durum renkleri ---------------------------------------- */
+  --ok: 111 191 142;
+  --ok-soft: 30 45 36;
+  --ok-line: 58 92 70;
+  --warn: 217 164 65;
+  --warn-soft: 44 37 22;
+  --warn-line: 96 78 40;
+  --danger: 226 140 128;
+  --danger-soft: 48 29 26;
+  --danger-line: 100 58 48;
+  --neutral-soft: 38 43 50;
+  --neutral-line: 54 60 68;
+
+  --shadow-popover: 0 1px 2px 0 rgb(0 0 0 / 0.40), 0 10px 28px -6px rgb(0 0 0 / 0.55);
+  --shadow-scrim: 0 1px 2px 0 rgb(0 0 0 / 0.45);
 }
 
-body {
-  background-color: var(--background);
-  color: var(--foreground);
-  font-feature-settings: "cv11", "ss01";
-  -webkit-font-smoothing: antialiased;
-}
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
 
-/* Arka plan: ince teknik izgara + ust isik */
-body::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  background-image:
-    radial-gradient(900px 420px at 50% -10%, rgba(34, 211, 238, 0.09), transparent 70%),
-    linear-gradient(to right, rgba(255, 255, 255, 0.022) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(255, 255, 255, 0.022) 1px, transparent 1px);
-  background-size: 100% 100%, 64px 64px, 64px 64px;
-  mask-image: linear-gradient(to bottom, black, black 60%, transparent);
-}
+  body {
+    @apply bg-canvas font-sans text-ink antialiased;
+    font-size: 14px;
+    line-height: 1.55;
+    font-feature-settings: "cv05" 1, "cv08" 1, "ss01" 1;
+    text-wrap: pretty;
+    min-height: 100vh;
+  }
 
-::selection {
-  background-color: rgb(34 211 238 / 0.3);
-  color: #f8fafc;
+  /* Başlıklar kendi ağırlığını taşır; ayrı bir display yüzü yok. */
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply text-ink;
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    text-wrap: balance;
+  }
+
+  /* Sayısal veri her zaman hizalı okunur. */
+  .tabular,
+  table,
+  time {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Tarayıcı yüzeyleri de tasarıma bağlıdır. */
+  ::selection {
+    background-color: rgb(var(--accent) / 0.16);
+    color: rgb(var(--ink));
+  }
+
+  :focus-visible {
+    outline: 2px solid rgb(var(--accent));
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgb(var(--line-2) / 0.7);
+    border-radius: 6px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgb(var(--ink-3) / 0.8);
+    background-clip: content-box;
+  }
 }
 
 @layer components {
-  .card {
-    @apply rounded-xl border border-slate-800 bg-slate-900 shadow-card;
+  /* --- panel ---------------------------------------------------------- */
+  /* Panel, "başka bir şeyin içindeki kutu" değil; sayfa yüzeyidir.
+     Gölge yerine tek bir çizgi: yükselti bir kez ilan edilir. */
+  .panel {
+    @apply rounded-[8px] border border-line bg-surface;
   }
-  .card-hover {
-    @apply transition-colors hover:border-slate-700;
+
+  /* Başlığı olan bölüm: başlık + ince ayraç, kutu değil. */
+  .panel-head {
+    @apply flex items-center justify-between gap-3 border-b border-line px-5 py-3.5;
   }
+
+  .panel-title {
+    @apply text-sm font-semibold text-ink;
+  }
+
+  /* --- tipografik roller --------------------------------------------- */
+  .page-title {
+    @apply text-[26px] font-semibold leading-tight text-ink;
+    letter-spacing: -0.022em;
+  }
+
+  .page-subtitle {
+    @apply mt-1.5 max-w-[68ch] text-[13.5px] leading-relaxed text-ink-3;
+  }
+
+  /* Bölüm başlığı — üstünde eyebrow etiketi yok. */
+  .section-heading {
+    @apply text-[15px] font-semibold text-ink;
+    letter-spacing: -0.01em;
+  }
+
+  .meta {
+    @apply text-[12px] leading-snug text-ink-3;
+  }
+
+  .meta-strong {
+    @apply text-[12px] font-medium text-ink-2;
+  }
+
+  /* --- form ----------------------------------------------------------- */
   .label {
-    @apply mb-1.5 block text-[11px] font-medium uppercase tracking-wider text-slate-400;
+    @apply mb-1.5 block text-[12px] font-medium text-ink-2;
   }
+
   .input {
-    @apply w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100
-      placeholder:text-slate-600 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20;
+    @apply w-full rounded-[6px] border border-line-2 bg-surface px-3 py-[7px] text-[13.5px]
+           text-ink placeholder:text-ink-3 transition-colors
+           focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/15
+           disabled:cursor-not-allowed disabled:bg-sunken disabled:text-ink-3;
   }
-  .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium
-      transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40
-      disabled:cursor-not-allowed disabled:opacity-50;
+
+  .select {
+    @apply w-full cursor-pointer rounded-[6px] border border-line-2 bg-surface px-3 py-[7px]
+           text-[13.5px] text-ink transition-colors
+           focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/15
+           disabled:cursor-not-allowed disabled:bg-sunken disabled:text-ink-3;
   }
+
+  .hint {
+    @apply mt-1.5 block text-[12px] leading-snug text-ink-3;
+  }
+
+  .hint-error {
+    @apply mt-1.5 block text-[12px] leading-snug text-danger;
+  }
+
+  /* --- butonlar ------------------------------------------------------- */
+  /* Ortak taban seçici grubu olarak tanımlanır: Tailwind, @layer içindeki
+     özel bir sınıfı @apply ile birleştiremez. */
+  .btn,
+  .btn-primary,
+  .btn-secondary,
+  .btn-quiet,
+  .btn-danger,
+  .btn-danger-quiet {
+    @apply inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-[6px] px-3
+           py-[7px] text-[13px] font-medium transition-colors
+           focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/25
+           focus-visible:ring-offset-1 focus-visible:ring-offset-canvas
+           disabled:cursor-not-allowed disabled:opacity-45;
+  }
+
   .btn-primary {
-    @apply btn bg-blue-500 text-slate-950 hover:bg-blue-400;
+    @apply bg-accent text-on-accent hover:bg-accent-hover;
   }
-  .btn-ghost {
-    @apply btn border border-slate-700 text-slate-300 hover:border-slate-600 hover:bg-slate-800/60;
+
+  .btn-secondary {
+    @apply border border-line-2 bg-surface text-ink-2 hover:border-ink-3 hover:text-ink;
   }
+
+  .btn-quiet {
+    @apply text-ink-3 hover:bg-hover hover:text-ink;
+  }
+
   .btn-danger {
-    @apply btn border border-red-500/40 text-red-300 hover:bg-red-500/10;
+    @apply border border-danger-line bg-danger-soft text-danger hover:bg-danger hover:text-on-accent;
   }
+
+  .btn-danger-quiet {
+    @apply text-danger hover:bg-danger-soft;
+  }
+
   .btn-sm {
-    @apply px-2.5 py-1 text-xs;
+    @apply px-2.5 py-[5px] text-[12px];
   }
-  .chip {
-    @apply inline-flex items-center gap-1.5 rounded-full border border-slate-700 bg-slate-800/60 px-2.5 py-0.5
-      text-[11px] font-medium text-slate-300;
+
+  /* --- durum etiketleri ------------------------------------------------ */
+  /* Etiket bir "rozet" değil; durum metni + ölçü. */
+  .status,
+  .status-neutral,
+  .status-ok,
+  .status-warn,
+  .status-danger {
+    @apply inline-flex items-center gap-1.5 whitespace-nowrap text-[12px] font-medium;
   }
-  .section-title {
-    @apply text-[11px] font-semibold uppercase tracking-wider text-slate-500;
+
+  .status-neutral {
+    @apply text-ink-2;
   }
-  .mono {
-    @apply font-mono tabular-nums;
+
+  .status-ok {
+    @apply text-ok;
   }
+
+  .status-warn {
+    @apply text-warn;
+  }
+
+  .status-danger {
+    @apply text-danger;
+  }
+
+  /* Ölçü çubuğu yerine ölçü: sayı + ince çizgi. */
+  .meter {
+    @apply block h-[3px] w-full overflow-hidden rounded-[1px] bg-line;
+  }
+
+  /* --- tablo ---------------------------------------------------------- */
+  .data-table {
+    @apply w-full border-collapse text-[13px];
+  }
+
+  .data-table thead th {
+    @apply border-b border-line-2 bg-sunken px-4 py-2.5 text-left text-[12px]
+           font-medium text-ink-3;
+  }
+
+  .data-table tbody td {
+    @apply border-b border-line px-4 py-3 align-middle;
+  }
+
+  .data-table tbody tr:last-child td {
+    @apply border-b-0;
+  }
+
+  .data-table tbody tr {
+    @apply transition-colors hover:bg-hover;
+  }
+
+  /* --- yardımcılar ---------------------------------------------------- */
+  .numeric {
+    @apply font-mono text-[12px] tabular-nums;
+  }
+
+  /*
+   * Yatay kaydırmalı tablo sarmalayıcısı.
+   *
+   * `overflow-x: auto` tek başına yetmiyor: Chrome, tablonun taşan genişliğini
+   * belge genişliğine de yansıtıyor ve sayfa yatay kaydırılabilir hâle geliyor.
+   * `contain: paint` taşmayı kırpar ve sarmalayıcının dışına çıkmasını engeller.
+   */
+  .scroll-x {
+    @apply w-full max-w-full overflow-x-auto contain-paint;
+  }
+
   .kbd {
-    @apply rounded border border-slate-700 bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-slate-400;
+    @apply rounded-[4px] border border-line-2 bg-sunken px-1.5 py-0.5 font-mono text-[12px] text-ink-2;
+  }
+
+  .link {
+    @apply text-accent-ink underline decoration-accent-line underline-offset-2
+           transition-colors hover:decoration-accent;
+  }
+
+  .divider {
+    @apply border-t border-line;
   }
 }
 
-/* Animasyonlar */
-@keyframes showis-fade-up {
+@layer utilities {
+  /* Sayfa üst boşluğu: başlıktan önce daha geniş, sonra daha dar. */
+  .stack {
+    @apply space-y-8;
+  }
+
+  .stack-tight {
+    @apply space-y-5;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Hareket: tek bir sahne, kullanıcı eylemine cevap veren. Bölüm giriş
+   animasyonları, kademeli fade-slide ve dekoratif nabız yok.
+   -------------------------------------------------------------------------- */
+
+@keyframes showis-panel-in {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(4px);
   }
   to {
     opacity: 1;
@@ -100,67 +402,47 @@ body::before {
   }
 }
 
-@keyframes showis-fade-in {
-  from {
-    opacity: 0;
-  }
-  to {
+.panel-enter {
+  animation: showis-panel-in 220ms cubic-bezier(0.2, 0.8, 0.3, 1) both;
+}
+
+/* Canlı tarama göstergesi: tek bir nefes, halka yayılımı değil. */
+@keyframes showis-breathe {
+  0%,
+  100% {
     opacity: 1;
   }
-}
-
-@keyframes showis-pulse-ring {
-  0% {
-    box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.45);
-  }
-  70% {
-    box-shadow: 0 0 0 8px rgba(34, 211, 238, 0);
-  }
-  100% {
-    box-shadow: 0 0 0 0 rgba(34, 211, 238, 0);
+  50% {
+    opacity: 0.35;
   }
 }
 
-.animate-in {
-  animation: showis-fade-up 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+.pulse-live {
+  animation: showis-breathe 2.4s ease-in-out infinite;
 }
-
-.animate-fade {
-  animation: showis-fade-in 0.25s ease-out both;
-}
-
-.live-dot {
-  animation: showis-pulse-ring 1.8s infinite;
-}
-
-.stagger-1 { animation-delay: 0.04s; }
-.stagger-2 { animation-delay: 0.08s; }
-.stagger-3 { animation-delay: 0.12s; }
-.stagger-4 { animation-delay: 0.16s; }
 
 @media (prefers-reduced-motion: reduce) {
-  .animate-in,
-  .animate-fade,
-  .live-dot {
+  .panel-enter,
+  .pulse-live {
     animation: none !important;
+  }
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
   }
 }
 
-/* Ince kaydirma cubugu (koyu tema) */
-::-webkit-scrollbar {
-  width: 9px;
-  height: 9px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: #22304a;
-  border-radius: 6px;
-  border: 2px solid transparent;
-  background-clip: content-box;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #33455f;
-  background-clip: content-box;
+/* Rapor/tablo çıktısı yazdırılırken uygulama kabuğu gizlenir. */
+@media print {
+  header,
+  footer,
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #fff;
+  }
 }

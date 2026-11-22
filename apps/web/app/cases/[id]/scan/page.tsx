@@ -13,7 +13,7 @@ function ScanPageInner() {
 
 export default function ScanPage() {
   return (
-    <Suspense fallback={<p className="text-sm text-slate-400">Yükleniyor…</p>}>
+    <Suspense fallback={<p className="text-[13px] text-ink-3">Yükleniyor</p>}>
       <ScanPageInner />
     </Suspense>
   );

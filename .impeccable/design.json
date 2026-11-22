@@ -1,0 +1,870 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-22T16:28:52.949Z",
+  "title": "Design System: Showis — Kayıt Yüzeyi",
+  "extensions": {
+    "colorMeta": {
+      "canvas": {
+        "role": "primary",
+        "displayName": "Soğuk Kâğıt",
+        "canonical": "#ECEEF1",
+        "tonalRamp": [
+          "#28292a",
+          "#404245",
+          "#4e596a",
+          "#647287",
+          "#8491a4",
+          "#a7b0be",
+          "#d5d6d7",
+          "#f0f0f0"
+        ]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Sayfa Beyazı",
+        "canonical": "#FFFFFF",
+        "tonalRamp": [
+          "#292929",
+          "#424242",
+          "#5c5c5c",
+          "#757575",
+          "#949494",
+          "#b3b3b3",
+          "#d6d6d6",
+          "#f0f0f0"
+        ]
+      },
+      "sunken": {
+        "role": "neutral",
+        "displayName": "Gömülü",
+        "canonical": "#F3F5F7",
+        "tonalRamp": [
+          "#28292a",
+          "#3f4245",
+          "#495c6e",
+          "#5e758d",
+          "#7e94a9",
+          "#a3b3c2",
+          "#d5d6d7",
+          "#f0f0f0"
+        ]
+      },
+      "hover": {
+        "role": "neutral",
+        "displayName": "hover",
+        "canonical": "#F1F3F6",
+        "tonalRamp": [
+          "#28292a",
+          "#3f4245",
+          "#485870",
+          "#5c708f",
+          "#7d8fab",
+          "#a2afc3",
+          "#d5d6d7",
+          "#f0f0f0"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Mürekkep",
+        "canonical": "#15181D",
+        "tonalRamp": [
+          "#28292a",
+          "#404245",
+          "#4d586a",
+          "#637188",
+          "#8390a5",
+          "#a6afbf",
+          "#d5d6d7",
+          "#f0f0f0"
+        ]
+      },
+      "ink-secondary": {
+        "role": "neutral",
+        "displayName": "Mürekkep İkincil",
+        "canonical": "#4A525E",
+        "tonalRamp": [
+          "#282929",
+          "#414244",
+          "#515a67",
+          "#677383",
+          "#8791a1",
+          "#a9b1bc",
+          "#d6d6d7",
+          "#f0f0f0"
+        ]
+      },
+      "ink-tertiary": {
+        "role": "neutral",
+        "displayName": "Mürekkep Üçüncül",
+        "canonical": "#616A76",
+        "tonalRamp": [
+          "#282929",
+          "#414244",
+          "#535b65",
+          "#6a7481",
+          "#89929e",
+          "#abb1ba",
+          "#d6d6d7",
+          "#f0f0f0"
+        ]
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Ayrac",
+        "canonical": "#D6DAE0",
+        "tonalRamp": [
+          "#28292a",
+          "#404244",
+          "#4f5969",
+          "#657286",
+          "#8591a3",
+          "#a8b0bd",
+          "#d5d6d7",
+          "#f0f0f0"
+        ]
+      },
+      "line-strong": {
+        "role": "neutral",
+        "displayName": "Ayrac Güçlü",
+        "canonical": "#B4BBC4",
+        "tonalRamp": [
+          "#282929",
+          "#414244",
+          "#515a67",
+          "#677483",
+          "#8792a1",
+          "#a9b1bc",
+          "#d5d6d7",
+          "#f0f0f0"
+        ]
+      },
+      "accent": {
+        "role": "primary",
+        "displayName": "Mürekkep Lacivert",
+        "canonical": "#1B3A5B",
+        "tonalRamp": [
+          "#26292c",
+          "#3a424a",
+          "#2a5a8e",
+          "#3673b5",
+          "#5a92ce",
+          "#89b1dc",
+          "#d3d6d9",
+          "#eff0f0"
+        ]
+      },
+      "accent-hover": {
+        "role": "primary",
+        "displayName": "Mürekkep Lacivert Koyu",
+        "canonical": "#142C44",
+        "tonalRamp": [
+          "#26292c",
+          "#3a424a",
+          "#2a5c8e",
+          "#3575b5",
+          "#5994ce",
+          "#89b3dc",
+          "#d3d6d9",
+          "#eff0f0"
+        ]
+      },
+      "accent-soft": {
+        "role": "primary",
+        "displayName": "Mürekkep Lacivert Soluk",
+        "canonical": "#E9EFF5",
+        "tonalRamp": [
+          "#27292b",
+          "#3d4248",
+          "#395c7e",
+          "#4975a1",
+          "#6c94bc",
+          "#96b3cf",
+          "#d4d6d8",
+          "#eff0f0"
+        ]
+      },
+      "accent-line": {
+        "role": "primary",
+        "displayName": "Mürekkep Lacivert Çizgi",
+        "canonical": "#AFC5DB",
+        "tonalRamp": [
+          "#27292b",
+          "#3d4248",
+          "#395c7f",
+          "#4975a2",
+          "#6b94bd",
+          "#95b3d0",
+          "#d4d6d8",
+          "#eff0f0"
+        ]
+      },
+      "ok": {
+        "role": "success",
+        "displayName": "Onay Yeşili",
+        "canonical": "#2A5B3F",
+        "tonalRamp": [
+          "#272b29",
+          "#3d4842",
+          "#3a7e57",
+          "#4aa16f",
+          "#6cbb8e",
+          "#96cfae",
+          "#d4d8d6",
+          "#eff0f0"
+        ]
+      },
+      "ok-soft": {
+        "role": "neutral",
+        "displayName": "ok-soft",
+        "canonical": "#E8F0EA",
+        "tonalRamp": [
+          "#282a28",
+          "#3f4541",
+          "#486f52",
+          "#5d8e69",
+          "#7daa89",
+          "#a2c3aa",
+          "#d5d7d6",
+          "#f0f0f0"
+        ]
+      },
+      "ok-line": {
+        "role": "neutral",
+        "displayName": "ok-line",
+        "canonical": "#B0CDBB",
+        "tonalRamp": [
+          "#282a28",
+          "#3f4642",
+          "#477057",
+          "#5b906f",
+          "#7cac8e",
+          "#a1c4ae",
+          "#d5d8d6",
+          "#f0f0f0"
+        ]
+      },
+      "warn": {
+        "role": "warning",
+        "displayName": "Uyarı Okeri",
+        "canonical": "#855F14",
+        "tonalRamp": [
+          "#2d2a25",
+          "#4d4637",
+          "#a07218",
+          "#cc921f",
+          "#e3ae45",
+          "#ebc57a",
+          "#dbd8d2",
+          "#f0f0ef"
+        ]
+      },
+      "warn-soft": {
+        "role": "neutral",
+        "displayName": "warn-soft",
+        "canonical": "#F6F0E2",
+        "tonalRamp": [
+          "#2c2a26",
+          "#4a453b",
+          "#8c6f2b",
+          "#b38e38",
+          "#ccaa5c",
+          "#dbc38a",
+          "#d9d7d3",
+          "#f0f0ef"
+        ]
+      },
+      "warn-line": {
+        "role": "neutral",
+        "displayName": "warn-line",
+        "canonical": "#DECDA7",
+        "tonalRamp": [
+          "#2b2a26",
+          "#49453c",
+          "#866c32",
+          "#ab8a40",
+          "#c5a663",
+          "#d5c090",
+          "#d9d7d4",
+          "#f0f0ef"
+        ]
+      },
+      "danger": {
+        "role": "danger",
+        "displayName": "Kiremit Kırmızısı",
+        "canonical": "#93342A",
+        "tonalRamp": [
+          "#2c2626",
+          "#4a3c3a",
+          "#8f3329",
+          "#b64134",
+          "#cf6458",
+          "#dd9088",
+          "#d9d4d3",
+          "#f0efef"
+        ]
+      },
+      "danger-soft": {
+        "role": "neutral",
+        "displayName": "danger-soft",
+        "canonical": "#F7EBE9",
+        "tonalRamp": [
+          "#2b2726",
+          "#493d3b",
+          "#873d31",
+          "#ac4e3f",
+          "#c67062",
+          "#d6998f",
+          "#d9d4d3",
+          "#f0efef"
+        ]
+      },
+      "danger-line": {
+        "role": "neutral",
+        "displayName": "danger-line",
+        "canonical": "#E0BEBA",
+        "tonalRamp": [
+          "#2b2727",
+          "#483e3d",
+          "#7f4039",
+          "#a25249",
+          "#bd746b",
+          "#d09c95",
+          "#d8d4d4",
+          "#f0efef"
+        ]
+      },
+      "canvas-dark": {
+        "role": "primary",
+        "displayName": "Derin Grafit",
+        "canonical": "#1A1D22",
+        "tonalRamp": [
+          "#28292a",
+          "#404244",
+          "#505968",
+          "#667185",
+          "#8690a2",
+          "#a8b0bd",
+          "#d5d6d7",
+          "#f0f0f0"
+        ],
+        "theme": "dark"
+      },
+      "surface-dark": {
+        "role": "neutral",
+        "displayName": "Panel Gecesi",
+        "canonical": "#22262C",
+        "tonalRamp": [
+          "#28292a",
+          "#404244",
+          "#505968",
+          "#667284",
+          "#8691a2",
+          "#a9b1bc",
+          "#d5d6d7",
+          "#f0f0f0"
+        ],
+        "theme": "dark"
+      },
+      "sunken-dark": {
+        "role": "neutral",
+        "displayName": "Gömülü Gece",
+        "canonical": "#1C2026",
+        "tonalRamp": [
+          "#28292a",
+          "#404245",
+          "#4e596a",
+          "#647287",
+          "#8491a4",
+          "#a7b0be",
+          "#d5d6d7",
+          "#f0f0f0"
+        ],
+        "theme": "dark"
+      },
+      "hover-dark": {
+        "role": "neutral",
+        "displayName": "hover",
+        "canonical": "#2A2F36",
+        "tonalRamp": [
+          "#282929",
+          "#404244",
+          "#505a67",
+          "#677384",
+          "#8792a1",
+          "#a9b1bc",
+          "#d5d6d7",
+          "#f0f0f0"
+        ],
+        "theme": "dark"
+      },
+      "ink-dark": {
+        "role": "neutral",
+        "displayName": "Kâğıt Beyazı (mürekkep)",
+        "canonical": "#EDEFF2",
+        "tonalRamp": [
+          "#28292a",
+          "#404245",
+          "#4d596b",
+          "#627288",
+          "#8390a5",
+          "#a6b0bf",
+          "#d5d6d7",
+          "#f0f0f0"
+        ],
+        "theme": "dark"
+      },
+      "ink-secondary-dark": {
+        "role": "neutral",
+        "displayName": "İkincil Gece",
+        "canonical": "#B8C0CA",
+        "tonalRamp": [
+          "#28292a",
+          "#404244",
+          "#4e5a69",
+          "#647386",
+          "#8492a3",
+          "#a7b1be",
+          "#d5d6d7",
+          "#f0f0f0"
+        ],
+        "theme": "dark"
+      },
+      "ink-tertiary-dark": {
+        "role": "neutral",
+        "displayName": "Üçüncül Gece",
+        "canonical": "#8D96A2",
+        "tonalRamp": [
+          "#282929",
+          "#414244",
+          "#525a65",
+          "#697481",
+          "#89929f",
+          "#abb1ba",
+          "#d6d6d7",
+          "#f0f0f0"
+        ],
+        "theme": "dark"
+      },
+      "line-dark": {
+        "role": "neutral",
+        "displayName": "Ayrac Gece",
+        "canonical": "#363C44",
+        "tonalRamp": [
+          "#282929",
+          "#414244",
+          "#515a66",
+          "#687383",
+          "#8892a0",
+          "#aab1bb",
+          "#d6d6d7",
+          "#f0f0f0"
+        ],
+        "theme": "dark"
+      },
+      "line-strong-dark": {
+        "role": "neutral",
+        "displayName": "Ayrac Güçlü Gece",
+        "canonical": "#4E5660",
+        "tonalRamp": [
+          "#282929",
+          "#414244",
+          "#525b65",
+          "#697481",
+          "#89939f",
+          "#abb2ba",
+          "#d6d6d7",
+          "#f0f0f0"
+        ],
+        "theme": "dark"
+      },
+      "accent-dark": {
+        "role": "primary",
+        "displayName": "Tozlu Mavi",
+        "canonical": "#35618F",
+        "tonalRamp": [
+          "#26292b",
+          "#3c4249",
+          "#325b86",
+          "#3f74ab",
+          "#6393c5",
+          "#8fb2d6",
+          "#d4d6d9",
+          "#eff0f0"
+        ],
+        "theme": "dark"
+      },
+      "accent-hover-dark": {
+        "role": "primary",
+        "displayName": "Tozlu Mavi Koyu",
+        "canonical": "#2C527A",
+        "tonalRamp": [
+          "#26292b",
+          "#3b4249",
+          "#315b87",
+          "#3e74ac",
+          "#6293c6",
+          "#8fb2d6",
+          "#d3d6d9",
+          "#eff0f0"
+        ],
+        "theme": "dark"
+      },
+      "accent-soft-dark": {
+        "role": "primary",
+        "displayName": "Tozlu Mavi Soluk",
+        "canonical": "#1F2E3F",
+        "tonalRamp": [
+          "#27292b",
+          "#3d4247",
+          "#3d5a7b",
+          "#4d739d",
+          "#6f92b8",
+          "#98b1cd",
+          "#d4d6d8",
+          "#eff0f0"
+        ],
+        "theme": "dark"
+      },
+      "accent-line-dark": {
+        "role": "primary",
+        "displayName": "Tozlu Mavi Çizgi",
+        "canonical": "#3A5877",
+        "tonalRamp": [
+          "#27292b",
+          "#3d4247",
+          "#3c5b7b",
+          "#4d759e",
+          "#6f93b9",
+          "#98b2cd",
+          "#d4d6d8",
+          "#eff0f0"
+        ],
+        "theme": "dark"
+      },
+      "accent-ink-dark": {
+        "role": "primary",
+        "displayName": "Tozlu Mavi Metin",
+        "canonical": "#84AAD1",
+        "tonalRamp": [
+          "#26292b",
+          "#3c4249",
+          "#325b86",
+          "#4075ab",
+          "#6393c5",
+          "#90b2d5",
+          "#d4d6d9",
+          "#eff0f0"
+        ],
+        "theme": "dark"
+      },
+      "ok-dark": {
+        "role": "success",
+        "displayName": "Onay Yeşili (gece)",
+        "canonical": "#6FBF8E",
+        "tonalRamp": [
+          "#272b28",
+          "#3d4841",
+          "#387f54",
+          "#48a26b",
+          "#6bbd8b",
+          "#95d0ac",
+          "#d4d8d6",
+          "#eff0f0"
+        ],
+        "theme": "dark"
+      },
+      "ok-soft-dark": {
+        "role": "neutral",
+        "displayName": "ok-soft",
+        "canonical": "#1E2D24",
+        "tonalRamp": [
+          "#282a29",
+          "#3f4542",
+          "#496e58",
+          "#5e8d71",
+          "#7ea990",
+          "#a3c2af",
+          "#d5d7d6",
+          "#f0f0f0"
+        ],
+        "theme": "dark"
+      },
+      "ok-line-dark": {
+        "role": "neutral",
+        "displayName": "ok-line",
+        "canonical": "#3A5C46",
+        "tonalRamp": [
+          "#282a28",
+          "#3f4641",
+          "#477156",
+          "#5b906d",
+          "#7cac8d",
+          "#a1c4ad",
+          "#d5d8d6",
+          "#f0f0f0"
+        ],
+        "theme": "dark"
+      },
+      "warn-dark": {
+        "role": "warning",
+        "displayName": "Uyarı Okeri (gece)",
+        "canonical": "#D9A441",
+        "tonalRamp": [
+          "#2c2a25",
+          "#4c4539",
+          "#996e1f",
+          "#c48d27",
+          "#dbaa4c",
+          "#e5c27f",
+          "#dad7d2",
+          "#f0f0ef"
+        ],
+        "theme": "dark"
+      },
+      "warn-soft-dark": {
+        "role": "neutral",
+        "displayName": "warn-soft",
+        "canonical": "#2C2516",
+        "tonalRamp": [
+          "#2b2927",
+          "#47443d",
+          "#7a673d",
+          "#9c844e",
+          "#b8a170",
+          "#ccbc99",
+          "#d8d7d4",
+          "#f0f0ef"
+        ],
+        "theme": "dark"
+      },
+      "warn-line-dark": {
+        "role": "neutral",
+        "displayName": "warn-line",
+        "canonical": "#604E28",
+        "tonalRamp": [
+          "#2b2a27",
+          "#48443c",
+          "#826936",
+          "#a68745",
+          "#c0a468",
+          "#d2be93",
+          "#d9d7d4",
+          "#f0f0ef"
+        ],
+        "theme": "dark"
+      },
+      "danger-dark": {
+        "role": "danger",
+        "displayName": "Kiremit (gece)",
+        "canonical": "#E28C80",
+        "tonalRamp": [
+          "#2c2625",
+          "#4c3b39",
+          "#953022",
+          "#bf3e2c",
+          "#d76151",
+          "#e38e82",
+          "#dad3d3",
+          "#f0efef"
+        ],
+        "theme": "dark"
+      },
+      "danger-soft-dark": {
+        "role": "neutral",
+        "displayName": "danger-soft",
+        "canonical": "#301D1A",
+        "tonalRamp": [
+          "#2a2827",
+          "#473f3e",
+          "#774841",
+          "#985c52",
+          "#b47d74",
+          "#c9a29c",
+          "#d8d5d4",
+          "#f0f0ef"
+        ],
+        "theme": "dark"
+      },
+      "danger-line-dark": {
+        "role": "neutral",
+        "displayName": "danger-line",
+        "canonical": "#643A30",
+        "tonalRamp": [
+          "#2b2827",
+          "#473f3d",
+          "#7c483c",
+          "#9f5c4c",
+          "#ba7d6e",
+          "#cda298",
+          "#d8d5d4",
+          "#f0f0ef"
+        ],
+        "theme": "dark"
+      }
+    },
+    "elevation": {
+      "philosophy": "flat",
+      "note": "Yükselti bir kez ilan edilir: 1px çizgi. Gölge yalnız yüzer yüzeyde.",
+      "shadows": {
+        "popover": "0 1px 2px 0 rgb(21 24 29 / 0.06), 0 8px 24px -6px rgb(21 24 29 / 0.16)",
+        "scrim": "0 1px 2px 0 rgb(21 24 29 / 0.10)"
+      }
+    },
+    "motion": {
+      "philosophy": "one-authored-moment",
+      "note": "Bölüm giriş animasyonu, kademeli fade-slide ve dekoratif nabız yok.",
+      "tokens": {
+        "panelEnter": "220ms cubic-bezier(0.2, 0.8, 0.3, 1) both",
+        "breathe": "2.4s ease-in-out infinite",
+        "controlHover": "150ms ease"
+      },
+      "reducedMotion": "prefers-reduced-motion: reduce → tüm geçiş ve animasyon kapanır"
+    },
+    "breakpoints": {
+      "sm": "640px",
+      "md": "768px",
+      "lg": "1024px",
+      "xl": "1280px"
+    },
+    "themes": {
+      "mechanism": "Tokenlar :root (açık) ve [data-theme=\"dark\"] (koyu) bloklarında tanımlıdır. Sayfalar anlamsal adları kullanır, tema adına göre dallanmaz.",
+      "attribute": "data-theme",
+      "storageKey": "showis:theme",
+      "default": "prefers-color-scheme (kayıt yoksa)",
+      "bootstrap": "<head> içindeki küçük betik, ilk boyamadan önce data-theme'i ayarlar — tema flash'ı olmaz.",
+      "light": {
+        "canvas": "#ECEEF1",
+        "surface": "#FFFFFF",
+        "sunken": "#F3F5F7",
+        "ink": "#15181D",
+        "ink-2": "#4A525E",
+        "ink-3": "#616A76",
+        "line": "#D6DAE0",
+        "line-2": "#B4BBC4",
+        "accent": "#1B3A5B",
+        "accent-hover": "#142C44",
+        "accent-soft": "#E9EFF5",
+        "accent-line": "#AFC5DB",
+        "ok": "#2A5B3F",
+        "warn": "#855F14",
+        "danger": "#93342A",
+        "shadowPopover": "0 1px 2px 0 rgb(21 24 29 / 0.06), 0 8px 24px -6px rgb(21 24 29 / 0.16)"
+      },
+      "dark": {
+        "canvas": "#1A1D22",
+        "surface": "#22262C",
+        "sunken": "#1C2026",
+        "ink": "#EDEFF2",
+        "ink-2": "#B8C0CA",
+        "ink-3": "#8D96A2",
+        "line": "#363C44",
+        "line-2": "#4E5660",
+        "accent": "#35618F",
+        "accent-hover": "#2C527A",
+        "accent-soft": "#1F2E3F",
+        "accent-line": "#3A5877",
+        "ok": "#6FBF8E",
+        "warn": "#D9A441",
+        "danger": "#E28C80",
+        "shadowPopover": "0 1px 2px 0 rgb(0 0 0 / 0.40), 0 10px 28px -6px rgb(0 0 0 / 0.55)"
+      }
+    },
+    "components": {
+      "button-primary": {
+        "html": "<button class=\"ds-btn-primary\">Yeni vaka</button>",
+        "css": ".ds-btn-primary {\n  display: inline-flex; align-items: center; justify-content: center; gap: 6px;\n  padding: 7px 12px; border: 1px solid transparent; border-radius: 6px;\n  background: #1B3A5B; color: #FFFFFF;\n  font: 500 13px/1.45 Inter, ui-sans-serif, system-ui, sans-serif;\n  cursor: pointer; transition: background-color 150ms ease, color 150ms ease;\n}\n.ds-btn-primary:hover { background: #142C44; }\n.ds-btn-primary:focus-visible { outline: 2px solid #1B3A5B; outline-offset: 2px; }"
+      },
+      "button-secondary": {
+        "html": "<button class=\"ds-btn-secondary\">Dışa aktar</button>",
+        "css": ".ds-btn-secondary {\n  display: inline-flex; align-items: center; justify-content: center; gap: 6px;\n  padding: 7px 12px; border: 1px solid #B4BBC4; border-radius: 6px;\n  background: #FFFFFF; color: #4A525E;\n  font: 500 13px/1.45 Inter, ui-sans-serif, system-ui, sans-serif;\n  cursor: pointer; transition: border-color 150ms ease, color 150ms ease;\n}\n.ds-btn-secondary:hover { border-color: #616A76; color: #15181D; }\n.ds-btn-secondary:focus-visible { outline: 2px solid #1B3A5B; outline-offset: 2px; }"
+      },
+      "button-danger-quiet": {
+        "html": "<button class=\"ds-btn-danger\">Kaydı sil</button>",
+        "css": ".ds-btn-danger {\n  display: inline-flex; align-items: center; justify-content: center; gap: 6px;\n  padding: 5px 10px; border: 1px solid transparent; border-radius: 6px;\n  background: transparent; color: #93342A;\n  font: 500 12px/1.45 Inter, ui-sans-serif, system-ui, sans-serif;\n  cursor: pointer; transition: background-color 150ms ease;\n}\n.ds-btn-danger:hover { background: #F7EBE9; }\n.ds-btn-danger:focus-visible { outline: 2px solid #1B3A5B; outline-offset: 2px; }"
+      },
+      "input-search": {
+        "html": "<div class=\"ds-search\"><span class=\"ds-search-icon\"></span><input class=\"ds-search-input\" placeholder=\"Vaka adı, yasal amaç veya hedef kimliği ile arayın\" /></div>",
+        "css": ".ds-search { position: relative; display: block; }\n.ds-search-icon { position: absolute; left: 12px; top: 50%; width: 12px; height: 12px;\n  margin-top: -6px; border: 1.5px solid #616A76; border-radius: 50%; }\n.ds-search-input {\n  width: 100%; padding: 7px 12px 7px 34px;\n  border: 1px solid #B4BBC4; border-radius: 6px; background: #FFFFFF; color: #15181D;\n  font: 400 13.5px/1.55 Inter, ui-sans-serif, system-ui, sans-serif;\n}\n.ds-search-input::placeholder { color: #616A76; }\n.ds-search-input:focus { border-color: #1B3A5B; outline: none; box-shadow: 0 0 0 2px rgba(27,58,91,0.15); }"
+      },
+      "panel-record": {
+        "html": "<div class=\"ds-panel\">\n  <div class=\"ds-panel-head\"><span class=\"ds-panel-title\">Hedef</span></div>\n  <div class=\"ds-panel-body\">İsim tek başına yeterlidir, ipuçları doğrulamayı güçlendirir</div>\n</div>",
+        "css": ".ds-panel { border: 1px solid #D6DAE0; border-radius: 8px; background: #FFFFFF; overflow: hidden; }\n.ds-panel-head { display: flex; align-items: center; justify-content: space-between;\n  gap: 12px; padding: 14px 20px; border-bottom: 1px solid #D6DAE0; background: #FFFFFF; }\n.ds-panel-title { font: 600 15px/1.3 Inter, ui-sans-serif, system-ui, sans-serif; color: #15181D; }\n.ds-panel-body { padding: 20px; font: 400 13.5px/1.55 Inter, ui-sans-serif, system-ui, sans-serif; color: #616A76; }"
+      },
+      "table-register": {
+        "html": "<table class=\"ds-table\"><thead><tr><th>Kayıt ve hedef</th><th>Durum</th><th class=\"ds-num\">Skor</th></tr></thead>\n<tbody><tr><td><span class=\"ds-strong\">Kerem Boz — kendi hesap envanteri</span><span class=\"ds-mono\">@kerem, Kerem Boz</span></td>\n<td><span class=\"ds-dot\"></span>Aktif</td><td class=\"ds-num\">94</td></tr></tbody></table>",
+        "css": ".ds-table { width: 100%; border-collapse: collapse; background: #FFFFFF;\n  border: 1px solid #D6DAE0; border-radius: 8px; overflow: hidden;\n  font: 400 13px/1.5 Inter, ui-sans-serif, system-ui, sans-serif; }\n.ds-table th { background: #F3F5F7; color: #616A76; text-align: left; font-weight: 500; font-size: 12px;\n  padding: 10px 16px; border-bottom: 1px solid #B4BBC4; }\n.ds-table td { padding: 12px 16px; border-bottom: 1px solid #D6DAE0; color: #4A525E; }\n.ds-table tbody tr:last-child td { border-bottom: 0; }\n.ds-table tbody tr:hover td { background: #F1F3F6; }\n.ds-strong { display: block; color: #15181D; font-weight: 500; font-size: 13.5px; }\n.ds-mono { display: block; font: 400 12px/1.45 \"JetBrains Mono\", ui-monospace, monospace; color: #616A76; margin-top: 2px; }\n.ds-dot { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: #2A5B3F; }\n.ds-num { text-align: right; font-variant-numeric: tabular-nums; }"
+      },
+      "status-ok": {
+        "html": "<span class=\"ds-status-ok\"><span class=\"ds-dot-ok\"></span>onaylandı</span>",
+        "css": ".ds-status-ok { display: inline-flex; align-items: center; gap: 6px;\n  color: #2A5B3F; font: 500 12px/1.45 Inter, ui-sans-serif, system-ui, sans-serif; }\n.ds-dot-ok { width: 6px; height: 6px; border-radius: 50%; background: #2A5B3F; }"
+      },
+      "status-warn": {
+        "html": "<span class=\"ds-status-warn\"><span class=\"ds-dot-warn\"></span>aday</span>",
+        "css": ".ds-status-warn { display: inline-flex; align-items: center; gap: 6px;\n  color: #855F14; font: 500 12px/1.45 Inter, ui-sans-serif, system-ui, sans-serif; }\n.ds-dot-warn { width: 6px; height: 6px; border-radius: 50%; background: #855F14; }"
+      },
+      "meter": {
+        "html": "<div class=\"ds-meter-wrap\"><span class=\"ds-meter-label\">güven puanı</span>\n<span class=\"ds-meter\"><span class=\"ds-meter-fill\"></span></span></div>",
+        "css": ".ds-meter-wrap { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }\n.ds-meter-label { font: 400 12px/1.45 Inter, ui-sans-serif, system-ui, sans-serif; color: #616A76; }\n.ds-meter { display: block; width: 96px; height: 3px; border-radius: 1px; background: #D6DAE0; overflow: hidden; }\n.ds-meter-fill { display: block; height: 100%; width: 94%; background: #1B3A5B; }"
+      },
+      "nav-underline": {
+        "html": "<nav class=\"ds-nav\"><a class=\"ds-nav-link ds-active\">Vakalar</a><a class=\"ds-nav-link\">Yeni vaka</a><a class=\"ds-nav-link\">Ayarlar</a></nav>",
+        "css": ".ds-nav { display: flex; gap: 24px; height: 56px; align-items: center;\n  border-bottom: 1px solid #D6DAE0; background: #FFFFFF; }\n.ds-nav-link { position: relative; display: flex; align-items: center; height: 56px;\n  color: #616A76; text-decoration: none;\n  font: 400 13px/1.45 Inter, ui-sans-serif, system-ui, sans-serif; }\n.ds-nav-link:hover { color: #15181D; }\n.ds-nav-link.ds-active { color: #15181D; font-weight: 500; }\n.ds-nav-link.ds-active::after { content: \"\"; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: #1B3A5B; }\n.ds-nav-link:focus-visible { outline: 2px solid #1B3A5B; outline-offset: 2px; }"
+      },
+      "theme-toggle": {
+        "html": "<button class=\"ds-theme-toggle\" aria-label=\"Koyu temaya geç\">\n  <svg viewBox=\"0 0 24 24\" width=\"15\" height=\"15\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"ds-icon\"><path d=\"M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z\"/></svg>\n</button>",
+        "css": ".ds-theme-toggle {\n  display: inline-flex; align-items: center; justify-content: center;\n  width: 32px; height: 32px; padding: 0;\n  border: 1px solid transparent; border-radius: 6px;\n  background: transparent; color: #616A76; cursor: pointer;\n  transition: background-color 150ms ease, color 150ms ease;\n}\n.ds-theme-toggle:hover { background: #F1F3F6; color: #15181D; }\n.ds-theme-toggle:focus-visible { outline: 2px solid #1B3A5B; outline-offset: 2px; }\n.ds-icon { display: block; }"
+      }
+    }
+  },
+  "narrative": {
+    "northStar": "The Case File (dosya masası)",
+    "overview": "Showis bir platform değil, açılmış bir dosya: hedef, tarama, bulgular, kanıt zinciri ve denetim izi. Arayüzün bütün işi bu dosyayı okunabilir ve savunulabilir kılmaktır.\n\nYüzey bir uygulama kabuğu gibi değil, evrak masası gibi kurulur: soğuk kâğıt grisi zemin, üzerinde beyaz sayfalar, ince ve tek çizgiler, mürekkep lacivert bir eylem rengi.",
+    "keyCharacteristics": [
+      "Düz ve tonlu: gölge neredeyse hiç yok, derinlik 1px çizgiyle ve yüzey tonuyla anlatılır.",
+      "Sayılar öne çıkar; monospace yalnız kod, hash, kimlik ve ölçüde.",
+      "Durum bir rozet değil: nokta + metin.",
+      "Boşluk yapı taşır; bölümler kutuyla değil ayraçla ayrılır.",
+      "Tek eylem rengi: lacivert yalnız eylem içindir."
+    ],
+    "rules": [
+      {
+        "name": "The Single Ink Rule",
+        "body": "Eylem için tek bir renk vardır: mürekkep lacivert. Durum renkleri anlam taşır ve yalnız durumda kullanılır.",
+        "section": "colors"
+      },
+      {
+        "name": "The Two-Weight Rule",
+        "body": "Metin hiyerarşisi renk koyuluğuyla değil, ağırlık ve boyutla kurulur. Üç metin tonu vardır; dördüncüsü yoktur.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat Rule",
+        "body": "Yükselti bir kez ilan edilir: 1px çizgi. Gölge yalnız gerçekten yüzen yüzeyde kullanılır.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Measured Line Rule",
+        "body": "Gövde metni 66–72 karakterde sınırlanır; 80 karakteri geçmez.",
+        "section": "typography"
+      }
+    ],
+    "dos": [
+      "Do yeni renk eklerken app/globals.css içindeki semantik tokenları kullan; sayfalarda kademe adları yazma.",
+      "Do durumu her zaman nokta ve metin ile birlikte göster; renk tek başına anlam taşımaz.",
+      "Do sayıları tabular rakamla yaz.",
+      "Do gövde metnini max-w-[66ch] ile sınırla.",
+      "Do eylemi söyle: 'Yakayı sil' değil, 'Kaydı sil'."
+    ],
+    "donts": [
+      "Don't başlığın üstüne eyebrow etiketi (ALL-CAPS) koy.",
+      "Don't durumları rozet çorbasına döndürme.",
+      "Don't her bölümü kart içine koy.",
+      "Don't koyu zemin + neon aksan klişesine dön.",
+      "Don't gölgeyi dekorasyon olarak kullan.",
+      "Don't monospace'ı teknik görünmek için kullan.",
+      "Don't bağlantı metnine '→' ekle.",
+      "Don't 12px'in altına inme."
+    ]
+  }
+}
