@@ -6,6 +6,7 @@ import {
   ArrowUpRight,
   Check,
   ChevronDown,
+  Download,
   Eye,
   EyeOff,
   FileCode2,
@@ -1149,6 +1150,79 @@ export function FindingsTab({ caseId }: { caseId: string }) {
             ? `${hiddenLowAuth} düşük güvenilirlikli bulgu gizlendi.`
             : "Bu filtreye uyan bulgu yok.";
 
+  const downloadFindings = (format: "csv" | "json") => {
+    const stamp = new Date().toLocaleDateString("sv-SE");
+    const base = `showis-findings-${caseId.slice(0, 8)}-${stamp}`;
+    const payload = shown.map((finding) => ({
+      platform: finding.platform,
+      label: finding.label,
+      url: finding.url ?? "",
+      status: finding.status,
+      score: finding.score,
+      authenticity: finding.authenticity ?? null,
+      corroboration: finding.corroboration ?? 0,
+      signals: (finding.signals ?? []).join("|"),
+      evidence_count: finding.evidence_count ?? finding.evidence_ids.length,
+      cluster_id: finding.cluster_id ?? "",
+      cluster_size: finding.cluster?.size ?? 1,
+      verified_at: finding.verified_at ?? "",
+      explanation: finding.explanation ?? "",
+    }));
+
+    let blob: Blob;
+    if (format === "json") {
+      blob = new Blob(
+        [
+          JSON.stringify(
+            {
+              exported_at: new Date().toISOString(),
+              case_id: caseId,
+              filters: { status: filter, platforms: platformFilter, query: findingQuery, hideLowAuth, showRejected },
+              count: payload.length,
+              findings: payload,
+            },
+            null,
+            2
+          ),
+        ],
+        { type: "application/json" }
+      );
+    } else {
+      const headers = Object.keys(payload[0] ?? {
+        platform: "",
+        label: "",
+        url: "",
+        status: "",
+        score: 0,
+        authenticity: null,
+        corroboration: 0,
+        signals: "",
+        evidence_count: 0,
+        cluster_id: "",
+        cluster_size: 1,
+        verified_at: "",
+        explanation: "",
+      });
+      const escapeCell = (value: unknown) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+      const lines = [
+        headers.join(","),
+        ...payload.map((row) =>
+          headers.map((key) => escapeCell((row as Record<string, unknown>)[key])).join(",")
+        ),
+      ];
+      // BOM: Excel'in UTF-8'i doğru açması için.
+      blob = new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
+    }
+
+    const anchor = document.createElement("a");
+    anchor.href = URL.createObjectURL(blob);
+    anchor.download = `${base}.${format}`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(anchor.href), 2000);
+  };
+
   const renderFinding = (finding: FindingWithAuth) => (
     <FindingRecord
       key={finding.id}
@@ -1335,6 +1409,26 @@ export function FindingsTab({ caseId }: { caseId: string }) {
           >
             <Layers size={12} aria-hidden />
             Kümeler
+          </button>
+          <button
+            type="button"
+            onClick={() => downloadFindings("csv")}
+            disabled={shown.length === 0}
+            title="Filtrelenmiş bulguları CSV olarak indir"
+            className="inline-flex items-center gap-1.5 text-[12px] text-ink-3 transition-colors hover:text-ink disabled:opacity-50"
+          >
+            <Download size={12} aria-hidden />
+            CSV
+          </button>
+          <button
+            type="button"
+            onClick={() => downloadFindings("json")}
+            disabled={shown.length === 0}
+            title="Filtrelenmiş bulguları JSON olarak indir"
+            className="inline-flex items-center gap-1.5 text-[12px] text-ink-3 transition-colors hover:text-ink disabled:opacity-50"
+          >
+            <Download size={12} aria-hidden />
+            JSON
           </button>
         </div>
       </div>
