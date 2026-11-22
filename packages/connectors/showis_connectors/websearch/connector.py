@@ -29,6 +29,7 @@ from showis_contracts import (
 from showis_engine.http import EvidenceStore
 
 from .base import SearchHit, SearchProvider
+from .ranking import rank_hits
 
 _MAX_TITLE = 120
 
@@ -114,6 +115,8 @@ class WebSearchConnector:
 
         hits: list[SearchHit] = await self.search_provider.search(query, limit=limit)
         hits = [hit for hit in hits if not _WRAPPER_RE.search(hit.url)]
+        # Tek sağlayıcı (ör. yalnız DDG) yolunda da alaka sıralaması uygulanır.
+        hits = rank_hits(hits, query, limit=limit)
         evidence = []
         payload: list[dict[str, Any]] = []
         for hit in hits:
