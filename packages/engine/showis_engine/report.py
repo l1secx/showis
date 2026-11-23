@@ -177,7 +177,15 @@ def target_display_name(target: dict[str, Any]) -> str:
     if full:
         return full
     nick = str(target.get("nickname") or "").strip().lstrip("@")
-    return f"@{nick}" if nick else ""
+    if nick:
+        return f"@{nick}"
+    return str(
+        target.get("email")
+        or target.get("phone")
+        or target.get("domain")
+        or target.get("ip")
+        or ""
+    ).strip()
 
 
 def build_report_sections(report_data: dict[str, Any]) -> dict[str, Any]:

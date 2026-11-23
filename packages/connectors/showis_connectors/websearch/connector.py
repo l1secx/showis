@@ -71,7 +71,10 @@ class WebSearchConnector:
         # (`""`) arama motorunda anlamsizdir; nick'ten kurulur. Nick de
         # kullanici girdisidir: tirnak/operator enjeksiyonu notralize edilir.
         nick = sanitize_hint((target.nickname or "").strip().lstrip("@"))
-        if fullname:
+        identifier = sanitize_hint(target.identifier)
+        if target.kind in {"email", "phone", "domain", "ip"} and identifier:
+            subject = f'"{identifier}"'
+        elif fullname:
             subject = f'"{fullname}"'
         elif nick:
             subject = f'"{nick}"'

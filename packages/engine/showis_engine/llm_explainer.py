@@ -131,6 +131,8 @@ class FindingExplainer:
             signals.append("commit e-postası doğrulandı")
         if finding.breakdown.avatar_exact_hash > 0:
             signals.append("avatar dosya karması birebir uyuşuyor")
+        if finding.breakdown.identifier_match > 0:
+            signals.append("hedef kimliği birebir eşleşti")
 
         if signals:
             plat = finding.platform.capitalize()

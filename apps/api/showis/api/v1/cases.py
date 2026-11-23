@@ -1,3 +1,4 @@
+import ipaddress
 import logging
 import math
 import os
@@ -57,6 +58,10 @@ MIN_NICK_BASE = 3
 HINT_KEYS = {"school", "city", "company", "username", "email", "extra"}
 USERNAME_PATTERN = r"^[A-Za-z0-9._-]{1,64}$"
 _EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,190}\.[A-Za-z]{2,}$")
+_PHONE_RE = re.compile(r"^\+?[1-9][0-9]{6,14}$")
+_DOMAIN_RE = re.compile(
+    r"^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$"
+)
 
 #: `budget` anahtarları — mod profilinin üstüne çıkılamaz (SEC-05)
 _BUDGET_KEYS = ("max_tasks", "max_http_requests", "max_llm_calls", "max_wall_seconds")
@@ -126,10 +131,14 @@ class TargetInput(BaseModel):
     | `handle` | `nickname` (normalize sonrası ≥3 + ≥1 alfanümerik) | `first_name`, `last_name` |
     """
 
-    kind: Literal["name", "handle"] = "name"
+    kind: Literal["name", "handle", "email", "phone", "domain", "ip"] = "name"
     first_name: str = Field(default="", max_length=80)
     last_name: str = Field(default="", max_length=80)
     nickname: str = Field(default="", max_length=MAX_NICKNAME)
+    email: str = Field(default="", max_length=254)
+    phone: str = Field(default="", max_length=32)
+    domain: str = Field(default="", max_length=253)
+    ip: str = Field(default="", max_length=64)
     hints: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("first_name", "last_name")
@@ -142,6 +151,27 @@ class TargetInput(BaseModel):
     def _strip_at(cls, value: str) -> str:
         # Ham değer saklanır (görüntüleme için); yalnız baştaki `@` ve boşluklar düşer.
         return str(value).strip().lstrip("@").strip()
+
+    @field_validator("email")
+    @classmethod
+    def _normalize_email(cls, value: str) -> str:
+        return str(value).strip().lower()
+
+    @field_validator("phone")
+    @classmethod
+    def _normalize_phone(cls, value: str) -> str:
+        raw = re.sub(r"[\s().-]+", "", str(value))
+        return raw.strip()
+
+    @field_validator("domain")
+    @classmethod
+    def _normalize_domain(cls, value: str) -> str:
+        return str(value).strip().lower().rstrip(".")
+
+    @field_validator("ip")
+    @classmethod
+    def _normalize_ip(cls, value: str) -> str:
+        return str(value).strip()
 
     @field_validator("hints")
     @classmethod
@@ -187,6 +217,20 @@ class TargetInput(BaseModel):
                 "handle modunda nickname zorunlu (normalize sonrası en az "
                 f"{MIN_NICK_BASE} karakter)"
             )
+        if self.kind == "email":
+            if not self.email or not _EMAIL_RE.match(self.email):
+                raise ValueError("geçerli bir e-posta adresi gerekli")
+        if self.kind == "phone":
+            if not self.phone or not _PHONE_RE.match(self.phone):
+                raise ValueError("telefon E.164 biçiminde olmalı (ör. +905551112233)")
+        if self.kind == "domain":
+            if not self.domain or not _DOMAIN_RE.match(self.domain):
+                raise ValueError("geçerli bir alan adı gerekli (ör. example.com)")
+        if self.kind == "ip":
+            try:
+                ipaddress.ip_address(self.ip)
+            except ValueError as exc:
+                raise ValueError("geçerli bir IPv4/IPv6 adresi gerekli") from exc
         return self
 
 
@@ -233,6 +277,10 @@ async def create_case(
         first_name=data.target.first_name,
         last_name=data.target.last_name,
         nickname=data.target.nickname,
+        email=data.target.email,
+        phone=data.target.phone,
+        domain=data.target.domain,
+        ip=data.target.ip,
         hints=data.target.hints,
     )
     guard_target(contract_target)
@@ -272,6 +320,10 @@ async def create_case(
         first_name=data.target.first_name,
         last_name=data.target.last_name,
         nickname=data.target.nickname,
+        email=data.target.email or None,
+        phone=data.target.phone or None,
+        domain=data.target.domain or None,
+        ip=data.target.ip or None,
         kind=data.target.kind,
         hints=data.target.hints,
         review_required=False,
@@ -706,6 +758,10 @@ async def list_cases(
                         "first_name": contract.first_name,
                         "last_name": contract.last_name,
                         "nickname": contract.nickname,
+                        "email": contract.email,
+                        "phone": contract.phone,
+                        "domain": contract.domain,
+                        "ip": contract.ip,
                     }
                     if contract
                     else None
@@ -753,6 +809,10 @@ async def get_case(case_id: str, db: AsyncSession = Depends(get_db)):
             "first_name": contract.first_name,
             "last_name": contract.last_name,
             "nickname": contract.nickname,
+            "email": contract.email,
+            "phone": contract.phone,
+            "domain": contract.domain,
+            "ip": contract.ip,
             "hints": contract.hints,
         }
         if contract
@@ -1335,6 +1395,10 @@ async def export_case(
             "first_name": contract.first_name,
             "last_name": contract.last_name,
             "nickname": contract.nickname,
+            "email": contract.email,
+            "phone": contract.phone,
+            "domain": contract.domain,
+            "ip": contract.ip,
             "name_forms": contract.name_forms,
             "hints": contract.hints,
             "review_required": contract.review_required,

@@ -451,6 +451,10 @@ const SIGNAL_META: Record<string, { label: string; hint: string }> = {
     label: "Avatar hash eşleşmesi",
     hint: "Birebir aynı profil görseli (0.10)",
   },
+  identifier_match: {
+    label: "Hedef kimliği eşleşmesi",
+    hint: "E-posta, telefon, domain veya IP birebir eşleşti (0.50)",
+  },
   contradiction: { label: "Çelişki", hint: "Ad/konum uyuşmazlığı — skoru düşürür (−0.20)" },
 };
 

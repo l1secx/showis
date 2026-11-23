@@ -135,6 +135,10 @@ async def test_zarf_ve_total(client, db_factory):
         "first_name": "Ayşe",
         "last_name": "Yılmaz",
         "nickname": "",
+        "email": "",
+        "phone": "",
+        "domain": "",
+        "ip": "",
     }
     assert item["last_scan"]["mode"] == "O3"  # en yeni tarama
     assert item["last_scan"]["status"] == "completed"

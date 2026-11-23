@@ -26,6 +26,7 @@ from .publicapi import (
     SteamConnector,
     WordPressConnector,
 )
+from .recon import DomainReconConnector, IpReconConnector
 from .rendered import RenderedProfileConnector
 from .sitecheck import SiteCheckConnector, SiteCheckSearchConnector
 from .tryhackme import TryHackMeConnector
@@ -54,6 +55,8 @@ __all__ = [
     "LeetCodeConnector",
     "CodeforcesConnector",
     "SoundCloudConnector",
+    "DomainReconConnector",
+    "IpReconConnector",
     "BitbucketConnector",
     "CodebergConnector",
     "MastodonConnector",

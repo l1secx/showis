@@ -4,7 +4,11 @@
       "default": "name",
       "enum": [
         "name",
-        "handle"
+        "handle",
+        "email",
+        "phone",
+        "domain",
+        "ip"
       ],
       "title": "Kind",
       "type": "string"
@@ -22,6 +26,26 @@
     "nickname": {
       "default": "",
       "title": "Nickname",
+      "type": "string"
+    },
+    "email": {
+      "default": "",
+      "title": "Email",
+      "type": "string"
+    },
+    "phone": {
+      "default": "",
+      "title": "Phone",
+      "type": "string"
+    },
+    "domain": {
+      "default": "",
+      "title": "Domain",
+      "type": "string"
+    },
+    "ip": {
+      "default": "",
+      "title": "Ip",
       "type": "string"
     },
     "name_forms": {

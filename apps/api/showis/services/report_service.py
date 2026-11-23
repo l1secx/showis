@@ -154,6 +154,10 @@ async def build_report_data(db: AsyncSession, case_id: str) -> dict[str, Any]:
         "first_name": target_contract.first_name,
         "last_name": target_contract.last_name,
         "nickname": target_contract.nickname,
+        "email": target_contract.email,
+        "phone": target_contract.phone,
+        "domain": target_contract.domain,
+        "ip": target_contract.ip,
         "hints": target_contract.hints,
         "name_forms": target_contract.name_forms,
     }

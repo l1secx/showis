@@ -363,6 +363,18 @@ def build_template_fallback_queries(
     handle_mode = target.kind == "handle" or not fullname
 
     queries: list[SearchQuery] = []
+    if target.kind in {"email", "phone", "domain", "ip"}:
+        identifier = sanitize_hint(target.identifier)
+        if identifier:
+            queries.append(
+                SearchQuery(
+                    query=f'"{identifier}"',
+                    platform=Platform.WEB,
+                    rationale=f"{target.kind} kimliği için web araması",
+                    priority=1,
+                )
+            )
+        return _finalize_plan(target, queries)
     if handle_mode:
         # `_site_queries` 50 satırlık tabloyu üretir; tavan tek başına dolduğu
         # için varyantlar burada da plana giremez (isim yolundaki davranışın aynısı).
@@ -497,6 +509,10 @@ class QueryPlanner:
                 "Hedef inceleme gerektiriyor: reşit olmayan kişi sinyali (AUP md.7)."
             )
 
+        # E-posta/telefon/domain/IP için LLM'e gerek yok: kimlik anahtarı
+        # doğrudan aranır, isim varyantı üretilmez.
+        if target.kind not in {"name", "handle"}:
+            return build_template_fallback_queries(target, variants)
         if self.llm_client is None or self.llm_disabled:
             return build_template_fallback_queries(target, variants)
 

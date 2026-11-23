@@ -36,6 +36,8 @@ class GravatarConnector(PublicProfileConnector):
         # Seed e-postaları + hedef ipucundaki e-posta (varsa). E-posta, Gravatar
         # için kullanıcı adından daha güçlü bir kimlik anahtarıdır.
         candidates = [seed.email for seed in ctx.seeds]
+        if ctx.target.email:
+            candidates.append(ctx.target.email)
         hint_email = (ctx.target.hints or {}).get("email")
         if hint_email:
             candidates.append(str(hint_email))

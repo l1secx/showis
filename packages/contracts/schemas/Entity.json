@@ -5,6 +5,7 @@
         "person",
         "account",
         "domain",
+        "ip",
         "email",
         "username"
       ],

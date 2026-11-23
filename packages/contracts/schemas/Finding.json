@@ -37,6 +37,11 @@
           "title": "Avatar Exact Hash",
           "type": "number"
         },
+        "identifier_match": {
+          "default": 0.0,
+          "title": "Identifier Match",
+          "type": "number"
+        },
         "contradiction": {
           "default": 0.0,
           "title": "Contradiction",

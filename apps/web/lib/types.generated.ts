@@ -111,7 +111,7 @@ export type Platform =
   | "unknown";
 export type ObservationKind = "search_result" | "profile" | "repository" | "commit" | "event" | "snippet" | "blocked";
 export type FindingStatus = "lead" | "candidate" | "confirmed" | "rejected";
-export type EntityType = "person" | "account" | "domain" | "email" | "username";
+export type EntityType = "person" | "account" | "domain" | "ip" | "email" | "username";
 export type EdgeType = "has_account" | "cross_link" | "same_person" | "mentions" | "owned_domain";
 
 // --- Modeller (Pydantic) ---
@@ -168,6 +168,7 @@ export interface ConfidenceBreakdown {
   bio_location_company?: number;
   commit_email_or_pgp?: number;
   avatar_exact_hash?: number;
+  identifier_match?: number;
   contradiction?: number;
   total?: number;
 }
@@ -200,10 +201,14 @@ export interface TaskSpec {
   rate_limit_key?: string | null;
 }
 export interface Target {
-  kind?: "name" | "handle";
+  kind?: "name" | "handle" | "email" | "phone" | "domain" | "ip";
   first_name?: string;
   last_name?: string;
   nickname?: string;
+  email?: string;
+  phone?: string;
+  domain?: string;
+  ip?: string;
   name_forms?: string[];
   hints?: Record<string, unknown>;
   review_required?: boolean;

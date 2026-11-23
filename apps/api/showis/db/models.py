@@ -96,6 +96,11 @@ class Target(Base):
     last_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     #: Kullanici adi (handle). Yalnizca handle hedeflerinde dolu olur.
     nickname: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    #: Kimlik turu email/phone/domain/ip oldugunda ilgili alan dolu olur.
+    email: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    domain: Mapped[str | None] = mapped_column(String(253), nullable=True)
+    ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     name_forms: Mapped[list[str]] = mapped_column(JSON_TYPE, default=list)
     hints: Mapped[dict[str, Any]] = mapped_column(JSON_TYPE, default=dict)
     review_required: Mapped[bool] = mapped_column(Boolean, default=False)

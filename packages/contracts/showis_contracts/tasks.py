@@ -19,23 +19,38 @@ class TaskSpec(BaseModel):
 
 
 class Target(BaseModel):
-    kind: Literal["name", "handle"] = "name"
+    kind: Literal["name", "handle", "email", "phone", "domain", "ip"] = "name"
     first_name: str = ""
     last_name: str = ""
     nickname: str = ""
+    email: str = ""
+    phone: str = ""
+    domain: str = ""
+    ip: str = ""
     name_forms: list[str] = Field(default_factory=list)
     hints: dict[str, Any] = Field(default_factory=dict)
     review_required: bool = False
+
+    @property
+    def identifier(self) -> str:
+        """Handle/e-posta/telefon/domain/IP için tek kimlik değeri."""
+        return {
+            "handle": (self.nickname or "").strip().lstrip("@").strip(),
+            "email": (self.email or "").strip().lower(),
+            "phone": (self.phone or "").strip(),
+            "domain": (self.domain or "").strip().lower(),
+            "ip": (self.ip or "").strip(),
+        }.get(self.kind, "")
 
     @property
     def display_name(self) -> str:
         full = f"{self.first_name} {self.last_name}".strip()
         if full:
             return full
-        # Nick'in basindaki `@` **burada** normalize edilir: etiketin tek kaynagi
-        # burasi oldugu icin legacy DB degerleri (`@kerem`) `@@kerem` uretmez.
-        nick = (self.nickname or "").strip().lstrip("@").strip()
-        return f"@{nick}" if nick else ""
+        if self.kind == "handle":
+            nick = (self.nickname or "").strip().lstrip("@").strip()
+            return f"@{nick}" if nick else ""
+        return self.identifier
 
 
 class Seed(BaseModel):

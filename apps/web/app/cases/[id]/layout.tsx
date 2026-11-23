@@ -95,9 +95,16 @@ export default function CaseLayout({ children }: { children: React.ReactNode }) 
 
   // Kimlik alanları: etiket-değer çiftleri. Nokta ile birleştirilmiş meta
   // dizeleri yerine okunabilir alanlar.
+  const targetKind = caseData?.target?.kind ?? "name";
   const fields: { label: string; value: React.ReactNode }[] = [
-    fullName ? { label: "Hedef", value: fullName } : null,
-    nick ? { label: "Kullanıcı adı", value: `@${nick}` } : null,
+    fullName && targetKind === "name" ? { label: "Hedef", value: fullName } : null,
+    nick && (targetKind === "name" || targetKind === "handle")
+      ? { label: "Kullanıcı adı", value: `@${nick}` }
+      : null,
+    caseData?.target?.email ? { label: "E-posta", value: caseData.target.email } : null,
+    caseData?.target?.phone ? { label: "Telefon", value: caseData.target.phone } : null,
+    caseData?.target?.domain ? { label: "Alan adı", value: caseData.target.domain } : null,
+    caseData?.target?.ip ? { label: "IP", value: caseData.target.ip } : null,
     caseData
       ? {
           label: "Hukuki dayanak",

@@ -113,7 +113,8 @@ def guard_query(query: str) -> str:
 def guard_target(target: Target) -> Target:
     """Reşit olmayan şüphe tespiti (ad + soyad + nick + hints)."""
     combined = (
-        f"{target.first_name} {target.last_name} {target.nickname} {target.hints}"
+        f"{target.first_name} {target.last_name} {target.nickname} "
+        f"{target.identifier} {target.hints}"
     )
     for pattern in UNDERAGE_HINTS_PATTERNS:
         if pattern.search(combined):

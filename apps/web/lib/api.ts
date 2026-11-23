@@ -13,7 +13,7 @@ export interface CaseSummary {
 }
 
 /** Hedef kimliği — handle-only vakalarda `first_name`/`last_name` boş olabilir. */
-export type TargetKind = "name" | "handle";
+export type TargetKind = "name" | "handle" | "email" | "phone" | "domain" | "ip";
 
 /** T-358 zarfındaki liste satırı (hedef + son tarama özeti ile). */
 export interface CaseListItem extends CaseSummary {
@@ -22,6 +22,10 @@ export interface CaseListItem extends CaseSummary {
     first_name?: string | null;
     last_name?: string | null;
     nickname?: string | null;
+    email?: string | null;
+    phone?: string | null;
+    domain?: string | null;
+    ip?: string | null;
   } | null;
   seeds_count?: number;
   last_scan?: {
@@ -60,6 +64,10 @@ export interface CaseDetail extends CaseSummary {
     first_name: string;
     last_name: string;
     nickname?: string | null;
+    email?: string | null;
+    phone?: string | null;
+    domain?: string | null;
+    ip?: string | null;
     name_forms?: string[];
     hints?: Record<string, any>;
     review_required?: boolean;

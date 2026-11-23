@@ -378,3 +378,33 @@ def test_resolver_ters_isimli_entity_tam_isim_puani_alir():
     )
     finding = resolver.resolve_entity(entity, target, case_id="c", scan_id="s")
     assert finding.breakdown.name_similarity == 0.20
+
+
+def test_email_hedefi_birebir_eslesirse_candidate():
+    resolver = Resolver()
+    target = Target(kind="email", email="ada@example.com")
+    entity = Entity(
+        id="web:email:ada",
+        type=EntityType.ACCOUNT,
+        platform=Platform.WEB,
+        label="ada@example.com",
+        attributes={"email": "ada@example.com", "confidence_hint": 0.8},
+    )
+    finding = resolver.resolve_entity(entity, target, case_id="c", scan_id="s")
+    assert finding.breakdown.identifier_match == 0.50
+    assert finding.score == 0.50
+    assert finding.status == FindingStatus.CANDIDATE
+
+
+def test_domain_hedefi_yanlis_eslesirse_puan_yok():
+    resolver = Resolver()
+    target = Target(kind="domain", domain="example.com")
+    entity = Entity(
+        id="web:domain:other",
+        type=EntityType.DOMAIN,
+        platform=Platform.WEB,
+        label="other.com",
+        attributes={"domain": "other.com"},
+    )
+    finding = resolver.resolve_entity(entity, target, case_id="c", scan_id="s")
+    assert finding.breakdown.identifier_match == 0.0

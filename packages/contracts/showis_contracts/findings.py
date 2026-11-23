@@ -15,6 +15,8 @@ class ConfidenceBreakdown(BaseModel):
     bio_location_company: float = 0.0
     commit_email_or_pgp: float = 0.0
     avatar_exact_hash: float = 0.0
+    #: E-posta/telefon/domain/IP hedefinde birebir kimlik eşleşmesi.
+    identifier_match: float = 0.0
     contradiction: float = 0.0
     total: float = 0.0
 

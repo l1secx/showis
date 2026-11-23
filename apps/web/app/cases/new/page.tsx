@@ -41,6 +41,10 @@ const EMPTY = {
   first_name: "",
   last_name: "",
   nickname: "",
+  email: "",
+  phone: "",
+  domain: "",
+  ip: "",
   city: "",
   company: "",
   school: "",
@@ -88,15 +92,20 @@ export default function NewCasePage() {
   const [authorizationConfirmed, setAuthorizationConfirmed] = useState(false);
 
   // Hedef modu form durumunda tutulur; taslaktan gelen deger dogrulanir.
-  const mode: TargetKind = form.mode === "handle" ? "handle" : "name";
+  const mode: TargetKind = ["handle", "email", "phone", "domain", "ip"].includes(form.mode)
+    ? form.mode
+    : "name";
   const setMode = (next: TargetKind) => setForm((f) => ({ ...f, mode: next }));
 
   const firstNameRef = useRef<HTMLInputElement>(null);
   const nicknameRef = useRef<HTMLInputElement>(null);
+  const identifierRef = useRef<HTMLInputElement>(null);
 
   // Mod degisince ilgili zorunlu alan odaklanir (alan sirasi moda gore degisir).
   useEffect(() => {
-    (mode === "handle" ? nicknameRef : firstNameRef).current?.focus();
+    if (mode === "handle") nicknameRef.current?.focus();
+    else if (mode === "name") firstNameRef.current?.focus();
+    else identifierRef.current?.focus();
   }, [mode]);
 
   // Yazilanlar sekmeler arasinda kaybolmasin.
@@ -138,7 +147,22 @@ export default function NewCasePage() {
 
       const nickname = form.nickname.trim().replace(/^@/, "").trim();
       const fullname = `${form.first_name} ${form.last_name}`.trim();
-      const label = mode === "handle" ? `@${nickname || "hedef"}` : fullname || "Hedef";
+      const identifier =
+        mode === "email"
+          ? form.email.trim().toLowerCase()
+          : mode === "phone"
+            ? form.phone.trim()
+            : mode === "domain"
+              ? form.domain.trim().toLowerCase()
+              : mode === "ip"
+                ? form.ip.trim()
+                : "";
+      const label =
+        mode === "handle"
+          ? `@${nickname || "hedef"}`
+          : mode === "name"
+            ? fullname || "Hedef"
+            : identifier || "Hedef";
       const res = await api.createCase({
         name: form.name || `${label} — ${new Date().toLocaleDateString("tr-TR")}`,
         purpose: form.purpose || `${label} için kamuya açık kaynak taraması`,
@@ -151,6 +175,10 @@ export default function NewCasePage() {
           first_name: form.first_name,
           last_name: form.last_name,
           nickname,
+          email: form.email.trim(),
+          phone: form.phone.trim(),
+          domain: form.domain.trim(),
+          ip: form.ip.trim(),
           hints,
         },
         seeds: seeds
@@ -198,7 +226,9 @@ export default function NewCasePage() {
               <p className="text-[12px] text-ink-3">
                 {mode === "handle"
                   ? "Kullanıcı adı tek başına yeterlidir"
-                  : "İsim tek başına yeterlidir, ipuçları doğrulamayı güçlendirir"}
+                  : mode === "name"
+                    ? "İsim tek başına yeterlidir, ipuçları doğrulamayı güçlendirir"
+                    : "Tek kimlik anahtarı yeterlidir; ilgili ücretsiz kaynaklar taranır"}
               </p>
             </div>
 
@@ -206,11 +236,15 @@ export default function NewCasePage() {
               <div
                 role="radiogroup"
                 aria-label="Hedef türü"
-                className="inline-flex rounded-[6px] border border-line-2 bg-sunken p-0.5"
+                className="flex flex-wrap rounded-[6px] border border-line-2 bg-sunken p-0.5"
               >
                 {[
                   { value: "name" as const, label: "İsim ve soyisim" },
                   { value: "handle" as const, label: "Kullanıcı adı" },
+                  { value: "email" as const, label: "E-posta" },
+                  { value: "phone" as const, label: "Telefon" },
+                  { value: "domain" as const, label: "Domain" },
+                  { value: "ip" as const, label: "IP" },
                 ].map((m) => {
                   const active = mode === m.value;
                   return (
@@ -266,6 +300,72 @@ export default function NewCasePage() {
                     >
                       {handleNickError ?? NICK_RULE_HINT}
                     </span>
+                  </label>
+                )}
+                {mode === "email" && (
+                  <label className="block sm:col-span-2">
+                    <span className="label">
+                      E-posta <span aria-hidden="true" className="text-danger">*</span>
+                    </span>
+                    <input
+                      ref={identifierRef}
+                      type="email"
+                      required
+                      className="input font-mono"
+                      placeholder="ornek@example.com"
+                      value={form.email}
+                      onChange={(e) => set("email", e.target.value)}
+                    />
+                    <span className="hint">Gravatar ve GitHub commit e-postası üzerinden aranır.</span>
+                  </label>
+                )}
+                {mode === "phone" && (
+                  <label className="block sm:col-span-2">
+                    <span className="label">
+                      Telefon <span aria-hidden="true" className="text-danger">*</span>
+                    </span>
+                    <input
+                      ref={identifierRef}
+                      type="tel"
+                      required
+                      className="input font-mono"
+                      placeholder="+905551112233"
+                      value={form.phone}
+                      onChange={(e) => set("phone", e.target.value)}
+                    />
+                    <span className="hint">E.164 biçimi: + ülke kodu, ardından numara.</span>
+                  </label>
+                )}
+                {mode === "domain" && (
+                  <label className="block sm:col-span-2">
+                    <span className="label">
+                      Alan adı <span aria-hidden="true" className="text-danger">*</span>
+                    </span>
+                    <input
+                      ref={identifierRef}
+                      required
+                      className="input font-mono"
+                      placeholder="example.com"
+                      value={form.domain}
+                      onChange={(e) => set("domain", e.target.value)}
+                    />
+                    <span className="hint">RDAP, DNS, crt.sh ve Wayback CDX ile zenginleştirilir.</span>
+                  </label>
+                )}
+                {mode === "ip" && (
+                  <label className="block sm:col-span-2">
+                    <span className="label">
+                      IP adresi <span aria-hidden="true" className="text-danger">*</span>
+                    </span>
+                    <input
+                      ref={identifierRef}
+                      required
+                      className="input font-mono"
+                      placeholder="192.0.2.1"
+                      value={form.ip}
+                      onChange={(e) => set("ip", e.target.value)}
+                    />
+                    <span className="hint">RDAP ve ters DNS (PTR) ile zenginleştirilir.</span>
                   </label>
                 )}
                 <label className="block">

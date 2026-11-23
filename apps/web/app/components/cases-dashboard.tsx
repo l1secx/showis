@@ -59,6 +59,19 @@ const SORT_OPTIONS: { value: CaseSort; label: string }[] = [
 
 const PAGE_SIZE = 50;
 
+function targetSummary(target?: CaseListItem["target"]): string {
+  if (!target) return "";
+  if (target.nickname) {
+    return `@${target.nickname}${
+      target.first_name ? `, ${target.first_name} ${target.last_name ?? ""}` : ""
+    }`;
+  }
+  if (target.first_name) {
+    return `${target.first_name} ${target.last_name ?? ""}`.trim();
+  }
+  return target.email || target.phone || target.domain || target.ip || "";
+}
+
 export function CasesDashboard() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -368,10 +381,7 @@ export function CasesDashboard() {
                   </button>
                 </div>
                 <p className="numeric mt-1 truncate text-ink-3">
-                  {c.target?.nickname ? `@${c.target.nickname}` : null}
-                  {c.target?.nickname && c.target?.first_name ? ", " : null}
-                  {c.target?.first_name ? `${c.target.first_name} ${c.target.last_name ?? ""}` : null}
-                  {!c.target?.nickname && !c.target?.first_name ? c.id.slice(0, 8) : null}
+                  {targetSummary(c.target) || c.id.slice(0, 8)}
                 </p>
                 <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1.5">
                   <span className="status text-ink-2">
@@ -436,10 +446,7 @@ export function CasesDashboard() {
                           {c.name}
                         </Link>
                         <p className="numeric mt-0.5 truncate text-ink-3">
-                          {c.target?.nickname ? `@${c.target.nickname}` : null}
-                          {c.target?.nickname && c.target?.first_name ? ", " : null}
-                          {c.target?.first_name ? `${c.target.first_name} ${c.target.last_name ?? ""}` : null}
-                          {!c.target?.nickname && !c.target?.first_name ? c.id.slice(0, 8) : null}
+                          {targetSummary(c.target) || c.id.slice(0, 8)}
                         </p>
                       </td>
                       <td className="hidden max-w-[14rem] truncate text-ink-2 md:table-cell">

@@ -172,3 +172,55 @@ async def test_legal_attestation_olmadan_vaka_reddedilir(client):
     )
     assert res.status_code == 422
     assert "authorization_confirmed" in res.text or "onay" in res.text.lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "target",
+    [
+        {"kind": "email", "email": "Ada@Example.com"},
+        {"kind": "phone", "phone": "+90 (555) 111-22-33"},
+        {"kind": "domain", "domain": "Example.com."},
+        {"kind": "ip", "ip": "192.0.2.1"},
+    ],
+)
+async def test_target_identifier_tipleri_donusur(client, target):
+    res = await client.post(
+        "/api/v1/cases",
+        json={
+            "name": f"Kimlik {target['kind']}",
+            "purpose": "kimlik türü testi",
+            "legal_basis": "self_check",
+            "authorization_confirmed": True,
+            "target": target,
+        },
+    )
+    assert res.status_code == 201, res.text
+    case_id = res.json()["id"]
+    detail = (await client.get(f"/api/v1/cases/{case_id}")).json()["target"]
+    assert detail["kind"] == target["kind"]
+    for key in ("email", "phone", "domain", "ip"):
+        if key in target:
+            expected = target[key]
+            if key == "email":
+                expected = expected.lower()
+            if key == "phone":
+                expected = "+905551112233"
+            if key == "domain":
+                expected = expected.lower().rstrip(".")
+            assert detail[key] == expected
+
+
+@pytest.mark.asyncio
+async def test_gecersiz_domain_422(client):
+    res = await client.post(
+        "/api/v1/cases",
+        json={
+            "name": "Geçersiz Domain",
+            "purpose": "kimlik türü testi",
+            "legal_basis": "self_check",
+            "authorization_confirmed": True,
+            "target": {"kind": "domain", "domain": "not a domain"},
+        },
+    )
+    assert res.status_code == 422

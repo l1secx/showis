@@ -139,6 +139,7 @@ class EntityType(StrEnum):
     PERSON = "person"
     ACCOUNT = "account"
     DOMAIN = "domain"
+    IP = "ip"
     EMAIL = "email"
     USERNAME = "username"
 

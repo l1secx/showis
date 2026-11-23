@@ -158,6 +158,22 @@ class Resolver:
         candidate_name = attrs.get("name") or attrs.get("search_title")
         breakdown.name_similarity = calculate_name_similarity(target_fullname, candidate_name)
 
+        # 3b. Hedef kimlik türü birebir eşleşmesi (e-posta/telefon/domain/IP).
+        #     Bu türlerde isim benzerliği yoktur; kesin kimlik anahtarı skoru taşır.
+        if target.kind in {"email", "phone", "domain", "ip"}:
+            needle = normalize_turkish(target.identifier)
+            candidates = {
+                "email": (attrs.get("email"), attrs.get("public_email")),
+                "phone": (attrs.get("phone"), attrs.get("phone_e164")),
+                "domain": (attrs.get("domain"), entity.label),
+                "ip": (attrs.get("ip"), entity.label),
+            }.get(target.kind, ())
+            if needle and any(
+                needle == normalize_turkish(str(value or ""))
+                for value in candidates
+            ):
+                breakdown.identifier_match = 0.50
+
         # 4. cross_link (0.25)
         if has_cross_link:
             breakdown.cross_link = 0.25
@@ -210,6 +226,7 @@ class Resolver:
             + breakdown.bio_location_company
             + breakdown.commit_email_or_pgp
             + breakdown.avatar_exact_hash
+            + breakdown.identifier_match
             + breakdown.contradiction
         )
         total_score = max(0.0, min(1.0, round(total_score, 2)))
@@ -240,6 +257,7 @@ class Resolver:
             breakdown.name_similarity > 0
             or breakdown.bio_location_company > 0
             or breakdown.handle_exact > 0
+            or breakdown.identifier_match > 0
         ):
             status = FindingStatus.LEAD
         else:
