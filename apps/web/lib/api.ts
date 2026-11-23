@@ -336,4 +336,5 @@ export const api = {
   exportCase: (caseId: string) => req<any>(`/cases/${caseId}/export`),
   createReport: (caseId: string, format: "json" | "pdf" | "html") =>
     req<ReportInfo>(`/cases/${caseId}/report`, { method: "POST", body: JSON.stringify({ format }) }),
+  getStix: (caseId: string) => req<any>(`/cases/${caseId}/stix`),
 };

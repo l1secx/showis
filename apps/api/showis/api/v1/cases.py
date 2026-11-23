@@ -17,6 +17,7 @@ from fastapi import (
     Request,
     status,
 )
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 from showis.db.models import Case, Edge, Entity, Evidence, Finding, Report, Scan
 from showis.db.models import Seed as DbSeed
@@ -31,6 +32,7 @@ from showis.services.identity_graph import (
 from showis.services.report_service import create_report, purge_case_reports
 from showis.services.retention import _evidence_file_path
 from showis.services.scanner import ScannerService
+from showis.services.stix import build_stix_bundle
 from showis.services.targets import db_target_to_contract as _db_target_to_contract
 from showis_contracts import FindingStatus, Platform, Target
 from showis_engine.policy import guard_target
@@ -1494,6 +1496,49 @@ async def get_case_findings(
     else:  # score_desc
         rows.sort(key=lambda row: (-float(row["score"]), str(row["id"])))
     return rows
+
+
+@router.get("/{case_id}/stix")
+async def export_case_stix(
+    case_id: str, request: Request, db: AsyncSession = Depends(get_db)
+):
+    """Vakayı STIX 2.1 bundle olarak dışa aktarır (MISP/OpenCTI uyumu)."""
+    case = (await db.execute(select(Case).where(Case.id == case_id))).scalar_one_or_none()
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+    target = (
+        await db.execute(select(DbTarget).where(DbTarget.case_id == case_id))
+    ).scalar_one_or_none()
+    entities = (
+        await db.execute(select(Entity).where(Entity.case_id == case_id))
+    ).scalars().all()
+    findings = (
+        await db.execute(select(Finding).where(Finding.case_id == case_id))
+    ).scalars().all()
+    evidence = (
+        await db.execute(select(Evidence).where(Evidence.case_id == case_id))
+    ).scalars().all()
+    contract_target = _db_target_to_contract(target) if target else None
+    bundle = build_stix_bundle(
+        case=case,
+        target=contract_target,
+        entities=list(entities),
+        findings=list(findings),
+        evidence=list(evidence),
+    )
+    await record_request_audit(
+        db=db,
+        request=request,
+        action="case.export.stix",
+        case_id=case_id,
+        target=f"Case: {case.name}",
+        details={"objects": len(bundle["objects"])},
+    )
+    return JSONResponse(
+        content=bundle,
+        media_type="application/stix+json;version=2.1",
+        headers={"Content-Disposition": f'attachment; filename="showis-{case_id}.stix.json"'},
+    )
 
 
 @router.post("/{case_id}/export")

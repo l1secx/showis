@@ -2301,6 +2301,28 @@ export function ReportTab({ caseId }: { caseId: string }) {
     }
   };
 
+  const downloadStix = async () => {
+    setBusy("stix");
+    setErr(null);
+    try {
+      const bundle = await api.getStix(caseId);
+      const blob = new Blob([JSON.stringify(bundle, null, 2)], {
+        type: "application/stix+json;version=2.1",
+      });
+      const anchor = document.createElement("a");
+      anchor.href = URL.createObjectURL(blob);
+      anchor.download = `showis-stix-${caseId.slice(0, 8)}.json`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(anchor.href), 2000);
+    } catch (e: any) {
+      setErr(e.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const sections = reportSections(summary);
   const hasSections = Boolean(
     sections.summary || sections.platforms || sections.identity || sections.timeline || sections.evidence
@@ -2337,6 +2359,15 @@ export function ReportTab({ caseId }: { caseId: string }) {
                 HTML indir
               </>
             )}
+          </button>
+          <button
+            type="button"
+            onClick={downloadStix}
+            disabled={busy !== null}
+            className="btn-secondary"
+            title="STIX 2.1 bundle indir (MISP/OpenCTI)"
+          >
+            {busy === "stix" ? "Oluşturuluyor" : "STIX"}
           </button>
           <button
             type="button"
