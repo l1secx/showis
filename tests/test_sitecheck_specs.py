@@ -164,7 +164,7 @@ async def test_200_ve_absent_regex_absent_sayilir():
 @pytest.mark.asyncio
 async def test_200_exists_sayilir():
     with respx.mock(assert_all_called=False) as router:
-        router.get("https://mock-status.example/kboz").respond(200, text="profil")
+        router.get("https://mock-status.example/kboz").respond(200, text="kboz profil")
         results = await _engine([_SAMPLE[0]]).check_username("kboz")
     assert results[0].status == EXISTS
 

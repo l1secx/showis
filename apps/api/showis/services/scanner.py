@@ -153,12 +153,56 @@ class _TaskRunStats:
     cancelled_tasks: int = 0
 
 
+#: Bir kaynağın "çapraz platform kanıtı" sayılması için asgari güven.
+#: Site-check generic HTML kontrolleri 0.65 üretir; doğrulaması kapatılmış
+#: istisnalar 0.5'te kalır ve tek başına skoru şişirmez.
+MIN_TRUSTED_SOURCE_CONFIDENCE = 0.6
+
+
 def _entity_username(entity: Entity) -> str:
     """Entity icin normalize kullanici adi (karsilastirma icin)."""
     ident = entity.attributes.get("username") or entity.attributes.get("login")
     if not ident:
         ident = entity.label
     return str(ident).lstrip("@").strip().lower()
+
+
+def _source_confidence(entity: Entity) -> float:
+    """Kaynak güveni: connector'ların `confidence_hint` değeri, yoksa 1.0."""
+    raw = (entity.attributes or {}).get("confidence_hint")
+    if raw is None:
+        return 1.0
+    try:
+        return max(0.0, min(1.0, float(raw)))
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def _is_trusted_source(entity: Entity) -> bool:
+    """Çapraz-platform skoruna katkı verebilir mi?"""
+    return _source_confidence(entity) >= MIN_TRUSTED_SOURCE_CONFIDENCE
+
+
+def _trusted_username_platforms(entities: list[Entity]) -> dict[str, set[str]]:
+    """Güvenilir kaynaklardan kullanıcı adı → platform kümesi."""
+    platforms: dict[str, set[str]] = {}
+    for entity in entities:
+        if not _is_trusted_source(entity):
+            continue
+        platforms.setdefault(_entity_username(entity), set()).add(entity.platform.value)
+    return platforms
+
+
+def _trusted_avatar_platforms(entities: list[Entity]) -> dict[str, set[str]]:
+    """Güvenilir kaynaklardan avatar hash'i → platform kümesi."""
+    platforms: dict[str, set[str]] = {}
+    for entity in entities:
+        if not _is_trusted_source(entity):
+            continue
+        avatar_hash = (entity.attributes or {}).get("avatar_sha256")
+        if avatar_hash:
+            platforms.setdefault(avatar_hash, set()).add(entity.platform.value)
+    return platforms
 
 
 def _safe_platform(value: str) -> Platform:
@@ -1187,15 +1231,10 @@ class ScannerService:
 
         # Resolve findings — cross-platform sinyalleri hesapla
         explained_count = 0
-        username_platforms: dict[str, set[str]] = {}
-        for ent in entities:
-            username_platforms.setdefault(_entity_username(ent), set()).add(ent.platform.value)
-
-        avatar_platforms: dict[str, set[str]] = {}
-        for ent in entities:
-            avatar_hash = (ent.attributes or {}).get("avatar_sha256")
-            if avatar_hash:
-                avatar_platforms.setdefault(avatar_hash, set()).add(ent.platform.value)
+        # Düşük güvenli tek bir site-check yanlış-pozitifi, "2 platformda aynı
+        # kullanıcı adı" sinyalini tetikleyip skoru şişirmemeli.
+        username_platforms = _trusted_username_platforms(entities)
+        avatar_platforms = _trusted_avatar_platforms(entities)
 
         # Platform+identifier -> entity eslemesi (cross_link icin)
         entity_lookup: dict[tuple[str, str], Entity] = {}

@@ -317,7 +317,7 @@ async def test_onbellek_vurusu_ag_istegi_uretmez():
     engine = _engine(cache, [CACHE_SITE])
 
     with respx.mock(assert_all_called=False) as router:
-        route = router.get("https://cache.example.com/alice").respond(200, text="ok")
+        route = router.get("https://cache.example.com/alice").respond(200, text="alice ok")
         before = requests_made()
         first = await engine.check_username("alice")
         after_first = requests_made()
@@ -402,7 +402,7 @@ async def test_connector_gozlemine_cache_hits_yazilir():
     )
 
     with respx.mock(assert_all_called=False) as router:
-        router.get("https://cache.example.com/alice").respond(200, text="ok")
+        router.get("https://cache.example.com/alice").respond(200, text="alice ok")
         first = await connector.run(connector._make_task("alice"), ctx)
         second = await connector.run(connector._make_task("alice"), ctx)
 

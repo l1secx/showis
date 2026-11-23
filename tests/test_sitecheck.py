@@ -61,12 +61,12 @@ def engine() -> UsernameCheckEngine:
 @pytest.mark.asyncio
 async def test_status_site_exists_and_absent(engine: UsernameCheckEngine):
     with respx.mock(assert_all_called=False) as router:
-        router.get("https://status.example.com/alice").respond(200, text="ok")
+        router.get("https://status.example.com/alice").respond(200, text="alice profile")
         router.get("https://status.example.com/bob").respond(404)
         router.get("https://json.example.com/api").respond(
             200, json={"data": {"name": "x"}}
         )
-        router.get("https://html.example.com/alice").respond(200, text="hello")
+        router.get("https://html.example.com/alice").respond(200, text="alice hello")
         router.get("https://html.example.com/bob").respond(
             200, text="user not found"
         )
@@ -161,11 +161,11 @@ async def test_connector_plan_and_normalize():
     assert any(t.params.get("username") == "alice" for t in tasks)
 
     with respx.mock(assert_all_called=False) as router:
-        router.get("https://status.example.com/alice").respond(200, text="ok")
+        router.get("https://status.example.com/alice").respond(200, text="alice profile")
         router.get("https://json.example.com/api").respond(
             200, json={"data": {"name": "Alice"}}
         )
-        router.get("https://html.example.com/alice").respond(200, text="hi")
+        router.get("https://html.example.com/alice").respond(200, text="alice hi")
 
         obs = await connector.run(tasks[0], ctx)
 
@@ -252,3 +252,114 @@ def test_sitecheck_search_handle_mode_searches_nick():
     asyncio.run(connector.plan(_handle_ctx(scan_id="s-handle-sitecheck-search")))
     assert provider.queries == ['"kerem"']
 
+
+
+# ---------------------------------------------------------------------------
+# Generic soft-404 / login duvarı yanlış-pozitif koruması
+# ---------------------------------------------------------------------------
+
+
+async def test_generic_200_without_username_is_unknown():
+    site = SiteSpec(
+        key="generic",
+        name="Generic",
+        platform=Platform.WEB,
+        url_template="https://generic.example.com/{u}",
+        skip_robots=True,
+    )
+    engine = UsernameCheckEngine(
+        http_client=HttpClient(enable_ssrf_guard=False), sites=[site], concurrency=1
+    )
+    with respx.mock(assert_all_called=False) as router:
+        router.get("https://generic.example.com/alice").respond(
+            200, text="<html><title>Welcome</title>login page</html>"
+        )
+        results = await engine.check_username("alice")
+    assert results[0].status == UNKNOWN
+    assert "soft-404" in results[0].detail
+
+
+async def test_soft404_title_is_absent():
+    site = SiteSpec(
+        key="soft404",
+        name="Soft404",
+        platform=Platform.WEB,
+        url_template="https://soft404.example.com/{u}",
+        skip_robots=True,
+    )
+    engine = UsernameCheckEngine(
+        http_client=HttpClient(enable_ssrf_guard=False), sites=[site], concurrency=1
+    )
+    with respx.mock(assert_all_called=False) as router:
+        router.get("https://soft404.example.com/alice").respond(
+            200,
+            text="<html><title>User not found</title><body>alice</body></html>",
+        )
+        results = await engine.check_username("alice")
+    assert results[0].status == ABSENT
+
+
+async def test_login_path_is_unknown_even_with_username():
+    site = SiteSpec(
+        key="loginwall",
+        name="LoginWall",
+        platform=Platform.WEB,
+        url_template="https://loginwall.example.com/{u}",
+        skip_robots=True,
+    )
+    engine = UsernameCheckEngine(
+        http_client=HttpClient(enable_ssrf_guard=False), sites=[site], concurrency=1
+    )
+    with respx.mock(assert_all_called=False) as router:
+        router.get("https://loginwall.example.com/alice").respond(
+            200,
+            text="<html><title>Login</title>alice</html>",
+            headers={"content-type": "text/html"},
+        )
+        # Respx final URL'yi degistirmedigi icin _classify'i dogrudan login
+        # URL'siyle cagir.
+        import httpx
+
+        response = httpx.Response(
+            200,
+            text="<html><title>Login</title>alice</html>",
+            request=httpx.Request("GET", "https://loginwall.example.com/login"),
+        )
+        result = engine._classify(site, "alice", "https://loginwall.example.com/alice", response)
+    assert result.status == UNKNOWN
+    assert "login" in result.detail
+
+
+async def test_require_username_false_opts_out():
+    site = SiteSpec(
+        key="optout",
+        name="OptOut",
+        platform=Platform.WEB,
+        url_template="https://optout.example.com/{u}",
+        skip_robots=True,
+        require_username=False,
+    )
+    engine = UsernameCheckEngine(
+        http_client=HttpClient(enable_ssrf_guard=False), sites=[site], concurrency=1
+    )
+    with respx.mock(assert_all_called=False) as router:
+        router.get("https://optout.example.com/alice").respond(200, text="ok")
+        results = await engine.check_username("alice")
+    assert results[0].status == EXISTS
+
+
+def test_generic_verified_confidence_higher_than_optout():
+    from showis_connectors.sitecheck.connector import SiteCheckConnector
+
+    generic = SiteSpec(
+        key="g1", name="G1", platform=Platform.WEB, url_template="https://g1/{u}"
+    )
+    optout = SiteSpec(
+        key="g2",
+        name="G2",
+        platform=Platform.WEB,
+        url_template="https://g2/{u}",
+        require_username=False,
+    )
+    assert SiteCheckConnector._confidence(generic) >= 0.65
+    assert SiteCheckConnector._confidence(optout) < 0.6

@@ -51,6 +51,10 @@ class SiteSpec:
     #: T-365: kullanici adi icin opsiyonel regex (varsayilan: [A-Za-z0-9][A-Za-z0-9._-]{0,63}).
     #: Yalniz platform gercekten farkli bir karakter kumesi kabul ediyorsa doldurulur.
     username_pattern: str | None = None
+    #: HTML tabanli, acik bir present/absent regex'i olmayan kontrollerde
+    #: kullanici adinin sayfa govdesinde gecmesini sart kos. Soft-404/login
+    #: duvari yanlis-pozitiflerini eler; bilincli istisnalar False yapar.
+    require_username: bool = True
     notes: str = ""
 
 

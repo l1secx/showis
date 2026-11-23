@@ -13,7 +13,7 @@ import logging
 import re
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import httpx
 from showis_engine.http import HttpClient
@@ -43,6 +43,31 @@ _SAMPLE_LIMIT = 8192  # evidence icin saklanan govde ornegi (byte)
 #: Buyuk SPA sayfalarinda "not found" isareti 8KB ornegini asabilir
 #: (orn. Pinterest ~1.2MB); siniflandirma daha genis pencerede yapilir.
 _SCAN_LIMIT = 1_048_576
+
+#: Generic soft-404 / "hesap yok" baslik ve metinleri. Siteya özel absent_regex
+#: yoksa 200 dönen login/404 sayfasını "hesap var" saymayı engeller.
+_SOFT404_RE = re.compile(
+    r"(?:"
+    r"<title[^>]*>[^<]{0,240}(?:404|not\s+found|doesn['’]?t\s+exist|"
+    r"no\s+longer\s+available|page\s+unavailable|kullanıcı\s+bulunamadı|"
+    r"sayfa\s+bulunamadı|hesap\s+bulunamadı)[^<]{0,240}</title>"
+    r"|(?:user|account|profile|page|hesap|kullanıcı|sayfa)\s+"
+    r"(?:not\s+found|doesn['’]?t\s+exist|bulunamadı|mevcut\s+değil)"
+    r"|no\s+such\s+user|couldn['’]?t\s+find\s+(?:that|this)\s+(?:user|account|page)"
+    r")",
+    re.IGNORECASE,
+)
+
+#: Profil yerine login/oturum sayfasına yönlenen siteler (Instagram vb.).
+_LOGIN_PATH_MARKERS = ("/login", "/signin", "/sign_in", "/accounts/login", "/session")
+
+
+def _is_login_wall(final_url: str) -> bool:
+    try:
+        path = urlparse(final_url).path.casefold()
+    except ValueError:
+        return False
+    return any(marker in path for marker in _LOGIN_PATH_MARKERS)
 
 
 def is_safe_username(value: str) -> bool:
@@ -270,12 +295,28 @@ class UsernameCheckEngine:
             return res(EXISTS, "present_regex eslesti", body[:_SAMPLE_LIMIT])
 
         # 5) present_regex tanimliysa eslesme sart.
-        #    Hic present_regex yoksa (status/absent_regex tabanli) 200 = var.
         if spec.present_regex is not None:
             if spec.no_match_is_absent:
                 return res(ABSENT, "present_regex eslesmedi")
             return res(UNKNOWN, "present_regex eslesmedi")
-        return res(EXISTS, "HTTP 200", body[:_SAMPLE_LIMIT])
+
+        # 6) Generic HTML/status kontrolu: 200 tek basina kanit degildir.
+        #    Login duvari, soft-404 basligi veya kullanici adinin govdede
+        #    bulunmamasi durumunda "var" demeyiz.
+        if _is_login_wall(final_url):
+            return res(UNKNOWN, "login/oturum duvari")
+        if _SOFT404_RE.search(text[:20_000]):
+            return res(ABSENT, "soft-404 isareti")
+        username_in_body = bool(username) and username.casefold() in text.casefold()
+        if username_in_body:
+            return res(
+                EXISTS,
+                "govdede kullanici adi dogrulandi",
+                body[:_SAMPLE_LIMIT],
+            )
+        if spec.require_username:
+            return res(UNKNOWN, "soft-404: kullanici adi sayfada yok")
+        return res(EXISTS, "HTTP 200 (kullanici adi dogrulamasi kapali)", body[:_SAMPLE_LIMIT])
 
     @staticmethod
     def _json_lookup(data: Any, path: str) -> Any:

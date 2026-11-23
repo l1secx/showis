@@ -222,12 +222,13 @@ class SiteCheckConnector:
 
     @staticmethod
     def _confidence(spec: SiteSpec) -> float:
-        # json/status tabanli kontroller daha guvenilir
-        base = 0.6
+        # Generic HTML kontrolu artik govdede kullanici adi dogrulamasi ister
+        # (0.65). Bunu kapatmis istisnalar daha dusuk guvenle isaretlenir.
+        base = 0.65 if spec.require_username else 0.5
         if spec.json_path is not None:
-            base += 0.2
+            base = 0.8
         if spec.present_regex or spec.absent_regex:
-            base += 0.1
+            base = max(base, 0.75)
         return min(base, 0.9)
 
     def normalize(self, obs: Observation) -> tuple[list[Entity], list[Edge]]:
