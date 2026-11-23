@@ -197,6 +197,9 @@ class CaseCreateRequest(BaseModel):
     legal_basis: Literal["consent", "legitimate_interest", "self_check"]
     notes: str | None = Field(default=None, max_length=MAX_NOTES)
     retention_days: int = Field(default=30, ge=1, le=365)
+    #: Hukuki dayanak + robots/ToS operatör onayı. Eski API istemcileri için
+    #: varsayılan `True`; yeni arayüz açık onay gönderir. `False` reddedilir.
+    authorization_confirmed: bool = True
     target: TargetInput
     seeds: list[SeedInput] = Field(default_factory=list, max_length=20)
 
@@ -216,6 +219,15 @@ async def create_case(
     # SEC-07: reşit-olmayan / uygun olmayan hedef sinyali burada durdurulur.
     # Spec §10: `guard_target` ad + soyad + nick + hints birleşimini tarar, bu yüzden
     # kontrat hedefi gerçek alanlarla kurulur (nick ayrıca `first_name`'e paketlenmez).
+    if not data.authorization_confirmed:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                "Hukuki dayanak ve robots.txt/kullanım koşulları onayı gerekli "
+                "(authorization_confirmed=true)."
+            ),
+        )
+
     contract_target = Target(
         kind=data.target.kind,
         first_name=data.target.first_name,
@@ -283,7 +295,13 @@ async def create_case(
         action="case.create",
         case_id=case.id,
         target=f"Case: {case.name}",
-        details={"legal_basis": case.legal_basis, "purpose": case.purpose},
+        details={
+            "legal_basis": case.legal_basis,
+            "purpose": case.purpose,
+            "authorization_confirmed": data.authorization_confirmed,
+            "robots_policy": "honor",
+            "public_sources_only": True,
+        },
     )
 
     return {

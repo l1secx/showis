@@ -84,6 +84,8 @@ export default function NewCasePage() {
   const [seeds, setSeeds] = useState<SeedRow[]>([{ platform: "github", username: "", url: "" }]);
   const [autoScan, setAutoScan] = useState(true);
   const [scanMode, setScanMode] = useState("O2");
+  // Hukuki dayanak + robots/ToS onayı: yeni kayıt için zorunlu operatör kapısı.
+  const [authorizationConfirmed, setAuthorizationConfirmed] = useState(false);
 
   // Hedef modu form durumunda tutulur; taslaktan gelen deger dogrulanir.
   const mode: TargetKind = form.mode === "handle" ? "handle" : "name";
@@ -120,6 +122,12 @@ export default function NewCasePage() {
       nicknameRef.current?.focus();
       return;
     }
+    if (!authorizationConfirmed) {
+      setError(
+        "Devam etmek için hukuki dayanağı ve üçüncü taraf sitelerin robots.txt/kullanım koşullarına uyacağınızı onaylayın."
+      );
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -135,6 +143,7 @@ export default function NewCasePage() {
         name: form.name || `${label} — ${new Date().toLocaleDateString("tr-TR")}`,
         purpose: form.purpose || `${label} için kamuya açık kaynak taraması`,
         legal_basis: form.legal_basis,
+        authorization_confirmed: true,
         notes: form.notes || null,
         retention_days: Number(form.retention_days),
         target: {
@@ -533,6 +542,25 @@ export default function NewCasePage() {
                 <span>Kayıt oluşturulunca taramayı hemen başlat</span>
               </label>
 
+              <label className="mt-3 flex cursor-pointer items-start gap-2.5 rounded-[6px] border border-warn-line bg-warn-soft px-3 py-2.5 text-[12.5px] leading-snug text-warn">
+                <input
+                  type="checkbox"
+                  checked={authorizationConfirmed}
+                  onChange={(e) => setAuthorizationConfirmed(e.target.checked)}
+                  aria-describedby="authorization-hint"
+                  className="mt-[3px] h-3.5 w-3.5 shrink-0 rounded-[3px] accent-[rgb(var(--accent))]"
+                />
+                <span>
+                  Hukuki dayanağımı ve yalnızca kamuya açık kaynakları, üçüncü taraf
+                  sitelerin <strong className="font-semibold">robots.txt</strong> ve
+                  kullanım koşullarına uygun şekilde tarayacağımı onaylıyorum.
+                  <span id="authorization-hint" className="mt-1 block text-[11.5px] font-normal">
+                    Giriş duvarı, CAPTCHA veya erişim kontrolü aşılmaz; veri sahibi
+                    talepleri ve saklama süresi operatör sorumluluğundadır.
+                  </span>
+                </span>
+              </label>
+
               {error && (
                 <p
                   role="alert"
@@ -544,7 +572,7 @@ export default function NewCasePage() {
 
               <button
                 type="submit"
-                disabled={saving || nickInvalid}
+                disabled={saving || nickInvalid || !authorizationConfirmed}
                 className="btn-primary mt-5 w-full"
               >
                 {saving ? (

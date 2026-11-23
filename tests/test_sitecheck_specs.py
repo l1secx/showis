@@ -328,6 +328,7 @@ def test_wmn_alt_kumesi_guvenli_ve_ad_alanli():
         assert spec.id_namespace == spec.key
         assert spec.present_regex, spec.key
         assert spec.require_username is False
+        assert spec.skip_robots is False, f"{spec.key}: robots atlanmamalı"
         assert "{u}" in spec.url_template
         re.compile(spec.present_regex)
         if spec.absent_regex:

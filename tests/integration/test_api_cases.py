@@ -155,3 +155,20 @@ async def test_finding_patch_validation(client):
     assert res.status_code == 404
     res = await client.patch(f"/api/v1/findings/{uuid.uuid4()}", json={"status": "bogus"})
     assert res.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_legal_attestation_olmadan_vaka_reddedilir(client):
+    res = await client.post(
+        "/api/v1/cases",
+        json={
+            "name": "Onaysız Vaka",
+            "purpose": "hukuki onay testi",
+            "legal_basis": "self_check",
+            "authorization_confirmed": False,
+            "retention_days": 7,
+            "target": {"first_name": "Test", "last_name": "Kisi"},
+        },
+    )
+    assert res.status_code == 422
+    assert "authorization_confirmed" in res.text or "onay" in res.text.lower()
