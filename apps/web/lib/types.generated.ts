@@ -229,6 +229,7 @@ export interface ScanContext {
   seeds?: Seed[];
   budget?: Budget;
   llm_session_id?: string;
+  mode?: string;
 }
 export interface GithubProfile {
   login: string;

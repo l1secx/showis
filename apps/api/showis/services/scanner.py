@@ -65,6 +65,7 @@ from showis_engine.identity_edges import (
     build_identity_edges,
     db_safe_edge_id,
     edges_by_type,
+    entity_platform_key,
     pair_key,
 )
 from showis_engine.links import (
@@ -189,7 +190,9 @@ def _trusted_username_platforms(entities: list[Entity]) -> dict[str, set[str]]:
     for entity in entities:
         if not _is_trusted_source(entity):
             continue
-        platforms.setdefault(_entity_username(entity), set()).add(entity.platform.value)
+        platforms.setdefault(_entity_username(entity), set()).add(
+            entity_platform_key(entity)
+        )
     return platforms
 
 
@@ -201,7 +204,7 @@ def _trusted_avatar_platforms(entities: list[Entity]) -> dict[str, set[str]]:
             continue
         avatar_hash = (entity.attributes or {}).get("avatar_sha256")
         if avatar_hash:
-            platforms.setdefault(avatar_hash, set()).add(entity.platform.value)
+            platforms.setdefault(avatar_hash, set()).add(entity_platform_key(entity))
     return platforms
 
 
@@ -594,6 +597,7 @@ class ScannerService:
             seeds=seeds,
             budget=budget,
             llm_session_id=str(uuid.uuid4()),
+            mode=scan.mode,
         )
 
         # Update Scan to RUNNING — kosullu UPDATE: es zamanli iptal ezilmesin
@@ -650,6 +654,10 @@ class ScannerService:
         for conn in self.connectors:
             if hasattr(conn, "max_variant_tasks"):
                 conn.max_variant_tasks = min(conn.max_variant_tasks, cap)
+            # Site-check 111 site × kullanıcı adı sayısı kadar istek üretir;
+            # mod bütçesini aşmamak için varyant tavanını burada da uygula.
+            if hasattr(conn, "max_usernames"):
+                conn.max_usernames = cap
 
         all_task_specs: list[TaskSpec] = []
         for conn in self.connectors:

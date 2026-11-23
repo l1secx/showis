@@ -39,7 +39,7 @@ from showis_engine.scan_modes import (
     planner_cap,
     reset_calibration_cache,
     scan_concurrency,
-    site_count,
+    site_count_for_mode,
 )
 from showis_engine.variants import generate_variants
 
@@ -727,7 +727,7 @@ def test_site_basina_istek_faktoru_env_ile_ayarlanir(monkeypatch):
     monkeypatch.setenv("SHOWIS_ESTIMATE_ROBOTS_FACTOR", "2.0")
     doubled = estimate_scan(_smoke_target(), "O2")
     site_tasks = next(s["tasks"] for s in base["steps"] if s["key"] == "sitecheck")
-    sites = site_count()
+    sites = site_count_for_mode("O2")
     assert doubled["requests"] - base["requests"] == pytest.approx(site_tasks * sites, rel=0.01)
     assert base["site_request_factor"] == 1.0
     assert doubled["site_request_factor"] == 2.0

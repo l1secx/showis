@@ -321,6 +321,19 @@ def site_count() -> int:
         return _SITE_COUNT_FALLBACK
 
 
+def site_count_for_mode(mode: str | None) -> int:
+    """Moda göre gerçek site-check kapsamı (O3 geniş WMN kümesini içerir)."""
+    try:
+        from showis_connectors.sitecheck.sites import SITES
+
+        if norm_mode(mode) == "O3":
+            return len(SITES)
+        core = [spec for spec in SITES if not spec.id_namespace]
+        return len(core) if core else len(SITES)
+    except Exception:  # pragma: no cover - connector paketi yoksa
+        return _SITE_COUNT_FALLBACK
+
+
 def norm_mode(mode: str | None) -> str:
     """Eski/bilinmeyen mod degerlerini O1/O2/O3'e indirger."""
     value = (mode or "O2").strip().upper()
@@ -459,7 +472,7 @@ def estimate_scan(
     if site_usernames:
         seconds += add_step(
             "sitecheck",
-            f"Site-check ({site_usernames} kullanıcı adı × {site_count()} site)",
+            f"Site-check ({site_usernames} kullanıcı adı × {site_count_for_mode(mode)} site)",
             site_usernames,
             "site_username",
         )
@@ -483,7 +496,12 @@ def estimate_scan(
         "seconds": int(seconds + 0.999),
         "tasks": min(tasks, profile["max_tasks"]),
         # T-371: istek = görev başına ~1 + site başına robots/redirect katsayısı
-        "requests": int(round(tasks + site_usernames * site_count() * site_request_factor())),
+        "requests": int(
+            round(
+                tasks
+                + site_usernames * site_count_for_mode(mode) * site_request_factor()
+            )
+        ),
         "steps": steps,
         "budget": budget_for_mode(mode),
         # Tahminde sayilan planner gorevi (planner_tasks=None -> mod tavani).

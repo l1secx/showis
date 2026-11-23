@@ -16,8 +16,10 @@ from showis_connectors.sitecheck.engine import (
 from showis_connectors.sitecheck.search_connector import SiteCheckSearchConnector
 from showis_connectors.sitecheck.sites import SiteSpec
 from showis_contracts import (
+    Observation,
     ObservationKind,
     Platform,
+    RiskTier,
     ScanContext,
     Seed,
     Target,
@@ -363,3 +365,66 @@ def test_generic_verified_confidence_higher_than_optout():
     )
     assert SiteCheckConnector._confidence(generic) >= 0.65
     assert SiteCheckConnector._confidence(optout) < 0.6
+
+
+@pytest.mark.asyncio
+async def test_ayni_platformdaki_wmn_siteleri_farkli_entity_uretir():
+    from showis_connectors.sitecheck.sites import SiteSpec
+
+    first = SiteSpec(
+        "wmn_a",
+        "Site A",
+        Platform.WEB,
+        "https://a.example/{u}",
+        present_regex=r"user",
+        require_username=False,
+        id_namespace="wmn_a",
+    )
+    second = SiteSpec(
+        "wmn_b",
+        "Site B",
+        Platform.WEB,
+        "https://b.example/{u}",
+        present_regex=r"user",
+        require_username=False,
+        id_namespace="wmn_b",
+    )
+    connector = SiteCheckConnector(
+        sites=[first, second],
+        engine=UsernameCheckEngine(
+            http_client=HttpClient(enable_ssrf_guard=False), sites=[first, second]
+        ),
+    )
+    obs = Observation(
+        id="o1",
+        connector="sitecheck",
+        platform=Platform.WEB,
+        kind=ObservationKind.PROFILE,
+        subject="kerem",
+        tier=RiskTier.B,
+        data={
+            "username": "kerem",
+            "checks": [
+                {
+                    "site": "wmn_a",
+                    "name": "Site A",
+                    "platform": "web",
+                    "status": EXISTS,
+                    "url": "https://a.example/kerem",
+                    "confidence": 0.75,
+                },
+                {
+                    "site": "wmn_b",
+                    "name": "Site B",
+                    "platform": "web",
+                    "status": EXISTS,
+                    "url": "https://b.example/kerem",
+                    "confidence": 0.75,
+                },
+            ],
+        },
+    )
+    entities, _ = connector.normalize(obs)
+    assert len({entity.id for entity in entities}) == 2
+    assert all(entity.attributes["username"] == "kerem" for entity in entities)
+    assert {entity.label for entity in entities} == {"kerem · Site A", "kerem · Site B"}

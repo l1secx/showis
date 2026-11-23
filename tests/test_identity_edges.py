@@ -458,3 +458,24 @@ async def test_scanner_kimlik_kenarlarini_persist_eder(tmp_path, monkeypatch):
     assert scan.stats["edges_by_type"] == {"SAME_PERSON": 1}
 
     await engine.dispose()
+
+
+def test_ayni_web_platformundaki_farkli_siteler_kume_olur():
+    """WhatsMyName WEB siteleri aynı Platform.WEB olsa da ayrı kaynak sayılır."""
+    first = Entity(
+        id="web:wmn_a:kerem",
+        type=EntityType.ACCOUNT,
+        platform=Platform.WEB,
+        label="kerem · Site A",
+        attributes={"username": "kerem", "site": "wmn_a", "id_namespace": "wmn_a"},
+    )
+    second = Entity(
+        id="web:wmn_b:kerem",
+        type=EntityType.ACCOUNT,
+        platform=Platform.WEB,
+        label="kerem · Site B",
+        attributes={"username": "kerem", "site": "wmn_b", "id_namespace": "wmn_b"},
+    )
+    edges = build_identity_edges([first, second])
+    assert len(edges) == 1
+    assert edges[0].type == EdgeType.SAME_PERSON

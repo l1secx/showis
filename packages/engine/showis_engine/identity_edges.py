@@ -100,6 +100,19 @@ def entity_username(entity: Entity) -> str:
     return normalize_username(ident)
 
 
+def entity_platform_key(entity: Entity) -> str:
+    """Platform + site kimliği.
+
+    WhatsMyName gibi çoklu WEB siteleri aynı `Platform.WEB` değerini taşır;
+    bunları tek platform saymak "çok platformda aynı kullanıcı adı" sinyalini
+    yok ederdi. `id_namespace`/`site` varsa anahtara eklenir.
+    """
+    attrs = entity.attributes or {}
+    site = attrs.get("site") if attrs.get("id_namespace") else None
+    key = entity.platform.value
+    return f"{key}:{site}" if site else key
+
+
 def _entity_emails(entity: Entity) -> set[str]:
     attrs = entity.attributes or {}
     values: set[str] = set()
@@ -165,8 +178,8 @@ def _star_edges(
     hub = ordered[0]
     edges: list[Edge] = []
     for member in ordered[1:]:
-        if member.platform == hub.platform:
-            continue  # yalnız platformlar arası
+        if entity_platform_key(member) == entity_platform_key(hub):
+            continue  # yalnız platformlar/siteler arası
         edges.append(
             Edge(
                 id=short_edge_id(prefix, edge_type.value, hub.id, member.id),
@@ -226,9 +239,10 @@ def build_identity_edges(
         if not username:
             continue
         group = by_username.setdefault(username, {})
-        current = group.get(entity.platform.value)
+        platform_key = entity_platform_key(entity)
+        current = group.get(platform_key)
         if current is None or entity.id < current.id:
-            group[entity.platform.value] = entity
+            group[platform_key] = entity
 
     for username, platform_map in sorted(by_username.items()):
         if len(platform_map) < 2:
@@ -259,7 +273,7 @@ def build_identity_edges(
         if sha:
             by_sha.setdefault(sha, []).append(entity)
     for sha, sha_group in sorted(by_sha.items()):
-        if len({e.platform.value for e in sha_group}) < 2:
+        if len({entity_platform_key(e) for e in sha_group}) < 2:
             continue
 
         def _sha_reason(hub: Entity, member: Entity, _sha: str = sha) -> str:
@@ -294,7 +308,7 @@ def build_identity_edges(
         for member in dhash_entities:
             if member.id == hub.id or member.id in assigned:
                 continue
-            if member.platform == hub.platform:
+            if entity_platform_key(member) == entity_platform_key(hub):
                 continue
             distance = hamming_distance(
                 str(hub.attributes.get("avatar_dhash")),
@@ -325,7 +339,7 @@ def build_identity_edges(
             for value in extractor(entity):
                 by_value.setdefault(value, []).append(entity)
         for value, value_group in sorted(by_value.items()):
-            if len({e.platform.value for e in value_group}) < 2:
+            if len({entity_platform_key(e) for e in value_group}) < 2:
                 continue
 
             def _mail_reason(hub: Entity, member: Entity, _v: str = value, _l: str = label) -> str:

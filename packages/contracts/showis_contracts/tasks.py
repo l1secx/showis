@@ -61,3 +61,6 @@ class ScanContext(BaseModel):
     seeds: list[Seed] = Field(default_factory=list)
     budget: Budget = Field(default_factory=Budget)
     llm_session_id: str = ""
+    #: Tarama modu (O1/O2/O3). Site-check gibi pahalı connector'lar kapsamı
+    #: moda göre daraltabilir; varsayılan eski davranışla uyumludur.
+    mode: str = "O2"

@@ -74,14 +74,18 @@ def test_kapsam_hedefe_yakin():
 
 
 def test_platformlar_cogunlukla_tekil():
-    """Aynı platform iki farklı site gibi listelenmemeli (entity id çakışır)."""
+    """Aynı platform iki site olabilir; entity kimliği ad alanıyla ayrılmalı."""
     seen: dict[str, str] = {}
     for spec in SITES:
         if spec.platform in seen:
-            # Bilinçli istisnalar varsa burada belgelenmeli
-            pytest.fail(
-                f"platform {spec.platform.value} iki spec'te: {seen[spec.platform]} / {spec.key}"
-            )
+            # WhatsMyName WEB kümesi gibi çoklu siteler id_namespace taşır.
+            if spec.id_namespace and spec.id_namespace != spec.key:
+                pytest.fail(f"id_namespace anahtarla eşleşmiyor: {spec.key}")
+            if not spec.id_namespace:
+                pytest.fail(
+                    f"platform {spec.platform.value} iki spec'te: "
+                    f"{seen[spec.platform]} / {spec.key}"
+                )
         seen[spec.platform] = spec.key
 
 
@@ -102,9 +106,12 @@ def test_tahmin_site_sayisi_listeden_turetilir(monkeypatch):
     target = Target(first_name="Kerem", last_name="Boz", hints={"school": "ODTÜ"})
     est = estimate_scan(target, "O2", calibration_path="/tmp/olmayan-kalibrasyon.json")
     sitecheck = next(step for step in est["steps"] if step["key"] == "sitecheck")
-    assert str(len(SITES)) in sitecheck["label"]
+    from showis_engine.scan_modes import site_count_for_mode
+
+    active_sites = site_count_for_mode("O2")
+    assert str(active_sites) in sitecheck["label"]
     usernames = sitecheck["tasks"]
-    assert est["requests"] >= usernames * len(SITES)
+    assert est["requests"] >= usernames * active_sites
 
 
 # ---------------------------------------------------------------------------
@@ -308,3 +315,32 @@ async def test_search_connector_guvensiz_kimligi_planlamaz():
     planned = {str(t.params.get("username")) for t in tasks}
     assert "kboz" in planned
     assert not any("/" in name or "?" in name or ".." in name for name in planned)
+
+
+def test_wmn_alt_kumesi_guvenli_ve_ad_alanli():
+    """WhatsMyName WEB siteleri aynı entity id'ye çökmesin."""
+    import re
+
+    from showis_connectors.sitecheck.sites_wmn import WMN_SITES
+
+    assert WMN_SITES, "en az bir WMN spec bekleniyor"
+    for spec in WMN_SITES:
+        assert spec.id_namespace == spec.key
+        assert spec.present_regex, spec.key
+        assert spec.require_username is False
+        assert "{u}" in spec.url_template
+        re.compile(spec.present_regex)
+        if spec.absent_regex:
+            re.compile(spec.absent_regex)
+
+
+def test_wmn_genis_kumesi_yalniz_o3():
+    from showis_connectors.sitecheck import SiteCheckConnector
+    from showis_engine.scan_modes import site_count, site_count_for_mode
+
+    conn = SiteCheckConnector()
+    assert len(conn.sites_for_mode("O2")) == site_count_for_mode("O2")
+    assert len(conn.sites_for_mode("O3")) == site_count()
+    assert site_count_for_mode("O3") > site_count_for_mode("O2")
+    assert any(spec.id_namespace for spec in conn.sites_for_mode("O3"))
+    assert not any(spec.id_namespace for spec in conn.sites_for_mode("O2"))

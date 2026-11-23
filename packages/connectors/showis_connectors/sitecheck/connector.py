@@ -68,6 +68,17 @@ class SiteCheckConnector:
             plan_registry if plan_registry is not None else get_default_registry()
         )
 
+    def sites_for_mode(self, mode: str | None) -> list[SiteSpec]:
+        """Moda göre kapsam: WMN geniş kümesi yalnız derin taramada (O3).
+
+        O1/O2 çekirdek 83 siteyle kalır; böylece istek bütçesi ve süre
+        öngörülebilir olur. O3, CC BY-SA WMN alt kümesiyle genişler.
+        """
+        if str(mode or "").strip().upper() == "O3":
+            return self.sites
+        core = [spec for spec in self.sites if not spec.id_namespace]
+        return core or self.sites
+
     # ------------------------------------------------------------------
     # Plan
     # ------------------------------------------------------------------
@@ -152,7 +163,7 @@ class SiteCheckConnector:
                 )
             ]
 
-        results = await self.engine.check_username(username, self.sites)
+        results = await self.engine.check_username(username, self.sites_for_mode(ctx.mode))
 
         hits = [r for r in results if r.exists]
         cache_hits = sum(1 for r in results if r.from_cache)
@@ -255,12 +266,23 @@ class SiteCheckConnector:
             if ev_id and ev_id in ev_by_id:
                 entity_evs = [ev_id]
 
+            spec = next((item for item in self.sites if item.key == site_key), None)
+            identifier = (
+                f"{spec.id_namespace}:{username}"
+                if spec is not None and spec.id_namespace
+                else str(username)
+            )
+            label = (
+                f"{username} · {spec.name}"
+                if spec is not None and spec.id_namespace
+                else username
+            )
             entities.append(
                 Entity(
-                    id=make_entity_id(platform.value, str(username)),
+                    id=make_entity_id(platform.value, identifier),
                     type=EntityType.ACCOUNT,
                     platform=platform,
-                    label=username,
+                    label=label,
                     url=check.get("url"),
                     attributes={
                         "username": username,
@@ -268,6 +290,7 @@ class SiteCheckConnector:
                         "site_name": check.get("name"),
                         "detection": self.detection,
                         "confidence_hint": check.get("confidence"),
+                        "id_namespace": spec.id_namespace if spec else None,
                     },
                     evidence_ids=entity_evs,
                 )

@@ -265,6 +265,11 @@
       "default": "",
       "title": "Llm Session Id",
       "type": "string"
+    },
+    "mode": {
+      "default": "O2",
+      "title": "Mode",
+      "type": "string"
     }
   },
   "required": [

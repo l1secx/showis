@@ -55,6 +55,9 @@ class SiteSpec:
     #: kullanici adinin sayfa govdesinde gecmesini sart kos. Soft-404/login
     #: duvari yanlis-pozitiflerini eler; bilincli istisnalar False yapar.
     require_username: bool = True
+    #: Ayni platformu paylasan birden çok site (ör. WhatsMyName WEB kümesi)
+    #: için entity kimliğine eklenen ad alanı. Boşsa eski davranış korunur.
+    id_namespace: str | None = None
     notes: str = ""
 
 
@@ -696,6 +699,12 @@ SITES: list[SiteSpec] = [
         absent_statuses=(404, 410),
     ),
 ]
+
+# WhatsMyName alt kümesi (CC BY-SA 4.0) — yalnız çift işaretli siteler.
+# Import döngüsünü önlemek için SiteSpec/SITES tanımından sonra yüklenir.
+from .sites_wmn import WMN_SITES  # noqa: E402
+
+SITES.extend(WMN_SITES)
 
 #: site key -> spec hizli erisim
 SITES_BY_KEY: dict[str, SiteSpec] = {s.key: s for s in SITES}
