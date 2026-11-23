@@ -13,6 +13,7 @@ const TABS = [
   { key: "graph", label: "Grafik", href: "graph" },
   { key: "report", label: "Rapor", href: "report" },
   { key: "diff", label: "Değişim", href: "diff" },
+  { key: "comments", label: "Yorumlar", href: "comments" },
   { key: "audit", label: "Denetim", href: "audit" },
 ];
 
@@ -112,6 +113,7 @@ export default function CaseLayout({ children }: { children: React.ReactNode }) 
           value: LEGAL_LABELS[caseData.legal_basis] || caseData.legal_basis,
         }
       : null,
+    caseData?.owner ? { label: "Sahip", value: caseData.owner } : null,
     hintValues.length ? { label: "İpuçları", value: hintValues.join(", ") } : null,
     caseData
       ? { label: "Saklama süresi", value: `${caseData.retention_days} gün` }

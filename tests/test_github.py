@@ -180,3 +180,43 @@ async def test_github_hint_email_plans_commit_search(github_connector: GitHubCon
     commits = [t for t in tasks if t.kind == "search_commits"]
     assert len(commits) == 1
     assert commits[0].params["email"] == "kerem@example.com"
+
+
+@pytest.mark.asyncio
+async def test_github_404_wayback_arsivi_lead_uretir(github_connector: GitHubConnector):
+    task = TaskSpec(
+        id="t-arc",
+        connector="github",
+        platform=Platform.GITHUB,
+        kind="get_user",
+        params={"username": "deleteduser"},
+    )
+    ctx = ScanContext(
+        case_id="c-1",
+        scan_id="s-1",
+        target=Target(kind="handle", nickname="deleteduser"),
+    )
+    with respx.mock(assert_all_called=False) as router:
+        router.get("https://api.github.com/users/deleteduser").respond(404)
+        router.get(
+            "https://web.archive.org/cdx/search/cdx",
+            params={
+                "url": "github.com/deleteduser",
+                "output": "json",
+                "filter": "statuscode:200",
+                "limit": "1",
+            },
+        ).respond(
+            200,
+            json=[
+                ["timestamp", "original", "statuscode"],
+                ["20200101000000", "https://github.com/deleteduser", "200"],
+            ],
+        )
+        obs = await github_connector.run(task, ctx)
+
+    assert obs[0].error is None
+    assert obs[0].data["archived"] is True
+    entities, _ = github_connector.normalize(obs[0])
+    assert entities[0].attributes["archived"] is True
+    assert entities[0].attributes["confidence_hint"] == 0.65

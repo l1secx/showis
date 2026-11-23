@@ -140,6 +140,61 @@ class GitHubConnector:
 
         return tasks
 
+    async def _archived_user(self, username: str) -> Observation | None:
+        """404 GitHub profilini Wayback CDX ile tarihsel ipucu olarak kurtarır."""
+        import json as _json
+        from urllib.parse import quote
+
+        cdx_url = (
+            "https://web.archive.org/cdx/search/cdx"
+            f"?url=github.com/{quote(username, safe='')}"
+            "&output=json&filter=statuscode:200&limit=1"
+        )
+        try:
+            resp = await self.http_client.get(
+                cdx_url,
+                headers={"Accept": "application/json"},
+                check_robots=False,
+                follow_redirects=True,
+            )
+            if resp.status_code != 200:
+                return None
+            rows = _json.loads(resp.content or b"[]")
+        except Exception:
+            return None
+        if not isinstance(rows, list) or len(rows) < 2:
+            return None
+        try:
+            timestamp, original = str(rows[1][0]), str(rows[1][1])
+        except (IndexError, TypeError):
+            return None
+        archive_url = f"https://web.archive.org/web/{timestamp}/{original}"
+        ev = self.evidence_store.store_bytes(
+            resp.content,
+            source_url=cdx_url,
+            kind="json",
+            http_status=resp.status_code,
+        )
+        return Observation(
+            id=str(uuid.uuid4()),
+            connector=self.name,
+            platform=self.platform,
+            kind=ObservationKind.PROFILE,
+            subject=username,
+            url=archive_url,
+            tier=self.tier,
+            data={
+                "login": username,
+                "name": username,
+                "html_url": archive_url,
+                "archived": True,
+                "archive_timestamp": timestamp,
+                "confidence_hint": 0.65,
+                "exists": True,
+            },
+            evidence=[ev],
+        )
+
     async def run(self, task: TaskSpec, ctx: ScanContext) -> list[Observation]:
         observations: list[Observation] = []
         obs_id = str(uuid.uuid4())
@@ -217,20 +272,28 @@ class GitHubConnector:
                         )
                     )
                 else:
-                    observations.append(
-                        Observation(
-                            id=obs_id,
-                            connector=self.name,
-                            platform=self.platform,
-                            kind=ObservationKind.PROFILE,
-                            subject=username,
-                            url=url,
-                            tier=self.tier,
-                            data={},
-                            error=f"User {username} fetch error {resp.status_code}",
-                            blocked=resp.status_code == 403,
-                        )
+                    archived = (
+                        await self._archived_user(username)
+                        if resp.status_code == 404
+                        else None
                     )
+                    if archived is not None:
+                        observations.append(archived)
+                    else:
+                        observations.append(
+                            Observation(
+                                id=obs_id,
+                                connector=self.name,
+                                platform=self.platform,
+                                kind=ObservationKind.PROFILE,
+                                subject=username,
+                                url=url,
+                                tier=self.tier,
+                                data={},
+                                error=f"User {username} fetch error {resp.status_code}",
+                                blocked=resp.status_code == 403,
+                            )
+                        )
 
             elif kind == "list_repos":
                 username = params.get("username", "")
@@ -334,6 +397,7 @@ class GitHubConnector:
 
             entity_id = f"github:{login}"
             attributes: dict[str, Any] = {
+                "username": login,
                 "name": data.get("name"),
                 "bio": data.get("bio"),
                 "company": data.get("company"),
@@ -344,6 +408,9 @@ class GitHubConnector:
                 "avatar_url": data.get("avatar_url"),
                 "public_repos": data.get("public_repos"),
                 "followers": data.get("followers"),
+                "archived": data.get("archived"),
+                "archive_timestamp": data.get("archive_timestamp"),
+                "confidence_hint": data.get("confidence_hint"),
             }
             entities.append(
                 Entity(

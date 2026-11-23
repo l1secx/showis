@@ -8,6 +8,7 @@ export interface CaseSummary {
   purpose: string;
   legal_basis: string;
   status: string;
+  owner?: string | null;
   retention_days: number;
   created_at: string;
 }
@@ -199,6 +200,13 @@ export interface AuditEntry {
   created_at?: string | null;
 }
 
+export interface CaseComment {
+  id: string;
+  author: string;
+  body: string;
+  created_at?: string | null;
+}
+
 export interface CaseMonitor {
   enabled: boolean;
   interval_hours: number;
@@ -327,9 +335,25 @@ export const api = {
   verifyFinding: (findingId: string, status: "confirmed" | "rejected") =>
     req<{ id: string; status: string }>(`/findings/${findingId}`, { method: "PATCH", body: JSON.stringify({ status }) }),
   getEvidence: (findingId: string) => req<{ finding_id: string; evidence: EvidenceItem[] }>(`/findings/${findingId}/evidence`),
+  captureScreenshot: (findingId: string) =>
+    req<{ finding_id: string; evidence_id: string; kind: string; content_hash: string }>(
+      `/findings/${findingId}/screenshot`,
+      { method: "POST" }
+    ),
   getGraph: (caseId: string) => req<GraphData>(`/cases/${caseId}/graph`),
   getAudit: (caseId: string) => req<AuditEntry[]>(`/cases/${caseId}/audit`),
   getMonitor: (caseId: string) => req<CaseMonitor>(`/cases/${caseId}/monitor`),
+  getComments: (caseId: string) => req<CaseComment[]>(`/cases/${caseId}/comments`),
+  addComment: (caseId: string, body: string, author = "operator") =>
+    req<CaseComment>(`/cases/${caseId}/comments`, {
+      method: "POST",
+      body: JSON.stringify({ body, author }),
+    }),
+  updateOwner: (caseId: string, owner: string | null) =>
+    req<{ id: string; owner: string | null }>(`/cases/${caseId}/owner`, {
+      method: "PATCH",
+      body: JSON.stringify({ owner }),
+    }),
   updateMonitor: (caseId: string, body: { enabled: boolean; interval_hours: number; mode: string }) =>
     req<CaseMonitor>(`/cases/${caseId}/monitor`, { method: "PATCH", body: JSON.stringify(body) }),
   getDiff: (caseId: string) => req<CaseDiff>(`/cases/${caseId}/diff`),

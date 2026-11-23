@@ -1,15 +1,20 @@
 """Bulgu doğrulama/reddetme + kanıt görüntüleme uçları."""
 
+import base64
+import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
-from showis.db.models import Evidence, Finding
+from showis.db.models import Case, Evidence, Finding
 from showis.db.session import get_db
 from showis.services.audit import record_request_audit
 from showis.services.retention import _evidence_file_path
+from showis_engine.browser import BrowserClient
+from showis_engine.http import EvidenceStore
+from showis_engine.policy import SSRFViolationError, guard_url
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -123,4 +128,88 @@ async def get_finding_evidence(finding_id: str, db: AsyncSession = Depends(get_d
             }
             for ev in items
         ],
+    }
+
+
+@router.post("/findings/{finding_id}/screenshot", status_code=201)
+async def capture_finding_screenshot(
+    finding_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Bulgu URL'sinin ekran görüntüsünü kanıt olarak saklar (O3 kanıtı)."""
+    finding = (
+        await db.execute(select(Finding).where(Finding.id == finding_id))
+    ).scalar_one_or_none()
+    if not finding:
+        raise HTTPException(status_code=404, detail="Finding not found")
+    if not finding.url:
+        raise HTTPException(status_code=422, detail="Bulgunun URL'si yok")
+    try:
+        guard_url(finding.url)
+    except SSRFViolationError as exc:
+        raise HTTPException(
+            status_code=422, detail="URL güvenlik politikasını ihlal ediyor"
+        ) from exc
+
+    client = BrowserClient(
+        os.getenv("BROWSER_SERVICE_URL", "http://browser:8081")
+    )
+    result = await client.render(finding.url)
+    if result.blocked or not result.screenshot_b64:
+        raise HTTPException(
+            status_code=422,
+            detail="Sayfa render edilemedi veya robot/engel nedeniyle ekran görüntüsü alınamadı",
+        )
+    try:
+        image = base64.b64decode(result.screenshot_b64)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail="Geçersiz ekran görüntüsü") from exc
+
+    case = (
+        await db.execute(select(Case).where(Case.id == finding.case_id))
+    ).scalar_one_or_none()
+    retention_days = int(case.retention_days if case else 30)
+    store = EvidenceStore()
+    ev = store.store_bytes(
+        image,
+        source_url=finding.url,
+        kind="png",
+        http_status=result.status_code,
+    )
+    db.add(
+        Evidence(
+            id=ev.id,
+            case_id=finding.case_id,
+            source_url=ev.source_url,
+            kind="png",
+            content_hash=ev.content_hash,
+            storage_key=ev.storage_key,
+            http_status=result.status_code,
+            user_agent=os.getenv("SHOWIS_SCREENSHOT_USER_AGENT", "showis-browser"),
+            fetched_at=datetime.now(timezone.utc),
+            expires_at=datetime.now(timezone.utc) + timedelta(days=retention_days),
+        )
+    )
+    finding.evidence_ids = list(dict.fromkeys([*(finding.evidence_ids or []), ev.id]))
+    await db.commit()
+    await record_request_audit(
+        db=db,
+        request=request,
+        action="finding.screenshot",
+        case_id=finding.case_id,
+        target=f"Finding: {finding.id}",
+        details={
+            "evidence_id": ev.id,
+            "url": finding.url,
+            "http_status": result.status_code,
+            "bytes": len(image),
+        },
+    )
+    return {
+        "finding_id": finding.id,
+        "evidence_id": ev.id,
+        "kind": "png",
+        "content_hash": ev.content_hash,
+        "source_url": finding.url,
     }

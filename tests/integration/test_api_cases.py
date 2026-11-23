@@ -224,3 +224,35 @@ async def test_gecersiz_domain_422(client):
         },
     )
     assert res.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_case_owner_ve_yorumlar(client):
+    res = await client.post(
+        "/api/v1/cases",
+        json={
+            "name": "İş Birliği",
+            "purpose": "yorum testi",
+            "legal_basis": "self_check",
+            "authorization_confirmed": True,
+            "target": {"kind": "handle", "nickname": "collab"},
+        },
+    )
+    assert res.status_code == 201, res.text
+    case_id = res.json()["id"]
+
+    owner = await client.patch(f"/api/v1/cases/{case_id}/owner", json={"owner": "analist-1"})
+    assert owner.status_code == 200
+    assert owner.json()["owner"] == "analist-1"
+    detail = (await client.get(f"/api/v1/cases/{case_id}")).json()
+    assert detail["owner"] == "analist-1"
+
+    created = await client.post(
+        f"/api/v1/cases/{case_id}/comments",
+        json={"body": "İlk inceleme notu", "author": "analist-1"},
+    )
+    assert created.status_code == 201, created.text
+    comments = (await client.get(f"/api/v1/cases/{case_id}/comments")).json()
+    assert len(comments) == 1
+    assert comments[0]["body"] == "İlk inceleme notu"
+    assert comments[0]["author"] == "analist-1"

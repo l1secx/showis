@@ -19,7 +19,7 @@ from fastapi import (
 )
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
-from showis.db.models import Case, Edge, Entity, Evidence, Finding, Report, Scan
+from showis.db.models import Case, CaseComment, Edge, Entity, Evidence, Finding, Report, Scan
 from showis.db.models import Seed as DbSeed
 from showis.db.models import Target as DbTarget
 from showis.db.session import get_db
@@ -254,6 +254,15 @@ class MonitorPatch(BaseModel):
     enabled: bool
     interval_hours: int = Field(default=24, ge=1, le=168)
     mode: Literal["O1", "O2", "O3", "o1", "o2", "o3"] = "O2"
+
+
+class OwnerPatch(BaseModel):
+    owner: str | None = Field(default=None, max_length=128)
+
+
+class CommentCreate(BaseModel):
+    body: str = Field(min_length=1, max_length=4000)
+    author: str = Field(default="operator", min_length=1, max_length=128)
 
 
 class ScanStartRequest(BaseModel):
@@ -705,6 +714,7 @@ async def list_cases(
                 "purpose": c.purpose,
                 "legal_basis": c.legal_basis,
                 "status": c.status,
+                "owner": c.owner,
                 "retention_days": c.retention_days,
                 "created_at": c.created_at.isoformat(),
             }
@@ -758,6 +768,7 @@ async def list_cases(
                 "purpose": c.purpose,
                 "legal_basis": c.legal_basis,
                 "status": c.status,
+                "owner": c.owner,
                 "retention_days": c.retention_days,
                 "created_at": c.created_at.isoformat() if c.created_at else None,
                 "target": (
@@ -810,6 +821,7 @@ async def get_case(case_id: str, db: AsyncSession = Depends(get_db)):
         "legal_basis": case.legal_basis,
         "notes": case.notes,
         "status": case.status,
+        "owner": case.owner,
         "retention_days": case.retention_days,
         "created_at": case.created_at.isoformat(),
         "target": {
@@ -1380,6 +1392,93 @@ async def get_case_diff(
             "entities_added": len(new_entities - old_entities),
             "edges_added": len(new_edges - old_edges),
         },
+    }
+
+
+@router.patch("/{case_id}/owner")
+async def update_case_owner(
+    case_id: str,
+    payload: OwnerPatch,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    case = (await db.execute(select(Case).where(Case.id == case_id))).scalar_one_or_none()
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+    owner = (payload.owner or "").strip() or None
+    case.owner = owner[:128] if owner else None
+    await db.commit()
+    await record_request_audit(
+        db=db,
+        request=request,
+        action="case.owner.update",
+        case_id=case.id,
+        target=f"Case: {case.name}",
+        details={"owner": case.owner},
+    )
+    return {"id": case.id, "owner": case.owner}
+
+
+@router.get("/{case_id}/comments")
+async def list_case_comments(case_id: str, db: AsyncSession = Depends(get_db)):
+    case = (await db.execute(select(Case).where(Case.id == case_id))).scalar_one_or_none()
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+    rows = (
+        await db.execute(
+            select(CaseComment)
+            .where(CaseComment.case_id == case_id)
+            .order_by(CaseComment.created_at.asc())
+        )
+    ).scalars().all()
+    return [
+        {
+            "id": row.id,
+            "author": row.author,
+            "body": row.body,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        }
+        for row in rows
+    ]
+
+
+@router.post("/{case_id}/comments", status_code=201)
+async def add_case_comment(
+    case_id: str,
+    payload: CommentCreate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    case = (await db.execute(select(Case).where(Case.id == case_id))).scalar_one_or_none()
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+    body = reject_control_chars(payload.body.strip(), param="body") or ""
+    if not body:
+        raise HTTPException(status_code=422, detail="Yorum boş olamaz")
+    author = reject_control_chars(
+        (request.headers.get("X-Actor") or payload.author).strip(), param="author"
+    ) or "operator"
+    row = CaseComment(
+        case_id=case.id,
+        author=author[:128],
+        body=body[:4000],
+    )
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    await record_request_audit(
+        db=db,
+        request=request,
+        action="case.comment.create",
+        case_id=case.id,
+        target=f"Case: {case.name}",
+        details={"comment_id": row.id, "author": row.author},
+    )
+    return {
+        "id": row.id,
+        "author": row.author,
+        "body": row.body,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
     }
 
 

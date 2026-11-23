@@ -66,6 +66,8 @@ class Case(Base):
     monitor_last_scan_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    #: Operasyonel sahiplik etiketi (yetkilendirme sınırı DEĞİL).
+    owner: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -87,6 +89,23 @@ class Case(Base):
     findings: Mapped[list["Finding"]] = relationship(
         "Finding", back_populates="case", cascade="all, delete-orphan"
     )
+    comments: Mapped[list["CaseComment"]] = relationship(
+        "CaseComment", back_populates="case", cascade="all, delete-orphan"
+    )
+
+
+class CaseComment(Base):
+    __tablename__ = "case_comments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid_str)
+    case_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
+    )
+    author: Mapped[str] = mapped_column(String(128), nullable=False, default="operator")
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    case: Mapped["Case"] = relationship("Case", back_populates="comments")
 
 
 class Target(Base):

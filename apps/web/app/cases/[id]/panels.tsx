@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   AlertTriangle,
   ArrowUpRight,
+  Camera,
   Check,
   ChevronDown,
   Download,
@@ -23,6 +24,7 @@ import {
 import {
   api,
   type AuditEntry,
+  type CaseComment,
   type CaseDiff,
   type CaseMonitor,
   type EvidenceItem,
@@ -766,16 +768,20 @@ function FindingRecord({
   expanded,
   highlighted = false,
   busy = false,
+  capturing = false,
   onToggleEvidence,
   onVerify,
+  onCapture,
 }: {
   finding: FindingWithAuth;
   evidence?: EvidenceItem[];
   expanded: boolean;
   highlighted?: boolean;
   busy?: boolean;
+  capturing?: boolean;
   onToggleEvidence: (id: string) => void;
   onVerify: (id: string, status: "confirmed" | "rejected") => void;
+  onCapture?: (id: string) => void;
 }) {
   const pct = Math.round(f.score * 100);
   const isLead = f.status === "lead";
@@ -920,6 +926,22 @@ function FindingRecord({
         <Eye size={12} aria-hidden />
         {expanded ? "Kanıtları gizle" : `Kanıtlar (${f.evidence_ids.length})`}
       </button>
+      {f.url && onCapture && (
+        <button
+          type="button"
+          onClick={() => onCapture(f.id)}
+          disabled={capturing}
+          className="ml-3 mt-3 inline-flex items-center gap-1.5 rounded text-[12px] text-ink-3 transition-colors hover:text-ink disabled:opacity-50"
+          title="Sayfanın ekran görüntüsünü kanıt zincirine ekle"
+        >
+          {capturing ? (
+            <Loader2 size={12} className="animate-spin" aria-hidden />
+          ) : (
+            <Camera size={12} aria-hidden />
+          )}
+          Ekran görüntüsü
+        </button>
+      )}
 
       {expanded && (
         <div id={evidencePanelId} className="mt-3 rounded-[6px] border border-line bg-sunken p-3">
@@ -979,6 +1001,8 @@ export function FindingsTab({ caseId }: { caseId: string }) {
   );
   /** Kararı gönderilen bulgu — düğmeyi kilitler. */
   const [verifying, setVerifying] = useState<string | null>(null);
+  /** Ekran görüntüsü alınan bulgu. */
+  const [capturing, setCapturing] = useState<string | null>(null);
   // T-303 → T-318: grafikten gelen entity (bulgular sekmesinde vurgulanır).
   const [focusEntity, setFocusEntity] = useState<string | null>(null);
   // Grafikten gelen kimlik kümesi filtresi (`?cluster=`).
@@ -1117,6 +1141,24 @@ export function FindingsTab({ caseId }: { caseId: string }) {
       });
     } finally {
       setVerifying(null);
+    }
+  };
+
+  const captureScreenshot = async (findingId: string) => {
+    setCapturing(findingId);
+    setActionError(null);
+    try {
+      await api.captureScreenshot(findingId);
+      await load();
+      const refreshed = await api.getEvidence(findingId);
+      setEvidence((map) => ({ ...map, [findingId]: refreshed.evidence }));
+    } catch (e: any) {
+      setActionError({
+        message: "Ekran görüntüsü alınamadı. Site robots/engel veya tarayıcı servisi kapalı olabilir.",
+        detail: e?.message,
+      });
+    } finally {
+      setCapturing(null);
     }
   };
 
@@ -1362,8 +1404,10 @@ export function FindingsTab({ caseId }: { caseId: string }) {
       expanded={expanded === finding.id}
       highlighted={focusFinding?.id === finding.id}
       busy={verifying === finding.id}
+      capturing={capturing === finding.id}
       onToggleEvidence={toggleEvidence}
       onVerify={verify}
+      onCapture={captureScreenshot}
     />
   );
 
@@ -2418,6 +2462,135 @@ export function ReportTab({ caseId }: { caseId: string }) {
       )}
 
       {summary && hasSections && <ReportSummary data={summary} />}
+    </div>
+  );
+}
+
+/* ---------------- Yorumlar sekmesi ---------------- */
+
+export function CommentsTab({ caseId }: { caseId: string }) {
+  const [comments, setComments] = useState<CaseComment[]>([]);
+  const [body, setBody] = useState("");
+  const [author, setAuthor] = useState("operator");
+  const [owner, setOwner] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api
+      .getComments(caseId)
+      .then(setComments)
+      .catch((e: Error) => setError(e.message));
+    api
+      .getCase(caseId)
+      .then((data) => setOwner(data.owner ?? ""))
+      .catch(() => {});
+  }, [caseId]);
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const text = body.trim();
+    if (!text) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await api.addComment(caseId, text, author.trim() || "operator");
+      setComments((prev) => [...prev, created]);
+      setBody("");
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveOwner = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await api.updateOwner(caseId, owner.trim() || null);
+      setOwner(result.owner ?? "");
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-5">
+      <section className="panel p-5">
+        <h2 className="section-heading">Vaka sahibi</h2>
+        <div className="mt-3 flex flex-wrap items-end gap-2">
+          <label className="min-w-[220px] flex-1">
+            <span className="label">Operasyonel sahip</span>
+            <input
+              className="input"
+              value={owner}
+              onChange={(e) => setOwner(e.target.value)}
+              placeholder="ör. analist@example"
+            />
+          </label>
+          <button type="button" onClick={saveOwner} disabled={busy} className="btn-secondary">
+            Kaydet
+          </button>
+        </div>
+        <p className="mt-2 text-[11.5px] text-ink-3">
+          Sahip alanı operasyonel bir etikettir; tek paylaşılan API token’ı nedeniyle
+          yetkilendirme sınırı değildir.
+        </p>
+      </section>
+
+      <section className="panel overflow-hidden">
+        <header className="border-b border-line bg-sunken px-4 py-2.5">
+          <span className="text-[12.5px] font-semibold text-ink">Yorumlar</span>
+          <span className="numeric ml-2 text-[12px] text-ink-3">{comments.length}</span>
+        </header>
+        {comments.length === 0 ? (
+          <p className="px-4 py-4 text-[12.5px] text-ink-3">Henüz yorum yok.</p>
+        ) : (
+          <ul className="divide-y divide-line">
+            {comments.map((comment) => (
+              <li key={comment.id} className="px-4 py-3">
+                <div className="flex flex-wrap items-center gap-x-3 text-[12px] text-ink-3">
+                  <span className="font-medium text-ink-2">{comment.author}</span>
+                  {comment.created_at && (
+                    <span className="numeric">
+                      {new Date(comment.created_at).toLocaleString("tr-TR")}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-1 whitespace-pre-wrap text-[13px] text-ink-2">{comment.body}</p>
+              </li>
+            ))}
+          </ul>
+        )}
+        <form onSubmit={submit} className="space-y-2 border-t border-line p-4">
+          <div className="flex flex-wrap gap-2">
+            <input
+              className="input w-44"
+              value={author}
+              onChange={(e) => setAuthor(e.target.value)}
+              aria-label="Yorum yazarı"
+              placeholder="Yazar"
+            />
+            <span className="text-[11.5px] text-ink-3 self-center">
+              X-Actor başlığı varsa o kullanılır
+            </span>
+          </div>
+          <textarea
+            className="input min-h-[90px] w-full resize-y"
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            placeholder="Vaka notu veya inceleme yorumu"
+            maxLength={4000}
+          />
+          {error && <p className="text-[12px] text-danger">{error}</p>}
+          <button type="submit" disabled={busy || !body.trim()} className="btn-primary btn-sm">
+            {busy ? "Kaydediliyor" : "Yorum ekle"}
+          </button>
+        </form>
+      </section>
     </div>
   );
 }
