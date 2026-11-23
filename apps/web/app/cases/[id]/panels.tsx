@@ -127,6 +127,11 @@ export function ScanTab({
   const autoStarted = useRef(false);
   const [monitor, setMonitor] = useState<CaseMonitor | null>(null);
   const [monitorBusy, setMonitorBusy] = useState(false);
+  const [webhook, setWebhook] = useState("");
+
+  useEffect(() => {
+    setWebhook(monitor?.webhook_url ?? "");
+  }, [monitor?.webhook_url]);
 
   useEffect(() => {
     api.getMonitor(caseId).then(setMonitor).catch(() => setMonitor(null));
@@ -147,6 +152,20 @@ export function ScanTab({
       );
     } catch {
       api.getMonitor(caseId).then(setMonitor).catch(() => {});
+    } finally {
+      setMonitorBusy(false);
+    }
+  };
+
+  const saveWebhook = async () => {
+    setMonitorBusy(true);
+    try {
+      const result = await api.updateWebhook(caseId, webhook.trim() || null);
+      setMonitor((current) =>
+        current ? { ...current, webhook_url: result.webhook_url } : current
+      );
+    } catch {
+      /* alan sessizce eski değerde kalır */
     } finally {
       setMonitorBusy(false);
     }
@@ -242,6 +261,25 @@ export function ScanTab({
                   ? `Son izleme: ${new Date(monitor.last_scan_at).toLocaleString("tr-TR")}`
                   : "Henüz izleme taraması yok"}
               </p>
+              <label className="w-full">
+                <span className="label">Webhook (scan.completed)</span>
+                <div className="flex gap-2">
+                  <input
+                    className="input font-mono"
+                    value={webhook}
+                    onChange={(e) => setWebhook(e.target.value)}
+                    placeholder="https://ornek.example/webhook"
+                  />
+                  <button
+                    type="button"
+                    onClick={saveWebhook}
+                    disabled={monitorBusy}
+                    className="btn-secondary btn-sm"
+                  >
+                    Kaydet
+                  </button>
+                </div>
+              </label>
             </div>
           </section>
         )}

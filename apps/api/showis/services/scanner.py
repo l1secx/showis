@@ -57,6 +57,7 @@ from showis_contracts import (
 from showis_engine.authenticity import compute_authenticity
 from showis_engine.http import (
     BudgetExceededError,
+    HttpClient,
     count_requests_scope,
     reset_request_budget,
     set_request_budget,
@@ -974,6 +975,29 @@ class ScannerService:
                 "stats": stats_payload,
             },
         )
+
+        # Vaka webhook'u: yalnız tamamlanan taramada, SSRF guard ile.
+        if case.webhook_url and final_status == "completed":
+            try:
+                client = HttpClient(enable_ssrf_guard=True, use_host_limiter=False)
+                await client.post(
+                    case.webhook_url,
+                    json={
+                        "event": "scan.completed",
+                        "case_id": case.id,
+                        "scan_id": scan.id,
+                        "status": final_status,
+                        "stats": {
+                            "findings": stats_payload.get("total_findings"),
+                            "entities": stats_payload.get("total_entities"),
+                            "edges": stats_payload.get("total_edges"),
+                        },
+                    },
+                    check_robots=False,
+                    max_retries=1,
+                )
+            except Exception as exc:  # webhook taramayı bozmaz
+                logger.warning("Webhook gönderilemedi (%s): %s", case.id, type(exc).__name__)
 
     async def _run_task(
         self, connector: Any, spec: TaskSpec, ctx: ScanContext

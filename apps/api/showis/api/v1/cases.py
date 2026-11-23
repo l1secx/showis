@@ -17,7 +17,7 @@ from fastapi import (
     Request,
     status,
 )
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, field_validator, model_validator
 from showis.db.models import Case, CaseComment, Edge, Entity, Evidence, Finding, Report, Scan
 from showis.db.models import Seed as DbSeed
@@ -29,6 +29,7 @@ from showis.services.identity_graph import (
     compute_identity_clusters,
     corroboration_signals,
 )
+from showis.services.maltego import build_maltego_xml
 from showis.services.report_service import create_report, purge_case_reports
 from showis.services.retention import _evidence_file_path
 from showis.services.scanner import ScannerService
@@ -263,6 +264,10 @@ class OwnerPatch(BaseModel):
 class CommentCreate(BaseModel):
     body: str = Field(min_length=1, max_length=4000)
     author: str = Field(default="operator", min_length=1, max_length=128)
+
+
+class WebhookPatch(BaseModel):
+    url: str | None = Field(default=None, max_length=2000)
 
 
 class ScanStartRequest(BaseModel):
@@ -1256,6 +1261,7 @@ def _monitor_payload(case: Case) -> dict[str, Any]:
         "enabled": bool(case.monitor_enabled),
         "interval_hours": int(case.monitor_interval_hours or 24),
         "mode": case.monitor_mode or "O2",
+        "webhook_url": case.webhook_url,
         "last_scan_at": (
             case.monitor_last_scan_at.isoformat() if case.monitor_last_scan_at else None
         ),
@@ -1298,6 +1304,38 @@ async def update_case_monitor(
         },
     )
     return _monitor_payload(case)
+
+
+@router.patch("/{case_id}/webhook")
+async def update_case_webhook(
+    case_id: str,
+    payload: WebhookPatch,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    from urllib.parse import urlparse
+
+    case = (await db.execute(select(Case).where(Case.id == case_id))).scalar_one_or_none()
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+    value = (payload.url or "").strip() or None
+    if value:
+        parsed = urlparse(value)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise HTTPException(status_code=422, detail="Webhook http(s) URL olmalı")
+        if parsed.username or parsed.password:
+            raise HTTPException(status_code=422, detail="Webhook URL'de kimlik bilgisi olamaz")
+    case.webhook_url = value
+    await db.commit()
+    await record_request_audit(
+        db=db,
+        request=request,
+        action="case.webhook.update",
+        case_id=case.id,
+        target=f"Case: {case.name}",
+        details={"configured": bool(value)},
+    )
+    return {"id": case.id, "webhook_url": case.webhook_url}
 
 
 @router.get("/{case_id}/diff")
@@ -1637,6 +1675,44 @@ async def export_case_stix(
         content=bundle,
         media_type="application/stix+json;version=2.1",
         headers={"Content-Disposition": f'attachment; filename="showis-{case_id}.stix.json"'},
+    )
+
+
+@router.get("/{case_id}/maltego")
+async def export_case_maltego(
+    case_id: str, request: Request, db: AsyncSession = Depends(get_db)
+):
+    """Maltego local transform için XML entity listesi."""
+    case = (await db.execute(select(Case).where(Case.id == case_id))).scalar_one_or_none()
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+    target = (
+        await db.execute(select(DbTarget).where(DbTarget.case_id == case_id))
+    ).scalar_one_or_none()
+    entities = (
+        await db.execute(select(Entity).where(Entity.case_id == case_id))
+    ).scalars().all()
+    findings = (
+        await db.execute(select(Finding).where(Finding.case_id == case_id))
+    ).scalars().all()
+    xml = build_maltego_xml(
+        case=case,
+        target=_db_target_to_contract(target) if target else None,
+        entities=list(entities),
+        findings=list(findings),
+    )
+    await record_request_audit(
+        db=db,
+        request=request,
+        action="case.export.maltego",
+        case_id=case_id,
+        target=f"Case: {case.name}",
+        details={"entities": len(entities)},
+    )
+    return Response(
+        content=xml,
+        media_type="application/xml",
+        headers={"Content-Disposition": f'attachment; filename="showis-{case_id}.maltego.xml"'},
     )
 
 

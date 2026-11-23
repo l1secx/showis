@@ -211,6 +211,7 @@ export interface CaseMonitor {
   enabled: boolean;
   interval_hours: number;
   mode: string;
+  webhook_url?: string | null;
   last_scan_at?: string | null;
 }
 
@@ -356,6 +357,11 @@ export const api = {
     }),
   updateMonitor: (caseId: string, body: { enabled: boolean; interval_hours: number; mode: string }) =>
     req<CaseMonitor>(`/cases/${caseId}/monitor`, { method: "PATCH", body: JSON.stringify(body) }),
+  updateWebhook: (caseId: string, url: string | null) =>
+    req<{ id: string; webhook_url: string | null }>(`/cases/${caseId}/webhook`, {
+      method: "PATCH",
+      body: JSON.stringify({ url }),
+    }),
   getDiff: (caseId: string) => req<CaseDiff>(`/cases/${caseId}/diff`),
   exportCase: (caseId: string) => req<any>(`/cases/${caseId}/export`),
   createReport: (caseId: string, format: "json" | "pdf" | "html") =>

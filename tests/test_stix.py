@@ -76,3 +76,32 @@ def test_stix_bundle_entity_ve_indicator_uretir():
     indicator = next(obj for obj in bundle["objects"] if obj["type"] == "indicator")
     assert indicator["confidence"] == 90
     assert indicator["external_references"][0]["url"] == "https://github.com/ada"
+
+
+def test_maltego_xml_entity_uretir():
+    from showis.services.maltego import build_maltego_xml
+
+    case = SimpleNamespace(id="c1", name="Vaka")
+    target = SimpleNamespace(display_name="Ada", kind="name")
+    entities = [
+        SimpleNamespace(
+            id="github:ada",
+            platform="github",
+            type="account",
+            label="ada",
+            url="https://github.com/ada",
+        )
+    ]
+    findings = [
+        SimpleNamespace(
+            id="finding:github:ada",
+            entity_id="github:ada",
+            status="confirmed",
+            score=0.9,
+            authenticity=0.8,
+        )
+    ]
+    xml = build_maltego_xml(case=case, target=target, entities=entities, findings=findings)
+    assert "<MaltegoMessage>" in xml
+    assert "github:ada" in xml
+    assert "showis.score" in xml

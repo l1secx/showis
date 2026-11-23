@@ -68,6 +68,8 @@ class Case(Base):
     )
     #: Operasyonel sahiplik etiketi (yetkilendirme sınırı DEĞİL).
     owner: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    #: Tarama tamamlandığında POST edilecek webhook (SSRF guard ile).
+    webhook_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
