@@ -31,6 +31,7 @@ from showis.services.identity_graph import (
     corroboration_signals,
 )
 from showis.services.maltego import build_maltego_xml
+from showis.services.misp import build_misp_event
 from showis.services.report_service import create_report, purge_case_reports
 from showis.services.retention import _evidence_file_path
 from showis.services.scanner import ScannerService
@@ -1680,6 +1681,44 @@ async def export_case_stix(
         content=bundle,
         media_type="application/stix+json;version=2.1",
         headers={"Content-Disposition": f'attachment; filename="showis-{case_id}.stix.json"'},
+    )
+
+
+@router.get("/{case_id}/misp")
+async def export_case_misp(
+    case_id: str, request: Request, db: AsyncSession = Depends(get_db)
+):
+    """MISP core formatında Event JSON'u döndürür."""
+    case = (await db.execute(select(Case).where(Case.id == case_id))).scalar_one_or_none()
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+    target = (
+        await db.execute(select(DbTarget).where(DbTarget.case_id == case_id))
+    ).scalar_one_or_none()
+    entities = (
+        await db.execute(select(Entity).where(Entity.case_id == case_id))
+    ).scalars().all()
+    findings = (
+        await db.execute(select(Finding).where(Finding.case_id == case_id))
+    ).scalars().all()
+    event = build_misp_event(
+        case=case,
+        target=_db_target_to_contract(target) if target else None,
+        entities=list(entities),
+        findings=list(findings),
+    )
+    await record_request_audit(
+        db=db,
+        request=request,
+        action="case.export.misp",
+        case_id=case_id,
+        target=f"Case: {case.name}",
+        details={"attributes": len(event["Event"]["Attribute"])},
+    )
+    return JSONResponse(
+        content=event,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="showis-{case_id}.misp.json"'},
     )
 
 

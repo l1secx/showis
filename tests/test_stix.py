@@ -105,3 +105,43 @@ def test_maltego_xml_entity_uretir():
     assert "<MaltegoMessage>" in xml
     assert "github:ada" in xml
     assert "showis.score" in xml
+
+
+def test_misp_event_attributes():
+    from showis.services.misp import build_misp_event
+
+    case = SimpleNamespace(id="c1", name="Vaka")
+    target = SimpleNamespace(display_name="Ada")
+    entities = [
+        SimpleNamespace(
+            id="github:ada",
+            type="account",
+            platform="github",
+            label="ada",
+            url="https://github.com/ada",
+            attributes={"username": "ada"},
+        ),
+        SimpleNamespace(
+            id="web:domain:example.com",
+            type="domain",
+            platform="web",
+            label="example.com",
+            url="https://example.com",
+            attributes={"domain": "example.com"},
+        ),
+    ]
+    findings = [
+        SimpleNamespace(
+            id="finding:github:ada",
+            entity_id="github:ada",
+            status="confirmed",
+            score=0.9,
+        )
+    ]
+    event = build_misp_event(case=case, target=target, entities=entities, findings=findings)
+    attrs = event["Event"]["Attribute"]
+    by_value = {item["value"]: item for item in attrs}
+    assert by_value["ada"]["type"] == "github-username"
+    assert by_value["ada"]["to_ids"] is True
+    assert by_value["example.com"]["type"] == "domain"
+    assert event["Event"]["info"].startswith("Showis")

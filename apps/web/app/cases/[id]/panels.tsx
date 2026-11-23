@@ -2405,6 +2405,28 @@ export function ReportTab({ caseId }: { caseId: string }) {
     }
   };
 
+  const downloadMisp = async () => {
+    setBusy("misp");
+    setErr(null);
+    try {
+      const event = await api.getMisp(caseId);
+      const blob = new Blob([JSON.stringify(event, null, 2)], {
+        type: "application/json",
+      });
+      const anchor = document.createElement("a");
+      anchor.href = URL.createObjectURL(blob);
+      anchor.download = `showis-misp-${caseId.slice(0, 8)}.json`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(anchor.href), 2000);
+    } catch (e: any) {
+      setErr(e.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const sections = reportSections(summary);
   const hasSections = Boolean(
     sections.summary || sections.platforms || sections.identity || sections.timeline || sections.evidence
@@ -2450,6 +2472,15 @@ export function ReportTab({ caseId }: { caseId: string }) {
             title="STIX 2.1 bundle indir (MISP/OpenCTI)"
           >
             {busy === "stix" ? "Oluşturuluyor" : "STIX"}
+          </button>
+          <button
+            type="button"
+            onClick={downloadMisp}
+            disabled={busy !== null}
+            className="btn-secondary"
+            title="MISP Event JSON indir"
+          >
+            {busy === "misp" ? "Oluşturuluyor" : "MISP"}
           </button>
           <button
             type="button"
