@@ -302,9 +302,10 @@ async def audit_auth_failures(request: Request, call_next):
     boylece 401 seli `audit_logs`'u ve baglanti havuzunu tuketemez.
     """
     response = await call_next(request)
-    if response.status_code in _AUTH_AUDITED_STATUSES and request.url.path not in (
-        "/health",
-        "/healthz",
+    if (
+        not getattr(request.state, "auth_audited", False)
+        and response.status_code in _AUTH_AUDITED_STATUSES
+        and request.url.path not in ("/health", "/healthz")
     ):
         client = request.client
         try:

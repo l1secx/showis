@@ -26,6 +26,10 @@
 #   * `Server` basligi gizlenir (hem Caddy hem upstream: header_down).
 
 :8083 {
+	log {
+		output stdout
+		format json
+	}
 	# /health disindaki her sey edge kimlik dogrulamasina tabi. `path` TAM eslesir;
 	# `/health/../api` gibi yollar normalize edilip /api olur ve gate'e girer.
 	@gate {
@@ -38,6 +42,19 @@
 
 	# Render edilen blok 2: Host allowlist (SHOWIS_ALLOWED_HOSTS doluysa 421).
 	__HOST_CHECK_PLACEHOLDER__
+
+	# Yerel olmayan istemciler TLS'e yonlendirilir: LAN'da kimlik/veri duz HTTP
+	# ile tasinmaz. Loopback (host araclari, smoke scriptleri) HTTP kullanmaya
+	# devam eder; /health ve /healthz kimliksiz oldugu icin muaf tutulur.
+	@nonlocal {
+		# Host'tan gelen istekler docker kopru gateway'i (172.16/12) olarak
+		# gorunur; yerel smoke scriptleri HTTP kullanmaya devam etsin.
+		not remote_ip 127.0.0.1 ::1 172.16.0.0/12
+		not path /health /healthz
+	}
+	handle @nonlocal {
+		redir https://{host}:8443{uri} permanent
+	}
 
 	# Govde siniri (istek govdesi okunmadan reddedilir -> 413).
 	@api path /api/*
@@ -99,6 +116,7 @@
 		header Referrer-Policy no-referrer
 		header Permissions-Policy "geolocation=(), microphone=(), camera=()"
 		reverse_proxy web:3000 {
+			__ACTOR_HEADER_PLACEHOLDER__
 			# NOT (olculdu): `header_up -X-Forwarded-For` + `header_up X-Forwarded-For <val>`
 			# kombinasyonu Caddy 2.7'de BASLIGI SILER (set'i de kaldirir) -> upstream'e
 			# bos deger gider. Bu yuzden yalniz "set" kullaniyoruz: istemcinin uydurdugu
@@ -122,10 +140,89 @@
 		header Permissions-Policy "geolocation=(), microphone=(), camera=()"
 		header Content-Security-Policy "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
 		reverse_proxy web:3000 {
+			__ACTOR_HEADER_PLACEHOLDER__
 			# NOT (olculdu): `header_up -X-Forwarded-For` + `header_up X-Forwarded-For <val>`
 			# kombinasyonu Caddy 2.7'de BASLIGI SILER (set'i de kaldirir) -> upstream'e
 			# bos deger gider. Bu yuzden yalniz "set" kullaniyoruz: istemcinin uydurdugu
 			# deger tamamen EZILIR (test: sahte 1.2.3.4 -> upstream 127.0.0.1 gorur).
+			header_up X-Forwarded-For {http.request.remote.host}
+			header_up X-Real-IP {http.request.remote.host}
+			header_down -Server
+			header_down -X-Powered-By
+			flush_interval -1
+		}
+	}
+}
+
+# TLS giriş noktası (LAN/self-hosted). Caddy internal CA kullanır.
+# Adres listesi render sırasında SHOWIS_TLS_HOSTS'ten üretilir.
+# Tarayıcı/istemci Caddy kök sertifikasını güvenmiyorsa `curl -k` veya
+# `docker exec showis-caddy caddy trust` ile kök sertifikayı içe aktarın.
+# Üretimde gerçek ACME kullanın.
+__TLS_HOSTS_PLACEHOLDER__ {
+	tls internal
+	log {
+		output stdout
+		format json
+	}
+	@gate {
+		not path /health /healthz
+	}
+	__BASIC_AUTH_PLACEHOLDER__
+	__HOST_CHECK_PLACEHOLDER__
+
+	@api path /api/*
+	@ui not path /api/* /health /healthz
+	request_body @api {
+		max_size 10MB
+	}
+	request_body @ui {
+		max_size 5MB
+	}
+
+	handle /healthz {
+		header -Server
+		header X-Content-Type-Options nosniff
+		reverse_proxy api:8000 {
+			header_up X-Forwarded-For {http.request.remote.host}
+			header_up X-Real-IP {http.request.remote.host}
+			header_down -Server
+		}
+	}
+	handle /health {
+		header -Server
+		header X-Content-Type-Options nosniff
+		reverse_proxy api:8000 {
+			header_up X-Forwarded-For {http.request.remote.host}
+			header_up X-Real-IP {http.request.remote.host}
+			header_down -Server
+		}
+	}
+	handle /api/* {
+		header -Server
+		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		header X-Content-Type-Options nosniff
+		header X-Frame-Options DENY
+		header Referrer-Policy no-referrer
+		reverse_proxy web:3000 {
+			__ACTOR_HEADER_PLACEHOLDER__
+			header_up X-Forwarded-For {http.request.remote.host}
+			header_up X-Real-IP {http.request.remote.host}
+			header_down -Server
+			header_down -X-Powered-By
+			flush_interval -1
+		}
+	}
+	handle {
+		header -Server
+		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		header X-Content-Type-Options nosniff
+		header X-Frame-Options DENY
+		header Referrer-Policy no-referrer
+		header Permissions-Policy "geolocation=(), microphone=(), camera=()"
+		header Content-Security-Policy "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+		reverse_proxy web:3000 {
+			__ACTOR_HEADER_PLACEHOLDER__
 			header_up X-Forwarded-For {http.request.remote.host}
 			header_up X-Real-IP {http.request.remote.host}
 			header_down -Server

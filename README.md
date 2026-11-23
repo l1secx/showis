@@ -75,19 +75,29 @@ make docker-up     # tüm servisler
 docker compose -f infra/docker-compose.yml ps
 ```
 
-**Tek giriş noktası: `http://localhost:8083`** (Caddy). `8005` artık host'a publish
-**edilmez**; API'ye yalnız Caddy üzerinden erişilir.
+**Tek giriş noktası: `https://localhost:8443`** (Caddy, internal CA). Sertifikaya
+güvenmiyorsanız `curl -k` kullanın veya kök sertifikayı içe aktarın:
+`docker exec showis-caddy caddy trust`. HTTP `:8083` yalnız loopback araçları
+içindir; loopback dışı istemciler otomatik olarak HTTPS'e yönlendirilir.
+`8005` host'a publish **edilmez**.
 
 Kimlik doğrulama iki katmanlı:
 
-1. **Edge (Caddy basic auth):** `SHOWIS_CADDY_USER` + `SHOWIS_CADDY_PASSWORD_HASH`
-   (`infra/.env`). Hash üretimi: `caddy hash-password --plaintext 'PAROLA'`.
-   Parolanın kendisi `infra/.secrets/caddy-basic-auth.txt` (0600) gibi bir dosyada
-   tutulur ve script'lere `SHOWIS_CADDY_PASSWORD_FILE` / `--basic-auth` ile verilir —
+1. **Edge (Caddy `forward_auth`):** çok kullanıcı için `SHOWIS_CADDY_USERS`
+   (`kullanici:bcrypt_hash;kullanici2:...`) veya tek kullanıcı için
+   `SHOWIS_CADDY_USER` + `SHOWIS_CADDY_PASSWORD_HASH` (`infra/.env`).
+   Hash: `caddy hash-password --plaintext 'PAROLA'`. Basic kimlik API'de
+   doğrulanır; başarısız denemeler `auth.failed` audit'ine yazılır ve
+   kullanıcı+IP başına 5 dakikada 10 deneme sonrası **429** döner.
+   `SHOWIS_EDGE_FORWARD_AUTH=1` olmalıdır. Parola
+   `infra/.secrets/caddy-basic-auth.txt` (0600) gibi bir dosyada tutulur —
    **repoya ve rapora yazılmaz**.
-2. **API (`SHOWIS_API_TOKEN`):** `X-API-Token: <token>` veya `Authorization: Bearer <token>`.
-   Token yok/yanlış → `401` (+ `WWW-Authenticate`); sunucuda token tanımlı değilse API
-   fail-closed (`503`). `/health` her zaman açıktır (container healthcheck).
+2. **API rolü:** `admin` / `analyst` / `viewer`. Ayarlar ekranından kişisel API
+   anahtarı üretilir; anahtar tarayıcıda HttpOnly `showis_user_token` cookie'sinde
+   tutulur. `X-API-Token` / `Authorization: Bearer` paylaşılan token'ı geriye uyum
+   için **admin** sayılır; üretimde kişisel anahtarlara geçin.
+   Token yok/yanlış → `401`; sunucuda token tanımlı değilse API fail-closed (`503`).
+   `/health` her zaman açıktır (container healthcheck).
 
 ### Geliştirme (docker'sız)
 

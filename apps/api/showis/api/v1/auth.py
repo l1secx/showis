@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import base64
+import os
 import re
 import secrets
+import time
+from collections import deque
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import bcrypt
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 from showis.core.security import (
     VALID_ROLES,
@@ -16,12 +21,138 @@ from showis.core.security import (
 )
 from showis.db.models import ApiUser
 from showis.db.session import get_db
+from showis.services.audit import record_audit
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 _USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,63}$")
+
+#: Caddy `forward_auth` için edge parola doğrulaması. Parolalar bcrypt hash
+#: olarak `SHOWIS_CADDY_USERS`/`SHOWIS_CADDY_USER` üzerinden gelir.
+_EDGE_FAILURES: dict[str, deque[float]] = {}
+_EDGE_WINDOW_SECONDS = 300.0
+_EDGE_MAX_FAILURES = 10
+_EDGE_MAX_FAILURES_PER_IP = 30
+#: Bilinmeyen kullanıcıda da bcrypt maliyeti ödemek için sabit dummy hash.
+_DUMMY_HASH = b"$2b$12$G7m5dmsg9ZbagnOXaAm9D.UJ1/4wBdyzhW51SQVMuDLhgpi1TkWm."
+
+
+def edge_users() -> dict[str, str]:
+    raw = (os.getenv("SHOWIS_CADDY_USERS") or "").strip()
+    if not raw:
+        raw = (
+            f"{(os.getenv('SHOWIS_CADDY_USER') or '').strip()}:"
+            f"{(os.getenv('SHOWIS_CADDY_PASSWORD_HASH') or '').strip()}"
+        )
+    users: dict[str, str] = {}
+    for item in raw.replace(";", "\n").splitlines():
+        username, _, password_hash = item.strip().partition(":")
+        if username and password_hash:
+            users[username] = password_hash
+    return users
+
+
+def _prune_failures(bucket: deque[float]) -> None:
+    now = time.monotonic()
+    while bucket and now - bucket[0] > _EDGE_WINDOW_SECONDS:
+        bucket.popleft()
+
+
+def _edge_limited(key: str, limit: int = _EDGE_MAX_FAILURES) -> bool:
+    bucket = _EDGE_FAILURES.get(key)
+    if bucket is None:
+        return False
+    _prune_failures(bucket)
+    return len(bucket) >= limit
+
+
+def _record_failure(key: str) -> None:
+    bucket = _EDGE_FAILURES.setdefault(key, deque())
+    _prune_failures(bucket)
+    bucket.append(time.monotonic())
+    if len(_EDGE_FAILURES) > 5000:
+        for stale in [k for k, v in _EDGE_FAILURES.items() if not v]:
+            _EDGE_FAILURES.pop(stale, None)
+
+
+def _basic_credentials(request: Request) -> tuple[str, str] | None:
+    header = request.headers.get("authorization") or ""
+    scheme, _, encoded = header.partition(" ")
+    if scheme.lower() != "basic" or not encoded:
+        return None
+    try:
+        decoded = base64.b64decode(encoded, validate=True).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return None
+    username, separator, password = decoded.partition(":")
+    if not separator:
+        return None
+    return username, password
+
+
+@router.api_route("/edge", methods=["GET", "POST"])
+async def edge_auth(
+    request: Request, response: Response, db: AsyncSession = Depends(get_db)
+) -> Response:
+    """Caddy `forward_auth` ucu: Basic kimliği doğrular, audit ve limit uygular."""
+    credentials = _basic_credentials(request)
+    username = (credentials[0] if credentials else "")[:128]
+    password = (credentials[1] if credentials else "")[:256]
+    client = request.headers.get("x-forwarded-for", "").split(",")[-1].strip()
+    if not client:
+        client = request.client.host if request.client else "unknown"
+    user_key = f"user:{username}"
+    ip_key = f"ip:{client}"
+    if _edge_limited(user_key) or _edge_limited(ip_key, _EDGE_MAX_FAILURES_PER_IP):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Çok fazla başarısız giriş denemesi",
+        )
+
+    password_hash = edge_users().get(username)
+    valid = False
+    if password_hash:
+        try:
+            valid = bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+        except ValueError:
+            valid = False
+    else:
+        # Kullanıcı yoksa da bcrypt maliyeti öde (kullanıcı enumerasyonunu zorlaştır).
+        try:
+            bcrypt.checkpw(password.encode("utf-8"), _DUMMY_HASH)
+        except ValueError:
+            pass
+
+    if not valid:
+        _record_failure(user_key)
+        _record_failure(ip_key)
+        request.state.auth_audited = True
+        try:
+            await record_audit(
+                db,
+                action="auth.failed",
+                actor=username or "edge",
+                target="edge-basic",
+                details={
+                    "reason": "edge_basic",
+                    "path": request.headers.get("x-forwarded-uri") or request.url.path,
+                },
+                actor_ip=client or None,
+                user_agent_header=request.headers.get("user-agent"),
+            )
+        except Exception:
+            await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Geçersiz edge kimliği",
+            headers={"WWW-Authenticate": 'Basic realm="Showis", charset="UTF-8"'},
+        )
+
+    response.headers["X-Actor"] = username
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response
 
 
 class UserCreate(BaseModel):

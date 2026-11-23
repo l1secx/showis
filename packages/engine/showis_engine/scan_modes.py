@@ -55,7 +55,7 @@ MODE_PROFILES: dict[str, dict[str, int]] = {
     },
     "O3": {
         "max_tasks": 420,
-        "max_http_requests": 2000,
+        "max_http_requests": 3000,
         "max_wall_seconds": 1800,
         "usernames": 10,
         "variant_tasks": 10,

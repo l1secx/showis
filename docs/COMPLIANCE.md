@@ -126,20 +126,27 @@ kişisel veri riski ve rate limit değerlendirilmelidir.
   - `viewer`: yalnız okur; yazma istekleri **403** döner.
 - `SHOWIS_API_TOKEN` paylaşılan token'ı geriye uyum için **admin** sayılır.
   Üretimde kişisel anahtarlara geçilip paylaşılan token devre dışı bırakılmalıdır.
-- Kişisel anahtar tarayıcıda `localStorage` içinde tutulur ve Next proxy
-  üzerinden `X-User-Token` başlığıyla taşınır. XSS yüzeyi nedeniyle CSP ve
-  güvenilir istemci zorunludur.
+- Kişisel anahtar tarayıcıya `HttpOnly; SameSite=Lax` oturum cookie'si olarak
+  verilir; Next proxy cookie'yi `X-User-Token` başlığına çevirir. İstemci JS'i
+  anahtarı okuyamaz. Cookie `Secure` bayrağı TLS (8443) üzerinden çalışırken
+  etkinleştirilmelidir; düz HTTP yalnız loopback'tir.
 - Vaka `owner` alanı analyst için yetki sınırıdır; `admin` her vakaya erişir.
 - Kullanıcı oluşturma: `POST /api/v1/auth/users` (admin) veya Ayarlar ekranı.
   Token yalnız oluşturma yanıtında bir kez gösterilir.
-- Edge basic auth hâlâ tek kullanıcıdır; kişisel API anahtarı ikinci katmandır.
-  Gerçek çok kullanıcılı edge için Caddy kullanıcıları ayrıca yönetilmelidir.
+- Edge çok kullanıcılıdır: `SHOWIS_CADDY_USERS` noktalı virgül ayrımlı
+  `kullanici:bcrypt_hash` listesi alır. Caddy `forward_auth` ile isteği
+  `/api/v1/auth/edge` ucuna yollar; bcrypt doğrulaması, `auth.failed` audit'i ve
+  kullanıcı+IP başına hız sınırı (10/5 dk → 429) API'de uygulanır.
+  `SHOWIS_TRUST_ACTOR_HEADER=1` ve `SHOWIS_ACTOR_ROLES` ile edge kullanıcısı
+  API rolüne eşlenir.
+- TLS `:8443` üzerinde Caddy internal CA ile sunulur; loopback dışı HTTP
+  istekleri HTTPS'e yönlendirilir. Üretimde gerçek ACME sertifikası kullanın.
 
 ## 8. Canlı ortam notları
 
 - API `X-API-Token` ile korunur; edge basic auth için
   `SHOWIS_CADDY_USER` + `SHOWIS_CADDY_PASSWORD_HASH` tanımlanmalıdır.
-- TLS yoksa `:8083` düz HTTP'dir; üretimde TLS sonlandırma ve host allowlist
-  (`SHOWIS_ALLOWED_HOSTS`) önerilir.
+- TLS `:8443` internal CA ile açıktır; host allowlist (`SHOWIS_ALLOWED_HOSTS`)
+  tanımlıdır. Sertifika `caddy_data` volume'unda kalıcıdır.
 - Kanıt ve raporlar `umask 077` ile 0600/0700 izinlerine sahiptir.
 - DB migration'ları yedek sonrası `alembic upgrade head` ile uygulanır.

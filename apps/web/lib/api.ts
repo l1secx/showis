@@ -311,23 +311,10 @@ async function listCases(params: CaseListParams = {}): Promise<CaseListPage> {
   };
 }
 
-const USER_TOKEN_KEY = "showis:user-token";
-
-function userToken(): string | null {
-  if (typeof window === "undefined") return null;
-  try {
-    return window.localStorage.getItem(USER_TOKEN_KEY);
-  } catch {
-    return null;
-  }
-}
-
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = userToken();
   const res = await fetch(`/api/v1${path}`, {
     headers: {
       "Content-Type": "application/json",
-      ...(token ? { "X-User-Token": token } : {}),
       ...(init?.headers ?? {}),
     },
     ...init,

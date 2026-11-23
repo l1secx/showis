@@ -43,11 +43,6 @@ export default function SettingsPage() {
   };
 
   useEffect(() => {
-    try {
-      setUserToken(window.localStorage.getItem("showis:user-token") ?? "");
-    } catch {
-      /* localStorage kapalı */
-    }
     void refreshMe();
   }, []);
 
@@ -60,12 +55,18 @@ export default function SettingsPage() {
   }, [me?.role]);
 
   const saveUserToken = async () => {
-    try {
-      if (userToken.trim()) window.localStorage.setItem("showis:user-token", userToken.trim());
-      else window.localStorage.removeItem("showis:user-token");
-    } catch {
-      /* localStorage kapalı */
+    if (!userToken.trim()) return;
+    const response = await fetch("/api/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: userToken.trim() }),
+    });
+    if (!response.ok) {
+      setStatusMsg({ type: "error", text: "Kullanıcı anahtarı geçersiz." });
+      return;
     }
+    setStatusMsg({ type: "success", text: "Kullanıcı oturumu kuruldu." });
+    setUserToken("");
     await refreshMe();
   };
 
@@ -203,14 +204,11 @@ export default function SettingsPage() {
           </button>
           <button
             type="button"
-            onClick={() => {
+            onClick={async () => {
+              await fetch("/api/session", { method: "DELETE" });
               setUserToken("");
-              try {
-                window.localStorage.removeItem("showis:user-token");
-              } catch {
-                /* yoksay */
-              }
-              void refreshMe();
+              setStatusMsg({ type: "success", text: "Kullanıcı oturumu kapatıldı." });
+              await refreshMe();
             }}
             className="btn-quiet"
           >

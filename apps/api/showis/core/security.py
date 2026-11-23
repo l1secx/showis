@@ -148,9 +148,35 @@ async def require_token(
             detail="Geçersiz veya eksik API token",
             headers=BEARER_CHALLENGE,
         )
+    # Caddy basic auth kullanıcısı X-Actor başlığıyla gelir. Yalnız açıkça
+    # etkinleştirildiğinde güvenilir; rol haritası zorunludur.
+    if _truthy(os.getenv("SHOWIS_TRUST_ACTOR_HEADER")):
+        header_actor = (request.headers.get("x-actor") or "").strip()
+        if header_actor:
+            roles = _actor_roles()
+            role = roles.get(header_actor)
+            if role is None:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Edge kullanıcısı için rol tanımlı değil",
+                )
+            actor = Actor(header_actor, role, "edge-header")
+            request.state.actor = actor
+            return actor
     actor = Actor("api-token", ROLE_ADMIN, "shared-token")
     request.state.actor = actor
     return actor
+
+
+def _actor_roles() -> dict[str, str]:
+    """``SHOWIS_ACTOR_ROLES=user:admin,viewer:viewer`` ayrıştırır."""
+    raw = os.getenv("SHOWIS_ACTOR_ROLES") or ""
+    result: dict[str, str] = {}
+    for item in raw.replace(";", ",").split(","):
+        user, _, role = item.strip().partition(":")
+        if user and role in VALID_ROLES:
+            result[user.strip()] = role.strip()
+    return result
 
 
 def get_actor(request: Request) -> Actor:

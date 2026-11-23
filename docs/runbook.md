@@ -22,7 +22,7 @@ make docker-up         # veya: docker compose -f infra/docker-compose.yml up -d 
 make demo              # sentetik uçtan uca demo
 ```
 
-Tarayıcıdan: `http://localhost:8083`
+Tarayıcıdan: `https://localhost:8443` (internal CA; sertifika uyarısını kabul edin)
 
 ## Sağlayıcı anahtarları (BYOK)
 
@@ -170,11 +170,11 @@ işaretli olmayanlar = üretime çıkmadan kapatılmalı.
 
 | # | Madde | Neden | Komut |
 |---|---|---|---|
-| 1 | **TLS** — şu an düz HTTP `:8083` | Basic auth + API token düz metin gider; LAN'da dinlenebilir | `curl -sI http://127.0.0.1:8083/ \| head -1` → `http`. Geçiş: Caddyfile site adresini `showis.example.com` yap (Caddy otomatik ACME) veya iç CA: `docker exec showis-caddy caddy trust` |
+| 1 | **TLS** — `:8443` internal CA | Basic auth ve kişisel anahtarlar LAN'da şifreli taşınır; HTTP `:8083` yalnız loopback | `curl -sk https://localhost:8443/health` → `200`; `docker exec showis-caddy caddy trust` ile kök sertifikayı güvenin. Üretimde gerçek ACME kullanın |
 | 2 | **Disk şifreleme (LUKS)** — yok | Vaka/delil PII diskte düz; cihaz kaybı/hırsızlık = veri ifşası | `lsblk -f \| grep -i crypt` (boşsa şifreli değil). Kurulum: `cryptsetup luksFormat /dev/nvme0n1pX` + `/etc/crypttab` |
 | 3 | **`MASTER_KEY` rotasyonu** | Sağlayıcı anahtarları Fernet ile şifreli; anahtar sızarsa hepsi açılır; şu an rotasyon yok | Doğrulama: `docker exec showis-api sh -lc 'echo ${#MASTER_KEY}'` (>0). Rotasyon: yeni anahtarla `settings` kayıtlarını yeniden şifrele (API `PUT /api/v1/settings/...`), eski anahtarı 24 saat paralel tut |
 | 4 | **`fail2ban` + `auditd`** — host'ta kapalı | SSH/Caddy brute-force ve sistem çağrısı denetimi yok | `systemctl is-active auditd fail2ban` → `inactive`. Kur: `sudo systemctl enable --now auditd fail2ban` |
-| 5 | **Port publish politikası** | Docker publish edilen portlar UFW'yi **atlar**; yalnız `8083` açık olmalı | `ss -ltnp \| grep -E ':8083\|:8005\|:5432'` (yalnız 8083). Sıkılaştır: `ports: ["127.0.0.1:8083:8083"]` veya tailscale-only |
+| 5 | **Port publish politikası** | Docker publish edilen portlar UFW'yi **atlar**; yalnız `8443` açık; `8083` sadece `127.0.0.1` | `ss -ltnp \| grep -E ':8443\|:8083\|:8005\|:5432'` → 8083 `127.0.0.1`, 8443 tüm arayüzler. Sıkılaştır: tailscale-only veya host güvenlik duvarı |
 | 6 | **`SHOWIS_ALLOWED_HOSTS`** | Host allowlist kapalıysa DNS-rebinding ile edge kontrolü aşılabilir | `docker logs showis-caddy 2>&1 \| grep "Host allowlist"`. Aç: `infra/.env` → `SHOWIS_ALLOWED_HOSTS=localhost,127.0.0.1,l1sec,<LAN-IP>` + `docker compose up -d --no-deps caddy` |
 | 7 | **`SHOWIS_ALLOWED_ORIGINS`** | CORS varsayılanı yalnız localhost; üretim alan adı eklenmezse UI kırılır | `curl -sI -u showis:*** -H 'Origin: https://showis.example.com' http://127.0.0.1:8083/api/v1/cases \| grep -i access-control` |
 | 7b | **`SHOWIS_TRUSTED_PROXIES`** (T-356) | API, `X-Forwarded-For`/`X-Real-IP`'ye **yalnız** bu CIDR'lerden gelen peer için güvenir; varsayılan docker köprülerini (`172.16/12`, `10/8`, `192.168/16`) kapsar. Üretimde yalnız Caddy/tailscale ağını bırakacak şekilde **daraltın** (ör. `SHOWIS_TRUSTED_PROXIES=127.0.0.1/32,::1/128,172.18.0.0/16`); aksi halde LAN'daki bir makine doğrudan API'ye sahte XFF gönderirse `actor_ip` yanıltılabilir. Daralttıktan sonra doğrula: `curl -sk -H 'X-Forwarded-For: 6.6.6.6' -H "X-API-Token: $TOKEN" http://127.0.0.1:8000/api/v1/cases` → audit'te `actor_ip` **127.0.0.1** olmalı (6.6.6.6 değil) |

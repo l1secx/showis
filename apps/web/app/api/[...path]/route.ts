@@ -182,6 +182,15 @@ async function proxy(request: NextRequest, context: RouteContext) {
   // İstemcinin kimlik başlıklarına güvenme — yalnız sunucu tarafı token geçerli.
   headers.delete("authorization");
   headers.delete("x-api-token");
+  // Öncelik HttpOnly oturum cookie'sinde. Tarayıcı dışı istemciler (curl/CLI)
+  // kişisel anahtarı X-User-Token ile geçebilir; bu, cookie ile aynı yetkidir.
+  const incomingUserToken = request.headers.get("x-user-token");
+  headers.delete("x-user-token");
+  const sessionToken =
+    request.cookies.get("showis_user_token")?.value ?? incomingUserToken;
+  if (sessionToken) {
+    headers.set("X-User-Token", decodeURIComponent(sessionToken));
+  }
   // fetch yanıtı kendisi çözer; upstream sıkıştırmasını istemeyiz.
   headers.delete("accept-encoding");
 

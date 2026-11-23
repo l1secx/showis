@@ -90,7 +90,7 @@ tahmin ucu 305 sn (±%11). Sıralı yürütme referansı 636 sn idi.
 | 5 | **`guard_query` yalnız LLM yolunda** | `build_template_fallback_queries` hint'ten ürettiği sorguları guard'dan geçirmiyor; `extra` alanına yasak desen yazılırsa şablon sorgusu denetimsiz çıkar | `showis_engine/planner.py` (şablon üretimi) + `policy.guard_query` + `policy.query_blocked` audit'i | 0.5 gün |
 | 6 | **`pg_trgm` GIN / normalize arama kolonu** | `ILIKE '%q%'` ölçekte seq scan (şu an 100 vaka sorun değil, 10k'da değil); Türkçe **büyük `İ`** katlaması SQL'de eksik (`q=inceleme` ≠ `İnceleme…`) | Migration (`pg_trgm` + `GIN (name gin_trgm_ops)`), `cases.name`/`targets` ad-soyad; kalıcı çözüm `search_name` kolonu | 0.5 gün (+ Atlas onayı) |
 | 7 | **MinIO evidence entegrasyonu (ROADMAP 4.2)** | Kanıt dosyaları konteyner diskinde; S3 lifecycle/ölçekleme yok, `storage_key` yerel yol | `showis_engine/http.py:EvidenceStore`, `services/retention.py`, `infra/docker-compose.yml` (minio zaten var) | 2–3 gün |
-| 8 | **TLS + LUKS** | `:8083` düz HTTP (basic auth + token cleartext) ve disk şifresiz → cihaz kaybı/dinleme = PII ifşası | `infra/caddy/Caddyfile` (site adresi → ACME), host `cryptsetup` | TLS 2–4 saat · LUKS bakım penceresi (yeniden kurulum) |
+| 8 | **LUKS** | TLS `:8443` internal CA ile açık; HTTP `:8083` yalnız loopback. Disk hâlâ şifresiz → cihaz kaybı = PII ifşası | host `cryptsetup` | LUKS bakım penceresi (yeniden kurulum) |
 
 Küçük/tek satırlık kalanlar: `case.export` hâlâ `GET` (yan etkili okuma → `POST`),
 `storage_key` istemciye dönüyor (SEC-20, yalnız dosya adı dönmeli),

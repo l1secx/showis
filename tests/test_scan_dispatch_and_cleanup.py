@@ -11,15 +11,9 @@ from showis.db.base import Base
 from showis.db.models import AuditLog, Report, Scan
 from showis.db.session import get_db
 from showis.main import app
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
-#: 0003_active_scan_unique ile ayni kismi index (sqlite 3.8+ destekler)
-_ACTIVE_INDEX_SQL = (
-    "CREATE UNIQUE INDEX uq_scans_case_active ON scans(case_id) "
-    "WHERE status IN ('queued', 'running')"
-)
 
 
 @pytest.fixture
@@ -27,7 +21,6 @@ async def session_factory():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        await conn.execute(text(_ACTIVE_INDEX_SQL))
     factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     async def override_get_db():

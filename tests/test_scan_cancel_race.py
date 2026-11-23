@@ -168,8 +168,10 @@ async def test_iptal_dispatch_fazinda_da_yakalanir(factory):
             await scanner.execute_scan("scan-race", session)
 
     task = asyncio.create_task(_execute())
-    # En az bir görev uçuşta olsun
+    # En az bir görev uçuşta olsun; dispatch'in inflight listesini
+    # tamamlamasına kısa süre tanı (iptal yarışı testi deterministik kalsın).
     await asyncio.wait_for(connector.started.wait(), timeout=3.0)
+    await asyncio.sleep(0.1)
 
     started = time.monotonic()
     ScannerService.cancel("scan-race")

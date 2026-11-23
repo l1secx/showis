@@ -20,6 +20,7 @@ dependencies = [
     "celery>=5.4.0",
     "redis>=5.0.0",
     "reportlab>=4.0.0",
+    "bcrypt>=4.1.0",
 ]
 
 # NOT (SET-02): `showis-contracts` (ve diğer showis-* paketleri) PyPI'da

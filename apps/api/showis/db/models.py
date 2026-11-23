@@ -13,8 +13,8 @@ from sqlalchemy import (
     LargeBinary,
     String,
     Text,
+    text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
@@ -29,8 +29,8 @@ def gen_uuid_str() -> str:
     return str(uuid.uuid4())
 
 
-# JSON type supporting both postgres JSONB and SQLite JSON
-JSON_TYPE = JSON().with_variant(JSONB(), "postgresql")
+# Migration'lar `sa.JSON()` kullanir (0001); JSONB varyanti sema drift'i uretir.
+JSON_TYPE = JSON()
 
 
 class Setting(Base):
@@ -270,7 +270,7 @@ class Evidence(Base):
 class Entity(Base):
     __tablename__ = "entities"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid_str)
+    id: Mapped[str] = mapped_column(String(96), primary_key=True, default=gen_uuid_str)
     case_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
     )
@@ -288,16 +288,16 @@ class Entity(Base):
 class Edge(Base):
     __tablename__ = "edges"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid_str)
+    id: Mapped[str] = mapped_column(String(96), primary_key=True, default=gen_uuid_str)
     case_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
     )
     type: Mapped[str] = mapped_column(String(64), nullable=False)
     source_entity_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("entities.id", ondelete="CASCADE"), nullable=False
+        String(96), ForeignKey("entities.id", ondelete="CASCADE"), nullable=False
     )
     target_entity_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("entities.id", ondelete="CASCADE"), nullable=False
+        String(96), ForeignKey("entities.id", ondelete="CASCADE"), nullable=False
     )
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -307,7 +307,7 @@ class Edge(Base):
 class Finding(Base):
     __tablename__ = "findings"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid_str)
+    id: Mapped[str] = mapped_column(String(96), primary_key=True, default=gen_uuid_str)
     case_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
     )
@@ -315,7 +315,7 @@ class Finding(Base):
         String(36), ForeignKey("scans.id", ondelete="CASCADE"), nullable=False
     )
     entity_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("entities.id", ondelete="CASCADE"), nullable=False
+        String(96), ForeignKey("entities.id", ondelete="CASCADE"), nullable=False
     )
     platform: Mapped[str] = mapped_column(String(64), nullable=False)
     url: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -363,6 +363,59 @@ class AuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-Index("ix_audit_logs_case_id_created_at", AuditLog.case_id, AuditLog.created_at.desc())
+Index("ix_audit_logs_case_id_created_at", AuditLog.case_id, AuditLog.created_at)
+Index("ix_audit_logs_created_at", AuditLog.created_at)
 #: `_refill_pending` sirasi: once dusuk `priority`, sonra ekleme sirasi (0008).
 Index("ix_tasks_scan_priority", Task.scan_id, Task.priority)
+
+# 0006: sorgu indeksleri (FK ve sik filtrelenen alanlar).
+Index("ix_cases_created_at", Case.created_at)
+Index("ix_targets_case_id", Target.case_id)
+Index("ix_scans_case_created", Scan.case_id, Scan.created_at)
+Index("ix_findings_case_status", Finding.case_id, Finding.status)
+Index("ix_findings_scan_id", Finding.scan_id)
+Index("ix_entities_case_id", Entity.case_id)
+Index("ix_edges_case_id", Edge.case_id)
+Index("ix_observations_scan_id", Observation.scan_id)
+Index("ix_tasks_scan_status", Task.scan_id, Task.status)
+Index("ix_evidence_case_id", Evidence.case_id)
+
+# 0003: vaka basina tek aktif (queued/running) tarama.
+Index(
+    "uq_scans_case_active",
+    Scan.case_id,
+    unique=True,
+    postgresql_where=text("status IN ('queued', 'running')"),
+    sqlite_where=text("status IN ('queued', 'running')"),
+)
+
+# 0009/0010/0011/0012: arama, kimlik, izleme ve sahiplik indeksleri.
+Index(
+    "ix_cases_name_trgm",
+    Case.name,
+    postgresql_using="gin",
+    postgresql_ops={"name": "gin_trgm_ops"},
+)
+Index(
+    "ix_targets_firstname_trgm",
+    Target.first_name,
+    postgresql_using="gin",
+    postgresql_ops={"first_name": "gin_trgm_ops"},
+)
+Index(
+    "ix_targets_lastname_trgm",
+    Target.last_name,
+    postgresql_using="gin",
+    postgresql_ops={"last_name": "gin_trgm_ops"},
+)
+Index(
+    "ix_targets_nickname_trgm",
+    Target.nickname,
+    postgresql_using="gin",
+    postgresql_ops={"nickname": "gin_trgm_ops"},
+)
+Index("ix_targets_email", Target.email)
+Index("ix_targets_domain", Target.domain)
+Index("ix_cases_monitor_due", Case.monitor_enabled, Case.monitor_last_scan_at)
+Index("ix_cases_owner", Case.owner)
+Index("ix_case_comments_case_created", CaseComment.case_id, CaseComment.created_at)

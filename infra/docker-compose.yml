@@ -22,6 +22,7 @@ volumes:
   redis_data:
   minio_data:
   report_data:
+  caddy_data:
 
 services:
   caddy:
@@ -30,17 +31,23 @@ services:
     container_name: showis-caddy
     restart: unless-stopped
     ports:
-      - "8083:8083"
+      - "127.0.0.1:8083:8083"
+      - "8443:8443"
     environment:
       # Ikinci savunma katmani (opsiyonel, env-gated). Bos ise basic_auth devre disi.
       - SHOWIS_CADDY_USER=${SHOWIS_CADDY_USER:-}
       - SHOWIS_CADDY_PASSWORD_HASH=${SHOWIS_CADDY_PASSWORD_HASH:-}
+      - SHOWIS_CADDY_USERS=${SHOWIS_CADDY_USERS:-}
+      - SHOWIS_EDGE_FORWARD_AUTH=${SHOWIS_EDGE_FORWARD_AUTH:-0}
       # T-319: beklenen Host listesi (virgulle). BOS ise Host dogrulamasi devre disi.
       # Onerilen: localhost,127.0.0.1,l1sec,<LAN-IP>  (DHCP degisirse guncelleyin)
       - SHOWIS_ALLOWED_HOSTS=${SHOWIS_ALLOWED_HOSTS:-}
+      - SHOWIS_TLS_HOSTS=${SHOWIS_TLS_HOSTS:-localhost,127.0.0.1}
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ./scripts/caddy-render-config.sh:/usr/local/bin/caddy-render-config.sh:ro
+      # Internal CA kok sertifikasi ve otomatik kayit kalici olsun.
+      - caddy_data:/data
     # Caddyfile'da kosullu blok yok: basic_auth bloğu baslangicta render edilir.
     command: ["/bin/sh", "/usr/local/bin/caddy-render-config.sh"]
     # read_only + tmpfs (T-314): Caddy yalniz /tmp (render edilen config), /config ve
@@ -60,7 +67,6 @@ services:
     tmpfs:
       - /tmp
       - /config
-      - /data
     networks:
       - frontend
     depends_on:
@@ -161,6 +167,12 @@ services:
       - SHOWIS_LLM_BASE_URL_ALLOWLIST=${SHOWIS_LLM_BASE_URL_ALLOWLIST:-}
       - SHOWIS_SITECHECK_CACHE_TTL=${SHOWIS_SITECHECK_CACHE_TTL:-}
       - SHOWIS_TRUSTED_PROXIES=${SHOWIS_TRUSTED_PROXIES:-}
+      - SHOWIS_TRUST_ACTOR_HEADER=${SHOWIS_TRUST_ACTOR_HEADER:-0}
+      - SHOWIS_ACTOR_ROLES=${SHOWIS_ACTOR_ROLES:-}
+      # Edge forward_auth: API, bcrypt hash'leri bu env'lerden doğrular.
+      - SHOWIS_CADDY_USER=${SHOWIS_CADDY_USER:-}
+      - SHOWIS_CADDY_PASSWORD_HASH=${SHOWIS_CADDY_PASSWORD_HASH:-}
+      - SHOWIS_CADDY_USERS=${SHOWIS_CADDY_USERS:-}
     # umask 077 (T-314): imajdaki entrypoint-api.sh de ayni degeri set eder; bu override
     # sayesinde imaj yeniden derlenmeden de yeni raporlar 0600/0700 olur (ikisi de 077).
     command: ["/bin/sh", "-c", "umask 077 && exec uvicorn showis.main:app --host 0.0.0.0 --port 8000"]

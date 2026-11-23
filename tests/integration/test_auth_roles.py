@@ -100,3 +100,35 @@ async def test_analyst_baska_vakayi_yazamaz(client, db_factory):
         json={"owner": "analyst-2"},
     )
     assert denied.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_edge_forward_auth_dogrular_ve_audit_yazar(client, db_factory, monkeypatch):
+    import base64
+
+    import bcrypt
+    from showis.db.models import AuditLog
+    from sqlalchemy import select
+
+    password_hash = bcrypt.hashpw(b"edge-pass", bcrypt.gensalt(rounds=4)).decode()
+    monkeypatch.setenv("SHOWIS_CADDY_USERS", f"edge-user:{password_hash}")
+    basic = base64.b64encode(b"edge-user:edge-pass").decode()
+
+    ok = await client.post(
+        "/api/v1/auth/edge", headers={"Authorization": f"Basic {basic}"}
+    )
+    assert ok.status_code == 204
+    assert ok.headers["x-actor"] == "edge-user"
+
+    bad = base64.b64encode(b"edge-user:wrong").decode()
+    denied = await client.post(
+        "/api/v1/auth/edge", headers={"Authorization": f"Basic {bad}"}
+    )
+    assert denied.status_code == 401
+    assert "WWW-Authenticate" in denied.headers
+
+    async with db_factory() as session:
+        rows = (
+            await session.execute(select(AuditLog).where(AuditLog.action == "auth.failed"))
+        ).scalars().all()
+    assert rows and rows[-1].actor == "edge-user"

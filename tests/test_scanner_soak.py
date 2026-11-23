@@ -568,14 +568,22 @@ async def test_ayni_vakada_ardisik_taramalar(session_factory, monkeypatch):
     monkeypatch.setenv("SHOWIS_SCAN_CONCURRENCY", "5")
     case_id = "soak-seq-case"
     await _make_scan(session_factory, case_id=case_id, scan_id="soak-seq-1")
-    async with session_factory() as session:
-        session.add(
-            DbScan(id="soak-seq-2", case_id=case_id, mode="O2", status="queued", budget={})
-        )
-        await session.commit()
 
-    # Her tarama connector'lari yeniden kurar (üretimdeki factory akışı)
-    for scan_id in ("soak-seq-1", "soak-seq-2"):
+    # Aktif tarama tekilliği (0003): ikinci tarama ancak birincisi bitince açılır.
+    for index, scan_id in enumerate(("soak-seq-1", "soak-seq-2")):
+        if index == 1:
+            async with session_factory() as session:
+                session.add(
+                    DbScan(
+                        id=scan_id,
+                        case_id=case_id,
+                        mode="O2",
+                        status="queued",
+                        budget={},
+                    )
+                )
+                await session.commit()
+        # Her tarama connector'lari yeniden kurar (üretimdeki factory akışı)
         connector = SoakConnector(tasks=25, max_delay=0.01)
         async with session_factory() as session:
             scanner = ScannerService(connectors=[connector])

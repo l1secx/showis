@@ -38,6 +38,7 @@ from showis.db.models import (
     Task as DbTask,
 )
 from showis.services.audit import record_audit
+from showis.services.enrichment import capture_scan_evidence
 from showis.services.orchestrator import event_broadcaster
 from showis.services.targets import db_target_to_contract
 from showis_connectors.websearch.normalize import extract_platform_from_url
@@ -658,7 +659,11 @@ class ScannerService:
             # Site-check 111 site × kullanıcı adı sayısı kadar istek üretir;
             # mod bütçesini aşmamak için varyant tavanını burada da uygula.
             if hasattr(conn, "max_usernames"):
-                conn.max_usernames = cap
+                is_o3_sitecheck = (
+                    str(scan.mode).upper() == "O3"
+                    and conn.name.startswith("sitecheck")
+                )
+                conn.max_usernames = 2 if is_o3_sitecheck else cap
 
         all_task_specs: list[TaskSpec] = []
         for conn in self.connectors:
@@ -911,6 +916,11 @@ class ScannerService:
         snapshot_findings = (
             await db.execute(select(DbFinding).where(DbFinding.case_id == case.id))
         ).scalars().all()
+        if str(scan.mode).upper() in {"O2", "O3"}:
+            try:
+                await capture_scan_evidence(db, case, scan, list(snapshot_findings))
+            except Exception:
+                logger.warning("Tarama sonrası kanıt zenginleştirme atlandı", exc_info=True)
         stats_payload = {
             "executed_tasks": executed_tasks_count,
             "http_requests": http_requests_count,
@@ -940,12 +950,22 @@ class ScannerService:
             **llm_stats(),
         }
         finished_at = datetime.now(timezone.utc)
-        await db.execute(
-            update(Scan)
-            .where(Scan.id == scan.id, Scan.status == "running")
-            .values(status="completed", finished_at=finished_at)
-            .execution_options(synchronize_session=False)
-        )
+        # İptal sinyali süreç içinde yapışkandır: iptal gördüysek, arada bir
+        # rollback durumu "running"e döndürse bile `completed` yazmayız (T-322).
+        if run_stats.cancelled:
+            await db.execute(
+                update(Scan)
+                .where(Scan.id == scan.id, Scan.status.in_(("running", "cancelled")))
+                .values(status="cancelled", finished_at=finished_at)
+                .execution_options(synchronize_session=False)
+            )
+        else:
+            await db.execute(
+                update(Scan)
+                .where(Scan.id == scan.id, Scan.status == "running")
+                .values(status="completed", finished_at=finished_at)
+                .execution_options(synchronize_session=False)
+            )
         await db.execute(
             update(Scan)
             .where(Scan.id == scan.id)

@@ -715,7 +715,11 @@ SITES.extend(WMN_SITES)
 SITES_BY_KEY: dict[str, SiteSpec] = {s.key: s for s in SITES}
 
 #: Mod başına genişletme tavanı: WMN tümü bellekte, aktif kapsam sınırlı.
-_MODE_SITE_LIMIT = {"O1": len(_CORE_SITES), "O2": len(_CORE_SITES), "O3": 250}
+_MODE_SITE_LIMIT = {
+    "O1": len(_CORE_SITES),
+    "O2": len(_CORE_SITES),
+    "O3": len(_CORE_SITES) + len(WMN_SITES),
+}
 
 
 def select_sites(mode: str | None) -> list[SiteSpec]:
