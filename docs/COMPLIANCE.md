@@ -104,7 +104,19 @@ kişisel veri riski ve rate limit değerlendirilmelidir.
 7. Veri sahibi talebi ve silme prosedürü hazır mı?
 8. Olay/şüphe durumunda taramayı durdurma ve kayıtları koruma planı var mı?
 
-## 6. Canlı ortam notları
+## 6. İzleme, dışa aktarma ve kanıt
+
+- **Otomatik izleme:** Vaka sahibi izlemeyi açarsa yalnız aynı vaka kapsamı ve
+  aynı hukuki dayanakla yeniden tarama yapılır. Aralık ve mod operatör tarafından
+  seçilir; `monitor_last_scan_at` audit izi taşır.
+- **Webhook:** `scan.completed` özeti gönderilir. URL'ler SSRF korumasından geçer;
+  iç ağ/localhost hedefleri reddedilir.
+- **STIX/Maltego:** Dışa aktarım yalnız kamuya açık entity/bulgu/kanıt metaverisini
+  taşır; ham kanıt içeriği gönderilmez.
+- **Ekran görüntüsü:** Yalnız bulgu URL'si için, robots.txt ve SSRF kontrolleri
+  altında alınır; kanıt hash'i ile saklanır. Giriş duvarı/CAPTCHA aşılmaz.
+
+## 7. Canlı ortam notları
 
 - API `X-API-Token` ile korunur; edge basic auth için
   `SHOWIS_CADDY_USER` + `SHOWIS_CADDY_PASSWORD_HASH` tanımlanmalıdır.
