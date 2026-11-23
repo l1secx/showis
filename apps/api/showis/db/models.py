@@ -96,6 +96,19 @@ class Case(Base):
     )
 
 
+class ApiUser(Base):
+    """Panel/API kullanıcısı — token hash'i ve rolü."""
+
+    __tablename__ = "api_users"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid_str)
+    username: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    role: Mapped[str] = mapped_column(String(16), nullable=False, default="analyst")
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class CaseComment(Base):
     __tablename__ = "case_comments"
 

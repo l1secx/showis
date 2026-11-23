@@ -116,7 +116,26 @@ kişisel veri riski ve rate limit değerlendirilmelidir.
 - **Ekran görüntüsü:** Yalnız bulgu URL'si için, robots.txt ve SSRF kontrolleri
   altında alınır; kanıt hash'i ile saklanır. Giriş duvarı/CAPTCHA aşılmaz.
 
-## 7. Canlı ortam notları
+## 7. Kullanıcı, rol ve sahiplik
+
+- Kullanıcılar `api_users` tablosunda tutulur. Her kullanıcının yalnız
+  SHA-256 hash'i saklanan kişisel bir API anahtarı vardır.
+- Roller:
+  - `admin`: tüm vakaları okur/yazar, kullanıcı ve sağlayıcı ayarlarını yönetir.
+  - `analyst`: vaka oluşturur; sahibi olduğu veya sahipsiz vakaları yazar.
+  - `viewer`: yalnız okur; yazma istekleri **403** döner.
+- `SHOWIS_API_TOKEN` paylaşılan token'ı geriye uyum için **admin** sayılır.
+  Üretimde kişisel anahtarlara geçilip paylaşılan token devre dışı bırakılmalıdır.
+- Kişisel anahtar tarayıcıda `localStorage` içinde tutulur ve Next proxy
+  üzerinden `X-User-Token` başlığıyla taşınır. XSS yüzeyi nedeniyle CSP ve
+  güvenilir istemci zorunludur.
+- Vaka `owner` alanı analyst için yetki sınırıdır; `admin` her vakaya erişir.
+- Kullanıcı oluşturma: `POST /api/v1/auth/users` (admin) veya Ayarlar ekranı.
+  Token yalnız oluşturma yanıtında bir kez gösterilir.
+- Edge basic auth hâlâ tek kullanıcıdır; kişisel API anahtarı ikinci katmandır.
+  Gerçek çok kullanıcılı edge için Caddy kullanıcıları ayrıca yönetilmelidir.
+
+## 8. Canlı ortam notları
 
 - API `X-API-Token` ile korunur; edge basic auth için
   `SHOWIS_CADDY_USER` + `SHOWIS_CADDY_PASSWORD_HASH` tanımlanmalıdır.

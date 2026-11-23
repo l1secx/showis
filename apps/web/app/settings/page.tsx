@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { Loader2 } from "lucide-react";
+import { api, type AuthUser } from "../../lib/api";
 
 interface ProviderSetting {
   id: string;
@@ -26,6 +27,59 @@ export default function SettingsPage() {
   const [secretInput, setSecretInput] = useState<string>("");
   const [statusMsg, setStatusMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [testing, setTesting] = useState(false);
+  const [userToken, setUserToken] = useState("");
+  const [me, setMe] = useState<{ username: string; role: string; via: string } | null>(null);
+  const [users, setUsers] = useState<AuthUser[]>([]);
+  const [newUsername, setNewUsername] = useState("");
+  const [newRole, setNewRole] = useState("analyst");
+  const [newToken, setNewToken] = useState<string | null>(null);
+
+  const refreshMe = async () => {
+    try {
+      setMe(await api.getMe());
+    } catch {
+      setMe(null);
+    }
+  };
+
+  useEffect(() => {
+    try {
+      setUserToken(window.localStorage.getItem("showis:user-token") ?? "");
+    } catch {
+      /* localStorage kapalı */
+    }
+    void refreshMe();
+  }, []);
+
+  useEffect(() => {
+    if (me?.role !== "admin") {
+      setUsers([]);
+      return;
+    }
+    api.listUsers().then(setUsers).catch(() => setUsers([]));
+  }, [me?.role]);
+
+  const saveUserToken = async () => {
+    try {
+      if (userToken.trim()) window.localStorage.setItem("showis:user-token", userToken.trim());
+      else window.localStorage.removeItem("showis:user-token");
+    } catch {
+      /* localStorage kapalı */
+    }
+    await refreshMe();
+  };
+
+  const createUser = async () => {
+    setNewToken(null);
+    try {
+      const result = await api.createUser(newUsername.trim(), newRole);
+      setNewToken(result.token);
+      setNewUsername("");
+      setUsers(await api.listUsers());
+    } catch (e: any) {
+      setStatusMsg({ type: "error", text: e.message });
+    }
+  };
 
   // Form states
   const [llmBaseUrl, setLlmBaseUrl] = useState("https://opencode.ai/inference/go/openai/v1");
@@ -126,6 +180,104 @@ export default function SettingsPage() {
           (AES-128-CBC) ile şifrelenir ve yalnızca maskeli biçimde gösterilir.
         </p>
       </div>
+
+      <section className="panel p-5">
+        <h2 className="section-heading">Kullanıcı oturumu</h2>
+        <p className="mt-1 text-[12px] text-ink-3">
+          Kişisel API anahtarınız rolünüzü belirler: admin, analyst veya viewer.
+          Anahtar yoksa paylaşılan sunucu token’ı (admin) kullanılır.
+        </p>
+        <div className="mt-3 flex flex-wrap items-end gap-2">
+          <label className="min-w-[260px] flex-1">
+            <span className="label">Kullanıcı anahtarı</span>
+            <input
+              type="password"
+              className="input font-mono"
+              value={userToken}
+              onChange={(e) => setUserToken(e.target.value)}
+              placeholder="showis_…"
+            />
+          </label>
+          <button type="button" onClick={saveUserToken} className="btn-secondary">
+            Anahtarı uygula
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setUserToken("");
+              try {
+                window.localStorage.removeItem("showis:user-token");
+              } catch {
+                /* yoksay */
+              }
+              void refreshMe();
+            }}
+            className="btn-quiet"
+          >
+            Temizle
+          </button>
+        </div>
+        <p className="mt-2 text-[12px] text-ink-3">
+          {me
+            ? `Aktif kimlik: ${me.username} (${me.role})`
+            : "Kimlik doğrulanamadı; paylaşılan admin token’ı geçerli olabilir."}
+        </p>
+
+        {me?.role === "admin" && (
+          <div className="mt-5 border-t border-line pt-4">
+            <h3 className="text-[12.5px] font-semibold text-ink">Kullanıcı oluştur</h3>
+            <div className="mt-2 flex flex-wrap items-end gap-2">
+              <label className="min-w-[180px] flex-1">
+                <span className="label">Kullanıcı adı</span>
+                <input
+                  className="input font-mono"
+                  value={newUsername}
+                  onChange={(e) => setNewUsername(e.target.value)}
+                  placeholder="analist-1"
+                />
+              </label>
+              <label>
+                <span className="label">Rol</span>
+                <select
+                  className="select w-auto"
+                  value={newRole}
+                  onChange={(e) => setNewRole(e.target.value)}
+                >
+                  <option value="analyst">analyst</option>
+                  <option value="viewer">viewer</option>
+                  <option value="admin">admin</option>
+                </select>
+              </label>
+              <button
+                type="button"
+                onClick={createUser}
+                disabled={!newUsername.trim()}
+                className="btn-primary btn-sm"
+              >
+                Oluştur
+              </button>
+            </div>
+            {newToken && (
+              <p className="numeric mt-2 break-all rounded-[6px] border border-warn-line bg-warn-soft px-3 py-2 text-[12px] text-warn">
+                Yeni anahtar (yalnız bir kez gösterilir): {newToken}
+              </p>
+            )}
+            {users.length > 0 && (
+              <ul className="mt-3 divide-y divide-line text-[12px]">
+                {users.map((user) => (
+                  <li key={user.username} className="flex items-center gap-3 py-1.5">
+                    <span className="font-mono text-ink-2">{user.username}</span>
+                    <span className="text-ink-3">{user.role}</span>
+                    <span className={user.active ? "text-ok" : "text-danger"}>
+                      {user.active ? "aktif" : "pasif"}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+      </section>
 
       {statusMsg && (
         <div

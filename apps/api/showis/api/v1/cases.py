@@ -19,6 +19,7 @@ from fastapi import (
 )
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, field_validator, model_validator
+from showis.core.security import ROLE_ANALYST, Actor, require_token
 from showis.db.models import Case, CaseComment, Edge, Entity, Evidence, Finding, Report, Scan
 from showis.db.models import Seed as DbSeed
 from showis.db.models import Target as DbTarget
@@ -280,7 +281,10 @@ class ScanStartRequest(BaseModel):
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_case(
-    data: CaseCreateRequest, request: Request, db: AsyncSession = Depends(get_db)
+    data: CaseCreateRequest,
+    request: Request,
+    actor: Actor = Depends(require_token),
+    db: AsyncSession = Depends(get_db),
 ):
     # SEC-07: reşit-olmayan / uygun olmayan hedef sinyali burada durdurulur.
     # Spec §10: `guard_target` ad + soyad + nick + hints birleşimini tarar, bu yüzden
@@ -333,6 +337,7 @@ async def create_case(
         legal_basis=data.legal_basis,
         notes=data.notes,
         retention_days=data.retention_days,
+        owner=actor.username if actor.role == ROLE_ANALYST else None,
     )
     db.add(case)
     await db.flush()

@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy.exc import DataError, DBAPIError
 
 import showis.db.session as db_session_module
+from showis.api.v1.auth import router as auth_router
 from showis.api.v1.cases import router as cases_router
 from showis.api.v1.findings import router as findings_router
 from showis.api.v1.ops import public_router as ops_public_router
@@ -17,7 +18,11 @@ from showis.api.v1.reports import router as reports_router
 from showis.api.v1.scans import router as scans_router
 from showis.api.v1.settings import router as settings_router
 from showis.core.logging import install_redaction_filter
-from showis.core.security import require_token
+from showis.core.security import (
+    require_admin_access,
+    require_token,
+    require_write_access,
+)
 from showis.services.audit import (
     client_ip,
     client_ip_from_headers,
@@ -236,6 +241,8 @@ app.add_middleware(BodySizeLimitMiddleware)
 
 #: Tum API yuzeyi tek noktadan korunur; `/health` bilincli olarak disarida.
 auth_required = [Depends(require_token)]
+#: Yazma işlemleri: viewer engeli + analyst için vaka sahipliği.
+write_required = [Depends(require_write_access)]
 #: Dokumantasyon: once "kapali mi" (404), sonra token (401).
 docs_guarded = [Depends(_require_docs), Depends(require_token)]
 
@@ -316,11 +323,24 @@ async def audit_auth_failures(request: Request, call_next):
             logger.warning("auth.failed audit yazilamadi", exc_info=True)
     return response
 
-app.include_router(cases_router, prefix="/api/v1", dependencies=auth_required)
-app.include_router(scans_router, prefix="/api/v1", dependencies=auth_required)
-app.include_router(settings_router, prefix="/api/v1", dependencies=auth_required)
-app.include_router(findings_router, prefix="/api/v1", dependencies=auth_required)
-app.include_router(reports_router, prefix="/api/v1", dependencies=auth_required)
+app.include_router(auth_router, prefix="/api/v1")
+app.include_router(
+    cases_router, prefix="/api/v1", dependencies=[*auth_required, *write_required]
+)
+app.include_router(
+    scans_router, prefix="/api/v1", dependencies=[*auth_required, *write_required]
+)
+app.include_router(
+    settings_router,
+    prefix="/api/v1",
+    dependencies=[*auth_required, Depends(require_admin_access)],
+)
+app.include_router(
+    findings_router, prefix="/api/v1", dependencies=[*auth_required, *write_required]
+)
+app.include_router(
+    reports_router, prefix="/api/v1", dependencies=[*auth_required, *write_required]
+)
 # T-329: gozlemlenebilirlik (/metrics, /healthz) — token korumali.
 app.include_router(ops_router, prefix="/api/v1", dependencies=auth_required)
 # T-330/F-04: derin saglik ucu kimliksiz (yalniz ok|degraded + check adlari).

@@ -200,6 +200,13 @@ export interface AuditEntry {
   created_at?: string | null;
 }
 
+export interface AuthUser {
+  username: string;
+  role: string;
+  active: boolean;
+  created_at?: string | null;
+}
+
 export interface CaseComment {
   id: string;
   author: string;
@@ -304,9 +311,25 @@ async function listCases(params: CaseListParams = {}): Promise<CaseListPage> {
   };
 }
 
+const USER_TOKEN_KEY = "showis:user-token";
+
+function userToken(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(USER_TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = userToken();
   const res = await fetch(`/api/v1${path}`, {
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { "X-User-Token": token } : {}),
+      ...(init?.headers ?? {}),
+    },
     ...init,
   });
   if (res.status === 401) {
@@ -363,6 +386,15 @@ export const api = {
       body: JSON.stringify({ url }),
     }),
   getDiff: (caseId: string) => req<CaseDiff>(`/cases/${caseId}/diff`),
+  getMe: () => req<{ username: string; role: string; via: string }>(`/auth/me`),
+  listUsers: () => req<AuthUser[]>(`/auth/users`),
+  createUser: (username: string, role: string) =>
+    req<{ username: string; role: string; token: string }>(`/auth/users`, {
+      method: "POST",
+      body: JSON.stringify({ username, role }),
+    }),
+  deactivateUser: (username: string) =>
+    req<null>(`/auth/users/${encodeURIComponent(username)}`, { method: "DELETE" }),
   exportCase: (caseId: string) => req<any>(`/cases/${caseId}/export`),
   createReport: (caseId: string, format: "json" | "pdf" | "html") =>
     req<ReportInfo>(`/cases/${caseId}/report`, { method: "POST", body: JSON.stringify({ format }) }),
