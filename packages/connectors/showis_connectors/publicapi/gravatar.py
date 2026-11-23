@@ -33,10 +33,17 @@ class GravatarConnector(PublicProfileConnector):
     def _seed_tasks(self, ctx: ScanContext) -> list[TaskSpec]:
         tasks: list[TaskSpec] = []
         seen: set[str] = set()
-        for seed in ctx.seeds:
-            if not seed.email or seed.email in seen:
+        # Seed e-postaları + hedef ipucundaki e-posta (varsa). E-posta, Gravatar
+        # için kullanıcı adından daha güçlü bir kimlik anahtarıdır.
+        candidates = [seed.email for seed in ctx.seeds]
+        hint_email = (ctx.target.hints or {}).get("email")
+        if hint_email:
+            candidates.append(str(hint_email))
+        for email in candidates:
+            email = str(email or "").strip().lower()
+            if not email or email in seen:
                 continue
-            seen.add(seed.email)
+            seen.add(email)
             tasks.append(
                 TaskSpec(
                     id=str(uuid.uuid4()),
@@ -44,8 +51,8 @@ class GravatarConnector(PublicProfileConnector):
                     platform=self.platform,
                     kind="fetch_profile",
                     params={
-                        "email": seed.email,
-                        "hash": gravatar_hash(seed.email),
+                        "email": email,
+                        "hash": gravatar_hash(email),
                     },
                     priority=1,
                 )

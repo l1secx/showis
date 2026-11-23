@@ -16,6 +16,7 @@ from .leetcode import LeetCodeConnector
 from .mastodon import MastodonConnector
 from .medium import MediumConnector
 from .npm import NpmConnector
+from .openalex import OpenAlexConnector
 from .pypi import PypiConnector
 from .reddit import RedditConnector
 from .soundcloud import SoundCloudConnector
@@ -41,6 +42,7 @@ __all__ = [
     "MastodonConnector",
     "MediumConnector",
     "NpmConnector",
+    "OpenAlexConnector",
     "ProfileFetch",
     "PublicProfileConnector",
     "PypiConnector",

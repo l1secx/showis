@@ -38,6 +38,7 @@ export const PLATFORM_META: Record<string, PlatformMeta> = {
   codeforces: { label: "Codeforces", color: "#1f8acb", accent: "#60a5fa" },
   // T-308: anahtarsız public API connector'ları
   stackoverflow: { label: "Stack Overflow", color: "#f48024", accent: "#f9a15b" },
+  openalex: { label: "OpenAlex", color: "#1f6feb", accent: "#60a5fa" },
 
   // --- Site-check / profil platformları ---
   bitbucket: { label: "Bitbucket", color: "#2684ff", accent: "#60a5fa" },

@@ -27,6 +27,8 @@ class Platform(StrEnum):
     CODEFORCES = "codeforces"
     # T-308: anahtarsiz public API connector'lari (yalniz ekleme)
     STACKOVERFLOW = "stackoverflow"
+    # Akademik yazar/ORCID kesfi (OpenAlex public API)
+    OPENALEX = "openalex"
     # --- Site-check (kullanici adi varlik kontrolu) platformlari ---
     BITBUCKET = "bitbucket"
     CODEBERG = "codeberg"

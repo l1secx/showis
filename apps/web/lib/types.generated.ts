@@ -25,6 +25,7 @@ export type Platform =
   | "leetcode"
   | "codeforces"
   | "stackoverflow"
+  | "openalex"
   | "bitbucket"
   | "codeberg"
   | "codepen"

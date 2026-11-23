@@ -415,3 +415,144 @@ async def test_fetch_failure_is_not_reported_as_missing(connector_cls, url):
         )
     assert obs[0].error
     assert obs[0].data.get("exists") is not False
+
+
+# ---------------------------------------------------------------- Bluesky search
+
+
+@pytest.mark.asyncio
+async def test_bluesky_plan_adds_name_search():
+    conn = BlueskyConnector(http_client=HttpClient(enable_ssrf_guard=False))
+    ctx = ScanContext(
+        case_id="c1",
+        scan_id="s1",
+        target=Target(first_name="Ada", last_name="Lovelace", hints={}),
+        seeds=[],
+    )
+    tasks = await conn.plan(ctx)
+    kinds = {task.kind for task in tasks}
+    assert "search_actors" in kinds
+
+
+@pytest.mark.asyncio
+async def test_bluesky_search_actors_normalizes_accounts():
+    conn = BlueskyConnector(http_client=HttpClient(enable_ssrf_guard=False))
+    task = TaskSpec(
+        id="t-search",
+        connector="bluesky",
+        platform=Platform.BLUESKY,
+        kind="search_actors",
+        params={"query": "Ada Lovelace"},
+    )
+    with respx.mock(assert_all_called=False) as router:
+        router.get("https://public.api.bsky.app/xrpc/app.bsky.actor.searchActors").respond(
+            200,
+            json={
+                "actors": [
+                    {
+                        "did": "did:plc:abc",
+                        "handle": "ada.bsky.social",
+                        "displayName": "Ada Lovelace",
+                        "description": "mathematician",
+                        "createdAt": "2024-01-01T00:00:00Z",
+                    },
+                    {
+                        "did": "did:plc:def",
+                        "handle": "adalovelace.bsky.social",
+                        "displayName": "Ada L.",
+                    },
+                ]
+            },
+        )
+        obs = await conn.run(task, make_ctx())
+
+    assert obs[0].data["exists"] is True
+    assert len(obs[0].data["actors"]) == 2
+    entities, _ = conn.normalize(obs[0])
+    assert {e.label for e in entities} == {"ada.bsky.social", "adalovelace.bsky.social"}
+    assert all(e.platform == Platform.BLUESKY for e in entities)
+    assert entities[0].id.startswith("bluesky:")
+
+
+@pytest.mark.asyncio
+async def test_gravatar_hint_email_is_planned():
+    conn = GravatarConnector(http_client=HttpClient(enable_ssrf_guard=False))
+    ctx = ScanContext(
+        case_id="c1",
+        scan_id="s1",
+        target=Target(first_name="Ada", last_name="Lovelace", hints={"email": "ada@example.com"}),
+        seeds=[],
+    )
+    tasks = await conn.plan(ctx)
+    assert len(tasks) == 1
+    assert tasks[0].params["email"] == "ada@example.com"
+    assert tasks[0].params["hash"] == gravatar_hash("ada@example.com")
+
+
+# ---------------------------------------------------------------- OpenAlex
+
+
+@pytest.mark.asyncio
+async def test_openalex_search_normalizes_authors():
+    from showis_connectors.publicapi import OpenAlexConnector
+
+    conn = OpenAlexConnector(http_client=HttpClient(enable_ssrf_guard=False))
+    ctx = ScanContext(
+        case_id="c1",
+        scan_id="s1",
+        target=Target(first_name="Ada", last_name="Lovelace", hints={}),
+        seeds=[],
+    )
+    tasks = await conn.plan(ctx)
+    assert len(tasks) == 1
+    assert tasks[0].kind == "search_authors"
+
+    with respx.mock(assert_all_called=False) as router:
+        router.get(url__regex=r"https://api\.openalex\.org/authors\?.*").respond(
+            200,
+            json={
+                "results": [
+                    {
+                        "id": "https://openalex.org/A5023888391",
+                        "orcid": "https://orcid.org/0000-0001-6187-6610",
+                        "display_name": "Ada Lovelace",
+                        "works_count": 42,
+                        "cited_by_count": 1000,
+                        "last_known_institutions": [{"display_name": "Analytical Engine"}],
+                    }
+                ]
+            },
+        )
+        obs = await conn.run(tasks[0], make_ctx())
+
+    assert obs[0].data["exists"] is True
+    entities, _ = conn.normalize(obs[0])
+    assert len(entities) == 1
+    entity = entities[0]
+    assert entity.platform == Platform.OPENALEX
+    assert entity.label == "Ada Lovelace"
+    assert entity.attributes["orcid"] == "0000-0001-6187-6610"
+    assert entity.attributes["institution"] == "Analytical Engine"
+    assert entity.url == "https://orcid.org/0000-0001-6187-6610"
+    assert entity.attributes["confidence_hint"] == 0.7
+
+
+@pytest.mark.asyncio
+async def test_openalex_no_authors_is_not_error():
+    from showis_connectors.publicapi import OpenAlexConnector
+
+    conn = OpenAlexConnector(http_client=HttpClient(enable_ssrf_guard=False))
+    task = TaskSpec(
+        id="t-openalex",
+        connector="openalex",
+        platform=Platform.OPENALEX,
+        kind="search_authors",
+        params={"query": "Nobody Here"},
+    )
+    with respx.mock(assert_all_called=False) as router:
+        router.get(url__regex=r"https://api\.openalex\.org/authors\?.*").respond(
+            200, json={"results": []}
+        )
+        obs = await conn.run(task, make_ctx())
+    assert obs[0].error is None
+    assert obs[0].data["exists"] is False
