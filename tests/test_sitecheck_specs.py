@@ -341,7 +341,8 @@ def test_wmn_genis_kumesi_yalniz_o3():
 
     conn = SiteCheckConnector()
     assert len(conn.sites_for_mode("O2")) == site_count_for_mode("O2")
-    assert len(conn.sites_for_mode("O3")) == site_count()
+    assert len(conn.sites_for_mode("O3")) == site_count_for_mode("O3")
     assert site_count_for_mode("O3") > site_count_for_mode("O2")
+    assert len(conn.sites_for_mode("O3")) <= site_count()
     assert any(spec.id_namespace for spec in conn.sites_for_mode("O3"))
     assert not any(spec.id_namespace for spec in conn.sites_for_mode("O2"))

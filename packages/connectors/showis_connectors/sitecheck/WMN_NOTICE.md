@@ -8,8 +8,12 @@ tanımları **WhatsMyName** projesinden türetilmiştir:
 - Lisans: Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0)
   - https://creativecommons.org/licenses/by-sa/4.0/
 
-Değişiklikler: yalnız anahtarsız, `e_string` + `m_string` çift işaretli ve
-mevcut Showis site listesinde bulunmayan 28 site alınmıştır. WMN alanları
-Showis `SiteSpec` biçimine dönüştürülmüş; `e_string` hesap-var, `m_string`
-hesap-yok işareti olarak eşlenmiştir. Bu dosya ve türetilmiş tanımlar
-CC BY-SA 4.0 koşulları altında paylaşılır.
+Değişiklikler: `wmn-data.json` ham veri olarak saklanır; çalışma zamanında
+yalnız anahtarsız, `e_string` + `m_string` çift işaretli, korumasız ve geçerli
+kayıtlar `SiteSpec` biçimine dönüştürülür. `e_string` hesap-var, `m_string`
+hesap-yok işareti olarak eşlenir. Mevcut Showis hostları tekrar eklenmez.
+Veri setinin tamamı bellekte tutulur; O1/O2/O3 aktif kapsamı bütçe için
+`sitecheck/sites.py::select_sites` içinde sınırlandırılır.
+
+Bu dosya ve türetilmiş tanımlar CC BY-SA 4.0 koşulları altında paylaşılır.
+Değişiklikler aynı lisans altında açık kaynak depoda yayımlanır.

@@ -428,3 +428,61 @@ async def test_ayni_platformdaki_wmn_siteleri_farkli_entity_uretir():
     assert len({entity.id for entity in entities}) == 2
     assert all(entity.attributes["username"] == "kerem" for entity in entities)
     assert {entity.label for entity in entities} == {"kerem · Site A", "kerem · Site B"}
+
+
+# ---------------------------------------------------------------------------
+# Site sağlığı — 403/429 tekrar denemesini durdur
+# ---------------------------------------------------------------------------
+
+
+async def test_site_sagligi_403_sonrasi_atlar():
+    from showis_connectors.sitecheck.health import SiteHealth
+
+    site = SiteSpec(
+        key="unhealthy",
+        name="Unhealthy",
+        platform=Platform.WEB,
+        url_template="https://unhealthy.example.com/{u}",
+        skip_robots=True,
+    )
+    engine = UsernameCheckEngine(
+        http_client=HttpClient(enable_ssrf_guard=False),
+        sites=[site],
+        concurrency=1,
+        health=SiteHealth(ttl_seconds=3600, failure_threshold=1),
+    )
+    with respx.mock(assert_all_called=False) as router:
+        route = router.get("https://unhealthy.example.com/alice").respond(403)
+        first = await engine.check_username("alice")
+        second = await engine.check_username("alice")
+    assert first[0].status == UNKNOWN
+    assert second[0].status == SKIPPED
+    assert route.call_count == 1
+
+
+async def test_site_sagligi_basarili_sonuc_sayaci_sifirlar():
+    from showis_connectors.sitecheck.health import SiteHealth
+
+    site = SiteSpec(
+        key="recovering",
+        name="Recovering",
+        platform=Platform.WEB,
+        url_template="https://recovering.example.com/{u}",
+        skip_robots=True,
+    )
+    health = SiteHealth(ttl_seconds=3600, failure_threshold=2)
+    engine = UsernameCheckEngine(
+        http_client=HttpClient(enable_ssrf_guard=False),
+        sites=[site],
+        concurrency=1,
+        health=health,
+    )
+    with respx.mock(assert_all_called=False) as router:
+        router.get("https://recovering.example.com/alice").respond(403)
+        router.get("https://recovering.example.com/bob").respond(200, text="bob")
+        router.get("https://recovering.example.com/carol").respond(403)
+        await engine.check_username("alice")
+        ok = await engine.check_username("bob")
+        carol = await engine.check_username("carol")
+    assert ok[0].status == EXISTS
+    assert carol[0].status == UNKNOWN

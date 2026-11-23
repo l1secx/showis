@@ -324,12 +324,9 @@ def site_count() -> int:
 def site_count_for_mode(mode: str | None) -> int:
     """Moda göre gerçek site-check kapsamı (O3 geniş WMN kümesini içerir)."""
     try:
-        from showis_connectors.sitecheck.sites import SITES
+        from showis_connectors.sitecheck.sites import select_sites
 
-        if norm_mode(mode) == "O3":
-            return len(SITES)
-        core = [spec for spec in SITES if not spec.id_namespace]
-        return len(core) if core else len(SITES)
+        return len(select_sites(mode))
     except Exception:  # pragma: no cover - connector paketi yoksa
         return _SITE_COUNT_FALLBACK
 

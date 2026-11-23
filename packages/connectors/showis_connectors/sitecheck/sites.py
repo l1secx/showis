@@ -58,6 +58,9 @@ class SiteSpec:
     #: Ayni platformu paylasan birden çok site (ör. WhatsMyName WEB kümesi)
     #: için entity kimliğine eklenen ad alanı. Boşsa eski davranış korunur.
     id_namespace: str | None = None
+    #: Kapsam önceliği: 1 = çekirdek, 2 = yüksek değerli genişletme,
+    #: 3 = uzun kuyruk. Mod bazlı seçim `select_sites` içinde.
+    site_tier: int = 1
     notes: str = ""
 
 
@@ -700,11 +703,32 @@ SITES: list[SiteSpec] = [
     ),
 ]
 
-# WhatsMyName alt kümesi (CC BY-SA 4.0) — yalnız çift işaretli siteler.
+# WhatsMyName veri seti (CC BY-SA 4.0) — yalnız çift işaretli/korumasız siteler.
 # Import döngüsünü önlemek için SiteSpec/SITES tanımından sonra yüklenir.
-from .sites_wmn import WMN_SITES  # noqa: E402
+_CORE_SITES = list(SITES)
+from .sites_wmn import WMN_SITES, load_wmn_sites  # noqa: E402
 
+WMN_SITES.extend(load_wmn_sites(_CORE_SITES))
 SITES.extend(WMN_SITES)
 
 #: site key -> spec hizli erisim
 SITES_BY_KEY: dict[str, SiteSpec] = {s.key: s for s in SITES}
+
+#: Mod başına genişletme tavanı: WMN tümü bellekte, aktif kapsam sınırlı.
+_MODE_SITE_LIMIT = {"O1": len(_CORE_SITES), "O2": len(_CORE_SITES), "O3": 250}
+
+
+def select_sites(mode: str | None) -> list[SiteSpec]:
+    """Moda göre aktif site-check kapsamı.
+
+    O1 yalnız çekirdek; O2 yüksek değerli genişletme; O3 daha geniş uzun kuyruk.
+    Tüm WMN verisi ``SITES`` içinde durur, bütçe için aktif liste sınırlanır.
+    """
+    normalized = str(mode or "O2").strip().upper()
+    limit = _MODE_SITE_LIMIT.get(normalized, _MODE_SITE_LIMIT["O2"])
+    core = [spec for spec in _CORE_SITES]
+    extended = sorted(
+        (spec for spec in WMN_SITES if spec.id_namespace),
+        key=lambda spec: (spec.site_tier, spec.key),
+    )
+    return (core + extended)[: max(len(core), limit)]

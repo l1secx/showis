@@ -19,6 +19,7 @@ import httpx
 from showis_engine.http import HttpClient
 
 from .cache import CheckCache
+from .health import SiteHealth
 from .sites import SITES, SiteSpec
 
 logger = logging.getLogger("showis.sitecheck")
@@ -151,12 +152,15 @@ class UsernameCheckEngine:
         sites: list[SiteSpec] | None = None,
         concurrency: int = 6,
         cache: CheckCache | None = None,
+        health: SiteHealth | None = None,
     ):
         self.http = http_client or HttpClient(enable_ssrf_guard=True)
         self.sites = sites if sites is not None else SITES
         self._sem = asyncio.Semaphore(concurrency)
         #: None -> onbellek yok (testlerde deterministik davranis).
         self.cache = cache
+        #: 403/429/5xx dönen siteleri aynı taramada tekrar denememek için.
+        self.health = health if health is not None else SiteHealth()
 
     # ------------------------------------------------------------------
     # Genel API
@@ -182,6 +186,14 @@ class UsernameCheckEngine:
     async def _check_one(
         self, username: str, spec: SiteSpec, use_cache: bool = True
     ) -> CheckResult:
+        if self.health.blocked(spec.key):
+            return CheckResult(
+                site=spec,
+                username=username,
+                status=SKIPPED,
+                url=spec.url_template,
+                detail="site sağlığı: geçici olarak devre dışı",
+            )
         if use_cache and self.cache is not None:
             cached = self.cache.get(username, spec.key)
             if cached is not None:
@@ -198,6 +210,7 @@ class UsernameCheckEngine:
                 )
 
         result = await self._fetch_and_classify(username, spec)
+        self.health.record(spec.key, result.status, result.http_status)
         if use_cache and self.cache is not None:
             # Yalnizca kararli sonuclar saklanir (error/unknown haric).
             self.cache.set(username, spec.key, result)

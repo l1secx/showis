@@ -30,7 +30,7 @@ from showis_engine.http import EvidenceStore, HttpClient
 from .cache import CheckCache, get_default_cache
 from .dedupe import ScanPlanRegistry, get_default_registry
 from .engine import EXISTS, SKIPPED, UsernameCheckEngine
-from .sites import SITES, SiteSpec
+from .sites import SITES, SiteSpec, select_sites
 
 logger = logging.getLogger("showis.sitecheck.connector")
 
@@ -69,15 +69,11 @@ class SiteCheckConnector:
         )
 
     def sites_for_mode(self, mode: str | None) -> list[SiteSpec]:
-        """Moda göre kapsam: WMN geniş kümesi yalnız derin taramada (O3).
-
-        O1/O2 çekirdek 83 siteyle kalır; böylece istek bütçesi ve süre
-        öngörülebilir olur. O3, CC BY-SA WMN alt kümesiyle genişler.
-        """
-        if str(mode or "").strip().upper() == "O3":
-            return self.sites
-        core = [spec for spec in self.sites if not spec.id_namespace]
-        return core or self.sites
+        """Moda göre kapsam: O1 çekirdek, O2/O3 genişleyen WMN kuyruğu."""
+        if self.sites is SITES:
+            return select_sites(mode)
+        # Test/özel connector'lar kendi listesini kullanır.
+        return self.sites
 
     # ------------------------------------------------------------------
     # Plan

@@ -1,352 +1,127 @@
-"""WhatsMyName alt kümesi — CC BY-SA 4.0, Micah Hoffman ve katkıda bulunanlar.
+"""WhatsMyName veri setinden türetilmiş site tanımları.
 
-Kaynak: https://github.com/WebBreacher/WhatsMyName (wmn-data.json).
-e_string = hesap VAR işareti; m_string = hesap YOK işareti.
-Yalnız anahtarsız, çift işaretli ve mevcut listede bulunmayan siteler alınmıştır.
-Lisans: CC BY-SA 4.0.
+Kaynak: https://github.com/WebBreacher/WhatsMyName (`wmn-data.json`)
+Lisans: CC BY-SA 4.0 — ayrıntı: `WMN_NOTICE.md`.
+
+WMN alan eşlemesi:
+* ``e_code`` / ``e_string`` → hesap VAR (present)
+* ``m_code`` / ``m_string`` → hesap YOK (absent)
+
+Yalnız anahtarsız, iki işaretli, korumasız ve geçerli kayıtlar alınır.
+Tüm WMN siteleri ``Platform.WEB`` altında çalışır; entity çakışmasını önlemek
+için her spec benzersiz ``id_namespace`` taşır. Mod bazlı kapsam seçimi
+``sites.select_sites`` içindedir.
 """
 
 from __future__ import annotations
+
+import hashlib
+import json
+import re
+from pathlib import Path
+from typing import Iterable
 
 from showis_contracts import Platform
 
 from .sites import SiteSpec
 
-WMN_SITES: list[SiteSpec] = [
-    SiteSpec(
-        "wmn_arduino_project_hub",
-        "Arduino (Project Hub)",
-        Platform.WEB,
-        "https://projecthub.arduino.cc/{u}",
-        expect_status=200,
-        present_regex=r"\"userInfo\":\{",
-        absent_regex=r"\"userInfo\":null",
-        require_username=False,
-        id_namespace="wmn_arduino_project_hub",
-        notes="WhatsMyName CC BY-SA 4.0",
-    ),
-    SiteSpec(
-        "wmn_brickset",
-        "Brickset",
-        Platform.WEB,
-        "https://brickset.com/profile/{u}",
-        expect_status=200,
-        present_regex=r"Member\ since:</dt>",
-        absent_regex=r"\{name\}</h1>",
-        require_username=False,
-        id_namespace="wmn_brickset",
-        notes="WhatsMyName CC BY-SA 4.0",
-    ),
-    SiteSpec(
-        "wmn_boardgamegeek",
-        "BoardGameGeek",
-        Platform.WEB,
-        "https://api.geekdo.com/api/accounts/validate/username?username={u}",
-        expect_status=200,
-        present_regex=r"\"message\":\"Sorry,\ this\ username\ is\ already\ taken\.\"",
-        absent_regex=r"\"isValid\":true",
-        require_username=False,
-        id_namespace="wmn_boardgamegeek",
-        notes="WhatsMyName CC BY-SA 4.0",
-    ),
-    SiteSpec(
-        "wmn_codecademy",
-        "Codecademy",
-        Platform.WEB,
-        "https://www.codecademy.com/profiles/{u}",
-        expect_status=200,
-        present_regex=r"\"type\":\"User\"",
-        absent_regex=r"\"type\":\"UserNotFound\"",
-        require_username=False,
-        id_namespace="wmn_codecademy",
-        notes="WhatsMyName CC BY-SA 4.0",
-    ),
-    SiteSpec(
-        "wmn_greasy_fork",
-        "Greasy Fork",
-        Platform.WEB,
-        "https://greasyfork.org/en/users?q={u}",
-        expect_status=200,
-        present_regex=r"class=\"user\-list\"",
-        absent_regex=r"<p>No\ users!</p>",
-        require_username=False,
-        id_namespace="wmn_greasy_fork",
-        notes="WhatsMyName CC BY-SA 4.0",
-    ),
-    SiteSpec(
-        "wmn_hackernoon",
-        "Hackernoon",
-        Platform.WEB,
-        "https://hackernoon.com/_next/data/foL6JC7ro2FEEMD-gMKgQ/u/{u}.json",
-        expect_status=200,
-        present_regex=r"\"profile\"",
-        absent_regex=r"__N_REDIRECT",
-        require_username=False,
-        id_namespace="wmn_hackernoon",
-        notes="WhatsMyName CC BY-SA 4.0",
-    ),
-    SiteSpec(
-        "wmn_librarything",
-        "LibraryThing",
-        Platform.WEB,
-        "https://www.librarything.com/profile/{u}",
-        expect_status=200,
-        present_regex=r"<dt>Joined</dt>",
-        absent_regex=r"Error:\ This\ user\ doesn't\ exist",
-        require_username=False,
-        id_namespace="wmn_librarything",
-        notes="WhatsMyName CC BY-SA 4.0",
-    ),
-    SiteSpec(
-        "wmn_mcuuid_minecraft",
-        "MCUUID (Minecraft)",
-        Platform.WEB,
-        "https://playerdb.co/api/player/minecraft/{u}",
-        expect_status=200,
-        present_regex=r"Successfully\ found\ player\ by\ given\ ID\.",
-        absent_regex=r"minecraft\.api_failure",
-        require_username=False,
-        id_namespace="wmn_mcuuid_minecraft",
-        notes="WhatsMyName CC BY-SA 4.0",
-    ),
-    SiteSpec(
-        "wmn_mod_db",
-        "Mod DB",
-        Platform.WEB,
-        "https://www.moddb.com/html/scripts/autocomplete.php?a=username&q={u}",
-        expect_status=200,
-        present_regex=r"\"available\":false",
-        absent_regex=r"\"available\":true",
-        require_username=False,
-        id_namespace="wmn_mod_db",
-        notes="WhatsMyName CC BY-SA 4.0",
-    ),
-    SiteSpec(
-        "wmn_omg_lol",
-        "omg.lol",
-        Platform.WEB,
-        "https://api.omg.lol/address/{u}/info",
-        expect_status=200,
-        present_regex=r"\"success\":\ true",
-        absent_regex=r"\"success\":\ false",
-        require_username=False,
-        id_namespace="wmn_omg_lol",
-        notes="WhatsMyName CC BY-SA 4.0",
-    ),
-    SiteSpec(
-        "wmn_opencollective",
-        "Opencollective",
-        Platform.WEB,
-        "https://opencollective.com/{u}",
-        expect_status=200,
-        present_regex=r"\-\ Open\ Collective",
-        absent_regex=r"Not\ Found",
-        require_username=False,
-        id_namespace="wmn_opencollective",
-        notes="WhatsMyName CC BY-SA 4.0",
-    ),
-    SiteSpec(
-        "wmn_openstreetmap_wiki",
-        "OpenStreetMap Wiki",
-        Platform.WEB,
-        "https://wiki.openstreetmap.org/w/api.php?action=query&format=json&list=users&ususers={u}",
-        expect_status=200,
-        present_regex=r"\"userid\":",
-        absent_regex=r"\"missing\":\"\"",
-        require_username=False,
-        id_namespace="wmn_openstreetmap_wiki",
-        notes="WhatsMyName CC BY-SA 4.0",
-    ),
-    SiteSpec(
-        "wmn_paypal_me",
-        "PayPal.Me",
-        Platform.WEB,
-        "https://www.paypal.com/paypalme/{u}",
-        expect_status=200,
-        present_regex=r"\"recipientSlugDetails\":",
-        absent_regex=r"\",\"griffinMetadata\":\{\"",
-        require_username=False,
-        id_namespace="wmn_paypal_me",
-        notes="WhatsMyName CC BY-SA 4.0",
-    ),
-    SiteSpec(
-        "wmn_picsart",
-        "Picsart",
-        Platform.WEB,
-        "https://api.picsart.com/users/show/{u}.json",
-        expect_status=200,
-        present_regex=r"\"status\":\"success\"",
-        absent_regex=r"\"status\":\"error\"",
-        require_username=False,
-        id_namespace="wmn_picsart",
-        notes="WhatsMyName CC BY-SA 4.0",
-    ),
-    SiteSpec(
-        "wmn_playstation_network",
-        "Playstation Network",
-        Platform.WEB,
-        "https://psnprofiles.com/xhr/search/users?q={u}",
-        expect_status=200,
-        present_regex=r"<div\ class=\"progress\-bar\ small\ level\">",
-        absent_regex=r"We\ couldn't\ find\ anything\ ",
-        require_username=False,
-        id_namespace="wmn_playstation_network",
-        notes="WhatsMyName CC BY-SA 4.0",
-    ),
-    SiteSpec(
-        "wmn_plurk",
-        "Plurk",
-        Platform.WEB,
-        "https://www.plurk.com/{u}",
-        expect_status=200,
-        present_regex=r"Profile\ views",
-        absent_regex=r"Register\ your\ plurk\ account",
-        require_username=False,
-        id_namespace="wmn_plurk",
-        notes="WhatsMyName CC BY-SA 4.0",
-    ),
-    SiteSpec(
-        "wmn_polarsteps",
-        "Polarsteps",
-        Platform.WEB,
-        "https://www.polarsteps.com/{u}",
-        expect_status=200,
-        present_regex=r"\"user\-profile\"",
-        absent_regex=r"Ups!\ User\ not\ found\.",
-        require_username=False,
-        id_namespace="wmn_polarsteps",
-        notes="WhatsMyName CC BY-SA 4.0",
-    ),
-    SiteSpec(
-        "wmn_roblox",
-        "Roblox",
-        Platform.WEB,
-        "https://auth.roblox.com/v1/usernames/validate?username={u}&birthday=2019-12-31T23:00:00.000Z",
-        expect_status=200,
-        present_regex=r"Username\ is\ already\ in\ use",
-        absent_regex=r"Username\ is\ valid",
-        require_username=False,
-        id_namespace="wmn_roblox",
-        notes="WhatsMyName CC BY-SA 4.0",
-    ),
-    SiteSpec(
-        "wmn_runescape",
-        "RuneScape",
-        Platform.WEB,
-        "https://apps.runescape.com/runemetrics/profile/profile?user={u}",
-        expect_status=200,
-        present_regex=r"\"name\":",
-        absent_regex=r"\"error\":\"NO_PROFILE\"",
-        require_username=False,
-        id_namespace="wmn_runescape",
-        notes="WhatsMyName CC BY-SA 4.0",
-    ),
-    SiteSpec(
-        "wmn_spoj",
-        "SPOJ",
-        Platform.WEB,
-        "https://www.spoj.com/users/{u}/",
-        expect_status=200,
-        present_regex=r"<h3>Activity\ over\ the\ last\ year</h3>",
-        absent_regex=r"<strong>Innopolis\ Open\ 2018</strong>",
-        require_username=False,
-        id_namespace="wmn_spoj",
-        notes="WhatsMyName CC BY-SA 4.0",
-    ),
-    SiteSpec(
-        "wmn_truckersmp",
-        "TruckersMP",
-        Platform.WEB,
-        "https://truckersmp.com/user/search?search={u}",
-        expect_status=200,
-        present_regex=r"class=\"team\-v2\"",
-        absent_regex=r"<h4>Could\ not\ find\ any\ member\ using\ these\ credentials</h4>",
-        require_username=False,
-        id_namespace="wmn_truckersmp",
-        notes="WhatsMyName CC BY-SA 4.0",
-    ),
-    SiteSpec(
-        "wmn_vero",
-        "Vero",
-        Platform.WEB,
-        "https://vero.co/{u}",
-        expect_status=200,
-        present_regex=r"name=\"username",
-        absent_regex=r"<h3>Not\ Found</h3>",
-        require_username=False,
-        id_namespace="wmn_vero",
-        notes="WhatsMyName CC BY-SA 4.0",
-    ),
-    SiteSpec(
-        "wmn_wikidot",
-        "Wikidot",
-        Platform.WEB,
-        "https://www.wikidot.com/user:info/{u}",
-        expect_status=200,
-        present_regex=r"<h1\ class=\"profile\-title\">",
-        absent_regex=r"<div\ class=\"error\-block\">User\ does\ not\ exist\.</div>",
-        require_username=False,
-        id_namespace="wmn_wikidot",
-        notes="WhatsMyName CC BY-SA 4.0",
-    ),
-    SiteSpec(
-        "wmn_zepeto",
-        "Zepeto",
-        Platform.WEB,
-        "https://gw-napi.zepeto.io/profiles/{u}",
-        expect_status=200,
-        present_regex=r"zepetoId\":",
-        absent_regex=r"errorCode\":",
-        require_username=False,
-        id_namespace="wmn_zepeto",
-        notes="WhatsMyName CC BY-SA 4.0",
-    ),
-    SiteSpec(
-        "wmn_sepia_search_peertube",
-        "Sepia Search (PeerTube)",
-        Platform.WEB,
-        "https://sepiasearch.org/api/v1/search/video-channels?search=%22{u}%22&start=0&count=10",
-        expect_status=200,
-        present_regex=r"\"data\":\[\{",
-        absent_regex=r"\"data\":\[\]",
-        require_username=False,
-        id_namespace="wmn_sepia_search_peertube",
-        notes="WhatsMyName CC BY-SA 4.0",
-    ),
-    SiteSpec(
-        "wmn_kwork",
-        "Kwork",
-        Platform.WEB,
-        "https://kwork.ru/user_kworks/{u}",
-        expect_status=200,
-        present_regex=r"\"success\":true",
-        absent_regex=r"\"success\":false",
-        require_username=False,
-        id_namespace="wmn_kwork",
-        notes="WhatsMyName CC BY-SA 4.0",
-    ),
-    SiteSpec(
-        "wmn_kwai",
-        "Kwai",
-        Platform.WEB,
-        "https://www.kwai.com/@{u}",
-        expect_status=200,
-        present_regex=r"name=\"title\"",
-        absent_regex=r"<title>Kwai</title>",
-        require_username=False,
-        id_namespace="wmn_kwai",
-        notes="WhatsMyName CC BY-SA 4.0",
-    ),
-    SiteSpec(
-        "wmn_minds",
-        "Minds",
-        Platform.WEB,
-        "https://www.minds.com/api/v3/register/validate?username={u}",
-        expect_status=200,
-        present_regex=r"\"valid\":false",
-        absent_regex=r"\"valid\":true",
-        require_username=False,
-        id_namespace="wmn_minds",
-        notes="WhatsMyName CC BY-SA 4.0",
-    ),
-]
+_DATA_PATH = Path(__file__).with_name("wmn-data.json")
+_ALLOWED_CATEGORIES = {
+    "art",
+    "blog",
+    "business",
+    "coding",
+    "finance",
+    "gaming",
+    "health",
+    "hobby",
+    "images",
+    "misc",
+    "music",
+    "news",
+    "political",
+    "shopping",
+    "social",
+    "tech",
+    "video",
+}
+_TIER2_CATEGORIES = {"coding", "gaming", "social", "tech", "blog", "finance", "business"}
+_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _slug(value: str) -> str:
+    slug = _SLUG_RE.sub("_", value.lower()).strip("_")
+    return slug[:40] or "site"
+
+
+def _host(url_template: str) -> str:
+    match = re.match(r"https?://([^/]+)", url_template.replace("{u}", "x"), re.I)
+    return (match.group(1).lower().removeprefix("www.") if match else "")
+
+
+def load_wmn_sites(existing_specs: Iterable[SiteSpec]) -> list[SiteSpec]:
+    """WMN JSON'undan SiteSpec listesi üretir; mevcut hostları atlar."""
+    if not _DATA_PATH.is_file():
+        return []
+    try:
+        payload = json.loads(_DATA_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+
+    existing_hosts = {_host(spec.url_template) for spec in existing_specs}
+    existing_hosts.discard("")
+    result: list[SiteSpec] = []
+    seen_keys: set[str] = set()
+
+    for item in payload.get("sites") or []:
+        if item.get("valid") is False or item.get("protection"):
+            continue
+        category = str(item.get("cat") or "misc").lower()
+        if category == "xx NSFW xx" or category not in _ALLOWED_CATEGORIES:
+            continue
+        if item.get("e_code") != 200 or item.get("m_code") not in (200, 404, 410):
+            continue
+        e_string = str(item.get("e_string") or "")
+        m_string = str(item.get("m_string") or "")
+        url_template = str(item.get("uri_check") or "").replace("{account}", "{u}")
+        name = str(item.get("name") or "").strip()
+        if not e_string or not m_string or not name or "{u}" not in url_template:
+            continue
+        if not url_template.startswith(("http://", "https://")):
+            continue
+        host = _host(url_template)
+        if not host or host in existing_hosts:
+            continue
+
+        base_key = f"wmn_{_slug(name)}"
+        key = base_key
+        if key in seen_keys:
+            suffix = hashlib.sha1(name.encode("utf-8")).hexdigest()[:6]
+            key = f"{base_key}_{suffix}"
+        seen_keys.add(key)
+
+        absent_statuses: tuple[int, ...] = (404, 410)
+        if item.get("m_code") in (404, 410):
+            absent_statuses = (int(item["m_code"]),)
+        result.append(
+            SiteSpec(
+                key=key,
+                name=name,
+                platform=Platform.WEB,
+                url_template=url_template,
+                absent_statuses=absent_statuses,
+                expect_status=200,
+                present_regex=re.escape(e_string),
+                absent_regex=re.escape(m_string),
+                require_username=False,
+                id_namespace=key,
+                site_tier=2 if category in _TIER2_CATEGORIES else 3,
+                notes=f"WhatsMyName CC BY-SA 4.0 ({category})",
+            )
+        )
+
+    result.sort(key=lambda spec: (spec.site_tier, spec.key))
+    return result
+
+
+WMN_SITES: list[SiteSpec] = []
