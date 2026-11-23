@@ -556,3 +556,38 @@ async def test_openalex_no_authors_is_not_error():
         obs = await conn.run(task, make_ctx())
     assert obs[0].error is None
     assert obs[0].data["exists"] is False
+
+
+@pytest.mark.asyncio
+async def test_hackernews_algolia_activity_enrichment():
+    conn = HackerNewsConnector(http_client=HttpClient(enable_ssrf_guard=False))
+    html = """
+    <html><body><table>
+      <tr><td>created:</td><td>2020-01-01</td></tr>
+      <tr><td>karma:</td><td>42</td></tr>
+    </table></body></html>
+    """
+    with respx.mock(assert_all_called=False) as router:
+        router.get(
+            "https://news.ycombinator.com/user", params={"id": "hnuser"}
+        ).respond(200, text=html)
+        router.get(url__regex=r"https://hn\.algolia\.com/api/v1/search\?.*").respond(
+            200,
+            json={
+                "nbHits": 7,
+                "hits": [
+                    {
+                        "title": "Show HN",
+                        "created_at": "2026-11-01T10:00:00Z",
+                        "objectID": "1",
+                    }
+                ],
+            },
+        )
+        obs = await conn.run(
+            make_task("hackernews", Platform.HACKERNEWS, username="hnuser"),
+            make_ctx(),
+        )
+    assert obs[0].data["activity_count"] == 7
+    assert obs[0].data["latest_activity"] == "2026-11-01T10:00:00Z"
+    assert obs[0].data["recent_items"][0]["title"] == "Show HN"

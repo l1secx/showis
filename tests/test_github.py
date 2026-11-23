@@ -164,3 +164,19 @@ async def test_github_run_rate_limited(github_connector: GitHubConnector):
         assert len(obs_list) == 1
         obs = obs_list[0]
         assert obs.blocked is True or obs.error is not None
+
+
+@pytest.mark.asyncio
+async def test_github_hint_email_plans_commit_search(github_connector: GitHubConnector):
+    ctx = ScanContext(
+        case_id="c-1",
+        scan_id="s-email-hint",
+        target=Target(
+            first_name="Kerem", last_name="Boz", hints={"email": "Kerem@Example.com"}
+        ),
+        seeds=[],
+    )
+    tasks = await github_connector.plan(ctx)
+    commits = [t for t in tasks if t.kind == "search_commits"]
+    assert len(commits) == 1
+    assert commits[0].params["email"] == "kerem@example.com"

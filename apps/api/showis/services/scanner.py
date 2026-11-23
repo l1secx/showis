@@ -222,6 +222,156 @@ def _merge_entity(dst: Entity, src: Entity) -> None:
         dst.url = src.url
 
 
+#: Keşfedilen profil bağlantılarından açılabilecek derin connector'lar.
+#: Site-check'e genişletilmez: her yeni ad 83 site isteği demek olurdu.
+_PIVOT_CONNECTORS: dict[str, tuple[str, str]] = {
+    "github": ("github", "get_user"),
+    "gitlab": ("gitlab", "fetch_profile"),
+    "keybase": ("keybase", "fetch_profile"),
+    "reddit": ("reddit", "fetch_profile"),
+    "hackernews": ("hackernews", "fetch_profile"),
+    "medium": ("medium", "fetch_profile"),
+    "bluesky": ("bluesky", "fetch_profile"),
+    "mastodon": ("mastodon", "fetch_profile"),
+    "huggingface": ("huggingface", "fetch_profile"),
+    "npm": ("npm", "fetch_profile"),
+    "pypi": ("pypi", "fetch_profile"),
+    "dockerhub": ("dockerhub", "fetch_profile"),
+    "devto": ("devto", "fetch_profile"),
+    "chess": ("chess", "fetch_profile"),
+    "steam": ("steam", "fetch_profile"),
+    "leetcode": ("leetcode", "fetch_profile"),
+    "codeforces": ("codeforces", "fetch_profile"),
+    "stackoverflow": ("stackoverflow", "fetch_profile"),
+    "bitbucket": ("bitbucket", "fetch_profile"),
+    "codeberg": ("codeberg", "fetch_profile"),
+    "soundcloud": ("soundcloud", "fetch_profile"),
+    "kitsu": ("kitsu", "fetch_profile"),
+    "wordpress": ("wordpress", "fetch_profile"),
+    "gravatar": ("gravatar", "fetch_profile"),
+}
+
+#: Sosyal/proof anahtarı → platform adı (yalnız derin connector'ı olanlar).
+_PIVOT_SOCIAL_ALIASES: dict[str, str] = {
+    "github": "github",
+    "gitlab": "gitlab",
+    "keybase": "keybase",
+    "reddit": "reddit",
+    "hackernews": "hackernews",
+    "medium": "medium",
+    "bluesky": "bluesky",
+    "mastodon": "mastodon",
+    "huggingface": "huggingface",
+    "npm": "npm",
+    "pypi": "pypi",
+    "dockerhub": "dockerhub",
+    "devto": "devto",
+    "steam": "steam",
+    "leetcode": "leetcode",
+    "codeforces": "codeforces",
+    "stackoverflow": "stackoverflow",
+    "bitbucket": "bitbucket",
+    "codeberg": "codeberg",
+    "soundcloud": "soundcloud",
+}
+
+_PIVOT_USERNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+@dataclass(frozen=True)
+class _PivotCandidate:
+    connector: str
+    kind: str
+    username: str
+
+
+def _pivot_username(value: Any) -> str | None:
+    text = str(value or "").strip().lstrip("@").strip().lower()
+    if text and _PIVOT_USERNAME_RE.match(text):
+        return text
+    return None
+
+
+def build_pivot_candidates(
+    entities: list[Entity],
+    known: set[tuple[str, str]],
+    *,
+    max_candidates: int = 5,
+) -> list[_PivotCandidate]:
+    """Entity'lerdeki doğrulanmış profil bağlantılarından yeni hedefler çıkarır."""
+    if max_candidates <= 0:
+        return []
+
+    found: list[_PivotCandidate] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(platform_key: str, username: Any) -> None:
+        platform_key = str(platform_key or "").strip().lower()
+        mapped = _PIVOT_SOCIAL_ALIASES.get(platform_key)
+        if not mapped:
+            return
+        uname = _pivot_username(username)
+        if not uname:
+            return
+        connector, kind = _PIVOT_CONNECTORS[mapped]
+        key = (connector, uname)
+        if key in known or key in seen:
+            return
+        seen.add(key)
+        found.append(_PivotCandidate(connector=connector, kind=kind, username=uname))
+
+    for entity in entities:
+        attrs = entity.attributes or {}
+
+        # 1) Açık URL alanları (links, github_link, twitter_link, ...)
+        urls: list[str] = []
+        raw_links = attrs.get("links")
+        if isinstance(raw_links, list):
+            urls.extend(str(item) for item in raw_links if item)
+        for key, value in attrs.items():
+            if isinstance(value, str) and ("_link" in key or key in ("url", "website")):
+                urls.append(value)
+        for url in urls:
+            platform, subject = extract_platform_from_url(url)
+            if subject:
+                add(platform.value, subject)
+
+        # 2) Keybase/Gravatar proof & sosyal eşlemeleri
+        social = attrs.get("social")
+        if isinstance(social, dict):
+            for platform_key, username in social.items():
+                add(str(platform_key), username)
+        proofs = attrs.get("proofs")
+        if isinstance(proofs, list):
+            for proof in proofs:
+                if isinstance(proof, dict):
+                    add(str(proof.get("type") or ""), proof.get("nametag"))
+        linked = attrs.get("linked_accounts")
+        if isinstance(linked, list):
+            for account in linked:
+                if not isinstance(account, dict):
+                    continue
+                domain = str(account.get("domain") or "").lower()
+                for platform_key in _PIVOT_SOCIAL_ALIASES:
+                    if platform_key in domain:
+                        add(platform_key, account.get("username"))
+                        break
+        accounts = attrs.get("accounts")
+        if isinstance(accounts, list):
+            for account in accounts:
+                if not isinstance(account, dict):
+                    continue
+                for platform_key in _PIVOT_SOCIAL_ALIASES:
+                    if platform_key in str(account.get("domain") or "").lower():
+                        add(platform_key, account.get("username"))
+                        break
+
+        if len(found) >= max_candidates:
+            break
+
+    return found[:max_candidates]
+
+
 def _planner_query_key(text: str) -> str:
     """Tekillestirme anahtari: bosluklar tekillesir, buyuk/kucuk harf katlanir."""
     return " ".join(str(text or "").split()).casefold()
@@ -862,6 +1012,24 @@ class ScannerService:
         seen_task_ids: set[str] = set()
         pending: deque[DbTask] = deque()
         inflight: dict[asyncio.Task[_TaskOutcome], tuple[DbTask, TaskSpec, Any]] = {}
+        #: Recursive pivot: keşfedilen kimlik bağlantılarından yeni görevler.
+        #: Toplam sayı moda göre sınırlıdır; her yeni ad 83 site taraması değil,
+        #: yalnızca bağlantının geldiği derin connector'da doğrulanır.
+        pivot_known: set[tuple[str, str]] = set()
+        pivot_added = 0
+        pivot_cap = 2 if str(scan.mode).upper() == "O1" else 5
+        existing_tasks = (
+            await db.execute(
+                select(DbTask.connector, DbTask.params).where(DbTask.scan_id == scan_id)
+            )
+        ).all()
+        for existing_connector, existing_params in existing_tasks:
+            params = existing_params or {}
+            for key in ("username", "id", "hash"):
+                value = _pivot_username(params.get(key))
+                if value:
+                    pivot_known.add((str(existing_connector), value))
+                    break
 
         def _elapsed() -> float:
             if not started_at:
@@ -952,6 +1120,58 @@ class ScannerService:
                     matched,
                 )
             return None
+
+        async def _queue_pivots(entities: list[Entity]) -> None:
+            """Doğrulanmış cross-link'lerden yeni connector görevleri ekler."""
+            nonlocal pivot_added
+            remaining = pivot_cap - pivot_added
+            if remaining <= 0:
+                return
+            available_budget = budget.max_tasks - (stats.executed + len(inflight))
+            remaining = min(remaining, max(0, available_budget))
+            if remaining <= 0:
+                return
+
+            candidates = build_pivot_candidates(entities, pivot_known, max_candidates=remaining)
+            if not candidates:
+                return
+
+            queued = 0
+            for candidate in candidates:
+                connector = next(
+                    (c for c in self.connectors if c.name == candidate.connector), None
+                )
+                if connector is None:
+                    continue
+                platform = getattr(connector, "platform", Platform.WEB)
+                db.add(
+                    DbTask(
+                        id=str(uuid.uuid4()),
+                        scan_id=scan_id,
+                        connector=candidate.connector,
+                        platform=platform.value,
+                        kind=candidate.kind,
+                        params={"username": candidate.username},
+                        priority=3,
+                        status="pending",
+                    )
+                )
+                pivot_known.add((candidate.connector, candidate.username))
+                queued += 1
+                pivot_added += 1
+
+            if queued:
+                await db.commit()
+                await event_broadcaster.broadcast(
+                    scan_id,
+                    "log",
+                    {
+                        "message": (
+                            f"Keşfedilen profil bağlantılarından {queued} yeni "
+                            "doğrulama görevi eklendi."
+                        )
+                    },
+                )
 
         async def _persist(
             db_task: DbTask, spec: TaskSpec, connector: Any, outcome: _TaskOutcome
@@ -1076,6 +1296,10 @@ class ScannerService:
             edge_map.update(pending_edges)
             stats.total_observations += new_observations
             stats.http_requests += max(1, outcome.requests)
+
+            # Recursive pivot: yeni profillerdeki doğrulanmış bağlantıları,
+            # bütçe sınırı içinde ek doğrulama görevlerine çevir.
+            await _queue_pivots(list(pending_entities.values()))
 
             # Artimli skorlama: bulgular tarama bitmeden Bulgular sekmesine duser
             if stats.executed % 10 == 0:

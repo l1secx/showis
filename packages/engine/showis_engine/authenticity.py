@@ -90,6 +90,7 @@ _ACTIVITY_KEYS: dict[str, float] = {
     "gists": 1.0,
     "contributions": 1.0,
     "contribution_count": 1.0,
+    "activity_count": 1.0,
     "total_karma": 0.01,  # 100 karma = 1 birim
     "karma": 0.01,
     "followers": 0.1,  # 10 takipçi = 1 birim

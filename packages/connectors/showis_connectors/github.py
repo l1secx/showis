@@ -82,6 +82,24 @@ class GitHubConnector:
                     )
                 )
 
+        # Hedef ipucundaki e-posta da kesin bir kimlik anahtarıdır: commit
+        # aramasında kullanılır (seed e-postasıyla aynı uç).
+        hint_email = str((target.hints or {}).get("email") or "").strip().lower()
+        if hint_email and all(
+            str((task.params or {}).get("email") or "").lower() != hint_email
+            for task in tasks
+        ):
+            tasks.append(
+                TaskSpec(
+                    id=str(uuid.uuid4()),
+                    connector=self.name,
+                    platform=self.platform,
+                    kind="search_commits",
+                    params={"email": hint_email},
+                    priority=2,
+                )
+            )
+
         # 2. Identity query search (ad-soyad veya nick)
         # T-377 (SEC-10): ipucu metni guvenilmez; tirnak/operator enjeksiyonu
         # `sanitize_hint` ile notralize edilir (tek kaynak: showis_engine.planner).

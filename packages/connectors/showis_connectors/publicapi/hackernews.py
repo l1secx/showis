@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from typing import Any
+from urllib.parse import quote
 
 from showis_contracts import Platform, RiskTier
 from showis_engine.htmlutil import strip_html
@@ -60,6 +61,34 @@ class HackerNewsConnector(PublicProfileConnector):
             "karma": karma,
             "about": _cell(html, "about"),
         }
+        # Anahtarsız HN Algolia API'si: son gönderi/yorum etkinliği. Profil
+        # sayfası çekilemezse bile bu ikinci kaynak kanıt kalitesini artırır.
+        try:
+            activity_url = (
+                "https://hn.algolia.com/api/v1/search"
+                f"?tags=author_{quote(identifier, safe='')}&hitsPerPage=10"
+            )
+            activity_resp = await self.http_client.get(
+                activity_url,
+                headers={"Accept": "application/json"},
+                check_robots=False,
+                follow_redirects=True,
+            )
+            if activity_resp.status_code == 200:
+                payload = activity_resp.json()
+                hits = payload.get("hits") or []
+                data["activity_count"] = int(payload.get("nbHits") or 0)
+                data["latest_activity"] = hits[0].get("created_at") if hits else None
+                data["recent_items"] = [
+                    {
+                        "title": hit.get("title") or hit.get("story_title"),
+                        "created_at": hit.get("created_at"),
+                        "object_id": hit.get("objectID"),
+                    }
+                    for hit in hits[:5]
+                ]
+        except Exception:  # pragma: no cover - opsiyonel zenginleştirme
+            pass
         return ProfileFetch(
             url=url,
             data=data,
