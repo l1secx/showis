@@ -906,6 +906,10 @@ class ScannerService:
 
         # Final durum: KOSULLU UPDATE — DB'de `cancelled` yazildiysa `completed`
         # ile ezilmez (SEC-06). Istatistikler her durumda yazilir.
+        # Tarama anlık görüntüsü: sonraki taramayla diff/alarm için.
+        snapshot_findings = (
+            await db.execute(select(DbFinding).where(DbFinding.case_id == case.id))
+        ).scalars().all()
         stats_payload = {
             "executed_tasks": executed_tasks_count,
             "http_requests": http_requests_count,
@@ -916,6 +920,21 @@ class ScannerService:
             "total_findings": len(all_entities),
             "skipped_tasks": len(leftover),
             "cancelled_tasks": run_stats.cancelled_tasks,
+            "snapshot": {
+                "findings": [
+                    {
+                        "id": finding.id,
+                        "entity_id": finding.entity_id,
+                        "platform": finding.platform,
+                        "label": finding.label,
+                        "status": finding.status,
+                        "score": finding.score,
+                    }
+                    for finding in snapshot_findings
+                ],
+                "entity_ids": sorted(entity_map.keys()),
+                "edge_ids": sorted(edge_map.keys()),
+            },
             # T-333: LLM çağrı/hata/devre kesici sayacları (süreç geneli anlık görüntü)
             **llm_stats(),
         }

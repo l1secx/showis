@@ -199,6 +199,28 @@ export interface AuditEntry {
   created_at?: string | null;
 }
 
+export interface CaseMonitor {
+  enabled: boolean;
+  interval_hours: number;
+  mode: string;
+  last_scan_at?: string | null;
+}
+
+export interface CaseDiff {
+  available: boolean;
+  reason?: string;
+  from_scan?: string | null;
+  to_scan?: string | null;
+  findings?: {
+    new: FindingItem[];
+    removed: FindingItem[];
+    changed: { id: string; before: FindingItem; after: FindingItem }[];
+  };
+  entities?: { added: string[]; removed: string[] };
+  edges?: { added: string[]; removed: string[] };
+  counts?: Record<string, number>;
+}
+
 export interface ReportInfo {
   id: string;
   case_id: string;
@@ -307,6 +329,10 @@ export const api = {
   getEvidence: (findingId: string) => req<{ finding_id: string; evidence: EvidenceItem[] }>(`/findings/${findingId}/evidence`),
   getGraph: (caseId: string) => req<GraphData>(`/cases/${caseId}/graph`),
   getAudit: (caseId: string) => req<AuditEntry[]>(`/cases/${caseId}/audit`),
+  getMonitor: (caseId: string) => req<CaseMonitor>(`/cases/${caseId}/monitor`),
+  updateMonitor: (caseId: string, body: { enabled: boolean; interval_hours: number; mode: string }) =>
+    req<CaseMonitor>(`/cases/${caseId}/monitor`, { method: "PATCH", body: JSON.stringify(body) }),
+  getDiff: (caseId: string) => req<CaseDiff>(`/cases/${caseId}/diff`),
   exportCase: (caseId: string) => req<any>(`/cases/${caseId}/export`),
   createReport: (caseId: string, format: "json" | "pdf" | "html") =>
     req<ReportInfo>(`/cases/${caseId}/report`, { method: "POST", body: JSON.stringify({ format }) }),

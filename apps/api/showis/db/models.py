@@ -59,6 +59,13 @@ class Case(Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="active")
     retention_days: Mapped[int] = mapped_column(Integer, default=30)
+    #: Otomatik yeniden tarama (monitoring). Kapalı varsayılan.
+    monitor_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    monitor_interval_hours: Mapped[int] = mapped_column(Integer, default=24, server_default="24")
+    monitor_mode: Mapped[str] = mapped_column(String(16), default="O2", server_default="O2")
+    monitor_last_scan_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

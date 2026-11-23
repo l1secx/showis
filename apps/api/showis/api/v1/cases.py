@@ -248,6 +248,12 @@ class CaseCreateRequest(BaseModel):
     seeds: list[SeedInput] = Field(default_factory=list, max_length=20)
 
 
+class MonitorPatch(BaseModel):
+    enabled: bool
+    interval_hours: int = Field(default=24, ge=1, le=168)
+    mode: Literal["O1", "O2", "O3", "o1", "o2", "o3"] = "O2"
+
+
 class ScanStartRequest(BaseModel):
     mode: Literal["O1", "O2", "O3", "o1", "o2", "o3"] = "O2"
     #: Geriye dönük uyumlu alan: değerler mod profilinin üstüne çıkamaz,
@@ -1229,6 +1235,150 @@ def _parse_finding_platforms(raw: str | None) -> set[str]:
             ),
         )
     return values
+
+
+def _monitor_payload(case: Case) -> dict[str, Any]:
+    return {
+        "enabled": bool(case.monitor_enabled),
+        "interval_hours": int(case.monitor_interval_hours or 24),
+        "mode": case.monitor_mode or "O2",
+        "last_scan_at": (
+            case.monitor_last_scan_at.isoformat() if case.monitor_last_scan_at else None
+        ),
+    }
+
+
+@router.get("/{case_id}/monitor")
+async def get_case_monitor(case_id: str, db: AsyncSession = Depends(get_db)):
+    case = (await db.execute(select(Case).where(Case.id == case_id))).scalar_one_or_none()
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+    return _monitor_payload(case)
+
+
+@router.patch("/{case_id}/monitor")
+async def update_case_monitor(
+    case_id: str,
+    payload: MonitorPatch,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    case = (await db.execute(select(Case).where(Case.id == case_id))).scalar_one_or_none()
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+    case.monitor_enabled = payload.enabled
+    case.monitor_interval_hours = payload.interval_hours
+    case.monitor_mode = norm_mode(payload.mode)
+    await db.commit()
+    await db.refresh(case)
+    await record_request_audit(
+        db=db,
+        request=request,
+        action="monitor.update",
+        case_id=case.id,
+        target=f"Case: {case.name}",
+        details={
+            "enabled": bool(case.monitor_enabled),
+            "interval_hours": case.monitor_interval_hours,
+            "mode": case.monitor_mode,
+        },
+    )
+    return _monitor_payload(case)
+
+
+@router.get("/{case_id}/diff")
+async def get_case_diff(
+    case_id: str,
+    from_scan: str | None = Query(None),
+    to_scan: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """İki taramanın anlık görüntülerini karşılaştırır (yeni/çıkan/değişen)."""
+    case = (await db.execute(select(Case).where(Case.id == case_id))).scalar_one_or_none()
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    async def _load(scan_id: str | None) -> Scan | None:
+        if scan_id:
+            return (
+                await db.execute(
+                    select(Scan).where(Scan.id == scan_id, Scan.case_id == case_id)
+                )
+            ).scalar_one_or_none()
+        rows = (
+            await db.execute(
+                select(Scan)
+                .where(Scan.case_id == case_id, Scan.status == "completed")
+                .order_by(Scan.created_at.desc())
+                .limit(1)
+            )
+        ).scalars().all()
+        return rows[0] if rows else None
+
+    to_row = await _load(to_scan)
+    if to_row is None:
+        return {"available": False, "reason": "no_completed_scan"}
+    if from_scan:
+        from_row = await _load(from_scan)
+    else:
+        rows = (
+            await db.execute(
+                select(Scan)
+                .where(
+                    Scan.case_id == case_id,
+                    Scan.status == "completed",
+                    Scan.id != to_row.id,
+                )
+                .order_by(Scan.created_at.desc())
+                .limit(1)
+            )
+        ).scalars().all()
+        from_row = rows[0] if rows else None
+
+    old = (from_row.stats or {}).get("snapshot") if from_row else None
+    new = (to_row.stats or {}).get("snapshot")
+    if not new:
+        return {"available": False, "reason": "snapshot_missing", "to_scan": to_row.id}
+
+    old_findings = {item["id"]: item for item in (old or {}).get("findings", [])}
+    new_findings = {item["id"]: item for item in new.get("findings", [])}
+    changed = []
+    for finding_id in sorted(set(old_findings) & set(new_findings)):
+        before, after = old_findings[finding_id], new_findings[finding_id]
+        if before.get("status") != after.get("status") or before.get("score") != after.get("score"):
+            changed.append({"id": finding_id, "before": before, "after": after})
+
+    old_entities = set((old or {}).get("entity_ids", []))
+    new_entities = set(new.get("entity_ids", []))
+    old_edges = set((old or {}).get("edge_ids", []))
+    new_edges = set(new.get("edge_ids", []))
+
+    return {
+        "available": True,
+        "case_id": case_id,
+        "from_scan": from_row.id if from_row else None,
+        "to_scan": to_row.id,
+        "findings": {
+            "new": [new_findings[i] for i in sorted(set(new_findings) - set(old_findings))],
+            "removed": [old_findings[i] for i in sorted(set(old_findings) - set(new_findings))],
+            "changed": changed,
+        },
+        "entities": {
+            "added": sorted(new_entities - old_entities),
+            "removed": sorted(old_entities - new_entities),
+        },
+        "edges": {
+            "added": sorted(new_edges - old_edges),
+            "removed": sorted(old_edges - new_edges),
+        },
+        "counts": {
+            "findings_new": len(set(new_findings) - set(old_findings)),
+            "findings_removed": len(set(old_findings) - set(new_findings)),
+            "findings_changed": len(changed),
+            "entities_added": len(new_entities - old_entities),
+            "edges_added": len(new_edges - old_edges),
+        },
+    }
 
 
 @router.get("/{case_id}/findings")

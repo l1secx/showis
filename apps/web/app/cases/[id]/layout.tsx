@@ -12,6 +12,7 @@ const TABS = [
   { key: "findings", label: "Bulgular", href: "findings" },
   { key: "graph", label: "Grafik", href: "graph" },
   { key: "report", label: "Rapor", href: "report" },
+  { key: "diff", label: "Değişim", href: "diff" },
   { key: "audit", label: "Denetim", href: "audit" },
 ];
 
@@ -187,7 +188,7 @@ export default function CaseLayout({ children }: { children: React.ReactNode }) 
 
         {/* Sekmeler */}
         <div>
-          <div className="flex gap-6 border-b border-line">
+          <div className="scroll-x flex gap-6 border-b border-line">
             {TABS.map((t) => {
               const href = `${base}/${t.href}`;
               const active = pathname === href || pathname === `${href}/`;

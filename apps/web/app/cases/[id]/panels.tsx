@@ -23,6 +23,8 @@ import {
 import {
   api,
   type AuditEntry,
+  type CaseDiff,
+  type CaseMonitor,
   type EvidenceItem,
   type FindingItem,
   type ReportInfo,
@@ -121,6 +123,32 @@ export function ScanTab({
     useScanSession();
   const [now, setNow] = useState(() => Date.now());
   const autoStarted = useRef(false);
+  const [monitor, setMonitor] = useState<CaseMonitor | null>(null);
+  const [monitorBusy, setMonitorBusy] = useState(false);
+
+  useEffect(() => {
+    api.getMonitor(caseId).then(setMonitor).catch(() => setMonitor(null));
+  }, [caseId]);
+
+  const saveMonitor = async (patch: Partial<CaseMonitor>) => {
+    if (!monitor || monitorBusy) return;
+    const next = { ...monitor, ...patch };
+    setMonitor(next);
+    setMonitorBusy(true);
+    try {
+      setMonitor(
+        await api.updateMonitor(caseId, {
+          enabled: next.enabled,
+          interval_hours: Number(next.interval_hours),
+          mode: next.mode,
+        })
+      );
+    } catch {
+      api.getMonitor(caseId).then(setMonitor).catch(() => {});
+    } finally {
+      setMonitorBusy(false);
+    }
+  };
 
   // Modu URL'den bir kez uygula.
   useEffect(() => {
@@ -154,6 +182,68 @@ export function ScanTab({
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
       <div className="space-y-5 lg:col-span-3">
+        {monitor && (
+          <section className="panel">
+            <div className="panel-head">
+              <h2 className="panel-title">Otomatik izleme</h2>
+              <span className={monitor.enabled ? "status text-ok" : "status text-ink-3"}>
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${monitor.enabled ? "bg-ok" : "bg-ink-4"}`}
+                  aria-hidden
+                />
+                {monitor.enabled ? "açık" : "kapalı"}
+              </span>
+            </div>
+            <div className="flex flex-wrap items-end gap-4 p-5">
+              <label className="flex cursor-pointer items-center gap-2 text-[12.5px] text-ink-2">
+                <input
+                  type="checkbox"
+                  checked={monitor.enabled}
+                  disabled={monitorBusy}
+                  onChange={(e) => void saveMonitor({ enabled: e.target.checked })}
+                  className="h-3.5 w-3.5 rounded-[3px] accent-[rgb(var(--accent))]"
+                />
+                Vakayı düzenli olarak yeniden tara
+              </label>
+              <label className="flex items-center gap-2 text-[12px] text-ink-3">
+                Aralık
+                <select
+                  value={monitor.interval_hours}
+                  disabled={monitorBusy || !monitor.enabled}
+                  onChange={(e) =>
+                    void saveMonitor({ interval_hours: Number(e.target.value) })
+                  }
+                  className="select w-auto py-1 text-[12px]"
+                >
+                  <option value={6}>6 saat</option>
+                  <option value={12}>12 saat</option>
+                  <option value={24}>24 saat</option>
+                  <option value={72}>3 gün</option>
+                  <option value={168}>7 gün</option>
+                </select>
+              </label>
+              <label className="flex items-center gap-2 text-[12px] text-ink-3">
+                Mod
+                <select
+                  value={monitor.mode}
+                  disabled={monitorBusy || !monitor.enabled}
+                  onChange={(e) => void saveMonitor({ mode: e.target.value })}
+                  className="select w-auto py-1 text-[12px]"
+                >
+                  <option value="O1">O1</option>
+                  <option value="O2">O2</option>
+                  <option value="O3">O3</option>
+                </select>
+              </label>
+              <p className="ml-auto text-[11.5px] text-ink-3">
+                {monitor.last_scan_at
+                  ? `Son izleme: ${new Date(monitor.last_scan_at).toLocaleString("tr-TR")}`
+                  : "Henüz izleme taraması yok"}
+              </p>
+            </div>
+          </section>
+        )}
+
         {/* Tarama modu */}
         <section className="panel">
           <div className="panel-head">
@@ -2297,6 +2387,129 @@ export function ReportTab({ caseId }: { caseId: string }) {
       )}
 
       {summary && hasSections && <ReportSummary data={summary} />}
+    </div>
+  );
+}
+
+/* ---------------- Değişim sekmesi ---------------- */
+
+export function DiffTab({ caseId }: { caseId: string }) {
+  const [diff, setDiff] = useState<CaseDiff | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.getDiff(caseId).then(setDiff).catch((e) => setError(e.message));
+  }, [caseId]);
+
+  if (error)
+    return (
+      <p role="alert" className="rounded-[6px] border border-danger-line bg-danger-soft px-4 py-3 text-[13px] text-danger">
+        Değişim yüklenemedi: {error}
+      </p>
+    );
+  if (!diff)
+    return (
+      <p className="panel flex items-center gap-2 px-5 py-6 text-[13px] text-ink-3">
+        <Loader2 size={14} className="animate-spin" aria-hidden />
+        Değişim hesaplanıyor
+      </p>
+    );
+  if (!diff.available)
+    return (
+      <div className="panel px-5 py-8 text-[13px] text-ink-3">
+        Karşılaştırılabilir iki tarama anlık görüntüsü yok.
+        <p className="mt-1 text-[12px]">
+          En az iki tamamlanmış tarama sonrası bu sekme yeni, çıkan ve değişen
+          bulguları gösterir.
+        </p>
+      </div>
+    );
+
+  const findings = diff.findings ?? { new: [], removed: [], changed: [] };
+  const counts = diff.counts ?? {};
+  return (
+    <div className="space-y-5">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+        {[
+          ["Yeni bulgu", counts.findings_new ?? 0],
+          ["Çıkan bulgu", counts.findings_removed ?? 0],
+          ["Değişen", counts.findings_changed ?? 0],
+          ["Yeni entity", counts.entities_added ?? 0],
+          ["Yeni kenar", counts.edges_added ?? 0],
+        ].map(([label, value]) => (
+          <div key={String(label)} className="panel px-3 py-3">
+            <p className="text-[11.5px] text-ink-3">{label}</p>
+            <p className="numeric mt-1 text-[19px] font-semibold text-ink">{value}</p>
+          </div>
+        ))}
+      </div>
+
+      <p className="numeric text-[11.5px] text-ink-3">
+        {diff.from_scan ? `Önceki: ${diff.from_scan.slice(0, 8)}` : "Önceki tarama yok"} →{" "}
+        {diff.to_scan ? `Güncel: ${diff.to_scan.slice(0, 8)}` : "—"}
+      </p>
+
+      {(
+        [
+          ["Yeni bulgular", findings.new],
+          ["Çıkan bulgular", findings.removed],
+        ] as const
+      ).map(([title, rows]) => (
+        <section key={title} className="panel overflow-hidden">
+          <header className="border-b border-line bg-sunken px-4 py-2.5">
+            <span className="text-[12.5px] font-semibold text-ink">{title}</span>
+            <span className="numeric ml-2 text-[12px] text-ink-3">{rows.length}</span>
+          </header>
+          {rows.length === 0 ? (
+            <p className="px-4 py-3 text-[12px] text-ink-3">Kayıt yok.</p>
+          ) : (
+            <ul className="divide-y divide-line">
+              {rows.map((finding) => (
+                <li key={finding.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 text-[12.5px]">
+                  <Link
+                    href={`/cases/${caseId}/findings?entity=${encodeURIComponent(finding.entity_id)}`}
+                    className="font-medium text-ink hover:text-accent-ink"
+                  >
+                    {finding.label}
+                  </Link>
+                  <PlatformBadge platform={finding.platform} />
+                  <Badge value={finding.status} />
+                  <span className="numeric ml-auto text-ink-3">
+                    {Math.round(finding.score * 100)}%
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      ))}
+
+      <section className="panel overflow-hidden">
+        <header className="border-b border-line bg-sunken px-4 py-2.5">
+          <span className="text-[12.5px] font-semibold text-ink">Durum/skor değişenler</span>
+          <span className="numeric ml-2 text-[12px] text-ink-3">{findings.changed.length}</span>
+        </header>
+        {findings.changed.length === 0 ? (
+          <p className="px-4 py-3 text-[12px] text-ink-3">Kayıt yok.</p>
+        ) : (
+          <ul className="divide-y divide-line">
+            {findings.changed.map(({ id, before, after }) => (
+              <li key={id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 text-[12.5px]">
+                <Link
+                  href={`/cases/${caseId}/findings?entity=${encodeURIComponent(after.entity_id)}`}
+                  className="font-medium text-ink hover:text-accent-ink"
+                >
+                  {after.label}
+                </Link>
+                <span className="numeric text-ink-3">
+                  {before.status}/{Math.round(before.score * 100)}% →{" "}
+                  {after.status}/{Math.round(after.score * 100)}%
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </div>
   );
 }

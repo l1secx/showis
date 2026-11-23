@@ -74,6 +74,10 @@ celery_app.conf.update(
             "task": "showis.scan.recover",
             "schedule": RECOVERY_INTERVAL_SECONDS,
         },
+        "monitor-cases": {
+            "task": "showis.monitor.run",
+            "schedule": 300.0,
+        },
     },
 )
 
@@ -120,6 +124,21 @@ def retention_purge_task() -> dict:
             return await run_retention_purge(session)
 
     return asyncio.run(_run())
+
+
+@celery_app.task(name="showis.monitor.run")
+def monitor_run_task() -> dict:
+    """Zamanı gelen izleme vakaları için tarama oluşturur ve kuyruğa atar."""
+    from showis.services.monitor import create_due_monitor_scans
+
+    async def _run() -> list[str]:
+        async with task_session() as session:
+            return await create_due_monitor_scans(session)
+
+    scan_ids = asyncio.run(_run())
+    for scan_id in scan_ids:
+        _enqueue_scan(scan_id)
+    return {"created": len(scan_ids), "scan_ids": scan_ids}
 
 
 @celery_app.task(
