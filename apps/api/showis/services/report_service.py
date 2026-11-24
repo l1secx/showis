@@ -15,7 +15,11 @@ from showis.db.models import (
     Edge,
     Entity,
     Evidence,
+    EvidenceSnapshot,
     Finding,
+    Hypothesis,
+    PoolItem,
+    PoolRelation,
     Report,
     Scan,
     Target,
@@ -143,6 +147,122 @@ def _finding_public(f: Finding) -> dict[str, Any]:
     }
 
 
+REASONING_LIMITS = {"hypotheses": 20, "relations": 40, "contradictions": 30, "snapshots": 50}
+
+
+def _evidence_rows(entries: list[Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "rule": str(e.get("rule") or "")[:64],
+            "note": str(e.get("note") or "")[:200],
+            "weight": float(e.get("weight") or 0.0),
+        }
+        for e in entries or []
+        if isinstance(e, dict)
+    ]
+
+
+async def build_reasoning_block(db: AsyncSession, case_id: str) -> dict[str, Any]:
+    """Hipotezler, kanıt zinciri (aday/onaylı ilişkiler), çelişkiler ve arşiv özeti.
+
+    `proposed` ilişkiler kanıt zinciri sayılmaz; reddedilenler hiç girmez. Arşiv
+    metni rapora konmaz, yalnız URL + özet (sha256) listelenir.
+    """
+    hypotheses = (
+        (
+            await db.execute(
+                select(Hypothesis)
+                .where(Hypothesis.case_id == case_id, Hypothesis.status != "rejected")
+                .order_by(Hypothesis.confidence.desc())
+                .limit(REASONING_LIMITS["hypotheses"])
+            )
+        )
+        .scalars()
+        .all()
+    )
+    relations = (
+        (
+            await db.execute(
+                select(PoolRelation)
+                .where(PoolRelation.case_id == case_id, PoolRelation.status != "rejected")
+                .order_by(PoolRelation.confidence.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    labels = {
+        item_id: label
+        for item_id, label in (
+            await db.execute(select(PoolItem.id, PoolItem.label).where(PoolItem.case_id == case_id))
+        ).all()
+    }
+    snapshots = (
+        (
+            await db.execute(
+                select(EvidenceSnapshot)
+                .where(EvidenceSnapshot.case_id == case_id)
+                .order_by(EvidenceSnapshot.fetched_at.desc())
+                .limit(REASONING_LIMITS["snapshots"])
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    def name(item_id: str) -> str:
+        return str(labels.get(item_id) or item_id)
+
+    chain = [
+        {
+            "type": r.type,
+            "src": name(r.src_item_id),
+            "dst": name(r.dst_item_id),
+            "confidence": float(r.confidence or 0.0),
+            "status": r.status,
+            "evidence": _evidence_rows(r.evidence),
+        }
+        for r in relations
+        if r.type != "contradicts" and r.status in ("candidate", "confirmed")
+    ][: REASONING_LIMITS["relations"]]
+    conflicts = [
+        {
+            "src": name(r.src_item_id),
+            "dst": name(r.dst_item_id),
+            "status": r.status,
+            "message": "; ".join(e["note"] for e in _evidence_rows(r.evidence) if e["note"])
+            or "çelişki",
+        }
+        for r in relations
+        if r.type == "contradicts"
+    ][: REASONING_LIMITS["contradictions"]]
+    return {
+        "hypotheses": [
+            {
+                "statement": h.statement,
+                "confidence": float(h.confidence or 0.0),
+                "status": h.status,
+                "rationale": h.rationale or "",
+                "supporting": _evidence_rows(h.supporting),
+                "contradicting": _evidence_rows(h.contradicting),
+                "next_checks": [str(c)[:200] for c in (h.next_checks or [])[:5]],
+            }
+            for h in hypotheses
+        ],
+        "relations": chain,
+        "contradictions": conflicts,
+        "snapshots": [
+            {
+                "url": snap.url,
+                "title": snap.title,
+                "sha256": snap.sha256,
+                "fetched_at": snap.fetched_at.isoformat() if snap.fetched_at else None,
+            }
+            for snap in snapshots
+        ],
+    }
+
+
 async def build_report_data(db: AsyncSession, case_id: str) -> dict[str, Any]:
     case = (await db.execute(select(Case).where(Case.id == case_id))).scalar_one()
     target = (
@@ -258,6 +378,9 @@ async def build_report_data(db: AsyncSession, case_id: str) -> dict[str, Any]:
         },
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
+    reasoning = await build_reasoning_block(db, case_id)
+    if any(reasoning.values()):
+        data["reasoning"] = reasoning
     # T-313: karar-odakli bolumler (executive summary, platform dagilimi,
     # kimlik/capraz baglanti, kronoloji, kanit ozeti) — JSON'a eklenir,
     # mevcut alanlar korunur (geriye uyumlu).

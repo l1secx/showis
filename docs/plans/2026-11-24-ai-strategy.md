@@ -105,7 +105,11 @@ Sonnet 5.5 (medium effort) arka plan ajanına verilecek; sıra:
 6. **Faz 5:** telefon pivotu (E.164 normalize, ülke çıkarımı, herkese açık aramalar), avatar dHash'in havuz geneline yayılması, kayıtlı izleme (yeni sızıntı/hesap → bildirim; Celery beat varsa onunla), PDF/HTML raporda hipotez + kanıt zinciri + çelişki bölümü.
 7. **Ortama bağlı test:** `test_rapor_silme_basarisizsa_audit_yazilir` root'ta `chmod` ile hata üretemiyor; testi atlamadan silme çağrısını monkeypatch ile hata fırlatacak şekilde düzelt, böylece `make gate` yeşile döner.
 
-**Durum (limit kesintisi sonrası):** 7, 1, 2, 3 tamam ve push'landı (f3ed8f1, 05da362, fdfb970, 51ad6ff). 4 (kanıt arşivi) yarıda, commit'lenmemiş: `0022_evidence_snapshots.py`, `services/evidence_archive.py`, models/research/pivots/retention değişiklikleri. Devam: aynı Sonnet 5.5 ajanı SendMessage ile kaldığı yerden sürdürür → 4'ü bitir + test + commit, sonra 5 ve 6.
+**Durum:** 1–7 tamam; `make gate` yeşil (canlı E2E hariç).
+- 4 Kanıt arşivi: `0022_evidence_snapshots`, `evidence_archive`, `/evidence/snapshots` uçları, atıf→snapshot bağı, saklama süresi temizliği, web "Kanıt" görünümü, `test_evidence_archive.py`.
+- 5 Korelasyon YAML: `services/reasoning/rules.yaml` + `load_rules/parse_rules` (geçersiz dosya → Python varsayılanları), `shared_attribute` bildirimsel kural türü, `test_correlation_rules.py`. `pyyaml` bağımlılık + `infra/requirements.lock`.
+- 6 Faz 5: telefon (`services/phone.py`, `phone_normalize`/`phone_search` pivotları, `same_phone` kuralı); avatar dHash yayılımı (`reasoning/avatars.py`, `avatar_hash` pivotu, `POST .../reasoning/avatars/hash`, `same_avatar` Hamming ≤ 6 + düz renk/kalabalık dışlama); kayıtlı izleme (`0023_watch_alerts`, `services/watch.py`, `/watch/*` uçları, Celery beat `showis.watch.run` 6 saatte bir, vaka webhook'u, web "İzleme"); rapora "Hipotezler, Kanıt Zinciri ve Çelişkiler" bölümü (HTML/PDF/JSON; `proposed` ilişkiler kanıt zinciri sayılmaz).
+- Kalan (kullanıcı makinesinde): `make docker-rebuild` + migration `0022`, `0023` uygulaması, `bash scripts/final_gate.sh --live`, UI'da canlı doğrulama. Ajan Docker/gerçek API çalıştıramaz.
 
 Kurallar: AGENTS.md, ağ mock'lu testler, `make schemas`, her yeşil dilimde commit + push, PR yok. Canlı doğrulama (Docker, gerçek API'ler) kullanıcının makinesinde yapılacak; ajan yapamaz.
 

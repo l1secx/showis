@@ -510,7 +510,57 @@ doğrultusunda kullanılabilir.</p>
   <tr><th>Saklama bitişi</th><td>{{ sections.evidence_summary.retention_until or "-" }}</td></tr>
 </table>
 
-<h2>7. Sınırlamalar</h2>
+{% if report.reasoning %}
+<h2>7. Hipotezler, Kanıt Zinciri ve Çelişkiler</h2>
+<p class="muted">Hipotez skorları kanıtlardan hesaplanır. Yalnızca aday/onaylı ilişkiler
+kanıt zinciri sayılır; öneri düzeyindekiler dahil edilmez.</p>
+{% for hyp in report.reasoning.hypotheses %}
+<p><b>{{ hyp.statement }}</b> — güven {{ "%.2f"|format(hyp.confidence) }}
+   <span class="muted">({{ hyp.status }})</span></p>
+{% if hyp.rationale %}<p class="muted">{{ hyp.rationale }}</p>{% endif %}
+{% if hyp.supporting %}<p class="muted">Destekleyen:
+  {% for e in hyp.supporting %}
+  {{ e.note or e.rule }} (+{{ "%.1f"|format(e.weight) }}){{ "; " if not loop.last }}
+  {% endfor %}</p>{% endif %}
+{% if hyp.contradicting %}<p class="muted">Çelişen:
+  {% for e in hyp.contradicting %}
+  {{ e.note or e.rule }} (−{{ "%.1f"|format(e.weight) }}){{ "; " if not loop.last }}
+  {% endfor %}</p>{% endif %}
+{% if hyp.next_checks %}<p class="muted">Sonraki kontroller:
+  {{ hyp.next_checks|join("; ") }}</p>{% endif %}
+{% else %}<p>Hipotez yok.</p>{% endfor %}
+{% if report.reasoning.relations %}
+<table>
+  <tr><th>İlişki</th><th>Kaynak</th><th>Hedef</th><th>Güven</th><th>Durum</th><th>Kanıt</th></tr>
+  {% for rel in report.reasoning.relations %}
+  <tr><td>{{ rel.type }}</td><td>{{ rel.src }}</td><td>{{ rel.dst }}</td>
+      <td>{{ "%.2f"|format(rel.confidence) }}</td><td>{{ rel.status }}</td>
+      <td>{% for e in rel.evidence %}
+        {{ e.note or e.rule }}{{ "; " if not loop.last }}{% endfor %}</td></tr>
+  {% endfor %}
+</table>
+{% endif %}
+{% if report.reasoning.contradictions %}
+<h3>Çelişkiler</h3>
+<ul>
+  {% for c in report.reasoning.contradictions %}
+  <li>{{ c.src }} ↔ {{ c.dst }}: {{ c.message }} <span class="muted">({{ c.status }})</span></li>
+  {% endfor %}
+</ul>
+{% endif %}
+{% if report.reasoning.snapshots %}
+<h3>Arşivlenmiş sayfalar</h3>
+<table>
+  <tr><th>URL</th><th>Başlık</th><th>sha256</th><th>Alındı</th></tr>
+  {% for snap in report.reasoning.snapshots %}
+  <tr><td class="tag">{{ snap.url }}</td><td>{{ snap.title or "-" }}</td>
+      <td class="tag">{{ snap.sha256[:16] }}…</td><td>{{ snap.fetched_at or "-" }}</td></tr>
+  {% endfor %}
+</table>
+{% endif %}
+{% endif %}
+
+<h2>{{ 8 if report.reasoning else 7 }}. Sınırlamalar</h2>
 <p class="muted">Bu rapor yalnızca kamuya açık verileri içerir. Platformlar verilerini
 değiştirebilir; bulgular tarama anındaki durumdur. Olası yanlış eşleşmeler için kanıt
 URL'lerini kontrol ediniz.</p>
@@ -598,6 +648,106 @@ def _pdf_text(value: Any) -> str:
     """
     escaped = _e(value)
     return escaped.replace("&lt;", "‹").replace("&gt;", "›")
+
+
+def _evidence_text(entries: list[dict[str, Any]], sign: str) -> str:
+    return "; ".join(
+        f"{_pdf_text(e.get('note') or e.get('rule') or '')} "
+        f"({sign}{float(e.get('weight') or 0):.1f})"
+        for e in entries
+    )
+
+
+def _reasoning_pdf_story(
+    reasoning: dict[str, Any], h2_style: Any, body_style: Any, small_style: Any, table: Any
+) -> list[Any]:
+    """PDF: hipotezler, kanıt zinciri, çelişkiler ve arşivlenmiş sayfalar bölümü."""
+    from reportlab.lib.units import cm
+    from reportlab.platypus import Paragraph, Spacer
+
+    story: list[Any] = [Paragraph(_t("11. Hipotezler, Kanıt Zinciri ve Çelişkiler"), h2_style)]
+    story.append(
+        Paragraph(
+            _t(
+                "Hipotez skorları kanıtlardan hesaplanır. Yalnızca aday/onaylı ilişkiler "
+                "kanıt zinciri sayılır."
+            ),
+            small_style,
+        )
+    )
+    for hyp in reasoning.get("hypotheses") or []:
+        story.append(Spacer(1, 4))
+        story.append(
+            Paragraph(
+                _t(
+                    f"<b>{_pdf_text(hyp.get('statement', ''))}</b> — güven "
+                    f"{float(hyp.get('confidence') or 0):.2f} ({_pdf_text(hyp.get('status', ''))})"
+                ),
+                body_style,
+            )
+        )
+        for label, key, sign in (
+            ("Destekleyen", "supporting", "+"),
+            ("Çelişen", "contradicting", "-"),
+        ):
+            if hyp.get(key):
+                story.append(
+                    Paragraph(_t(f"{label}: {_evidence_text(hyp[key], sign)}"), small_style)
+                )
+        if hyp.get("next_checks"):
+            checks = "; ".join(_pdf_text(c) for c in hyp["next_checks"])
+            story.append(Paragraph(_t(f"Sonraki kontroller: {checks}"), small_style))
+    if reasoning.get("relations"):
+        story.append(Spacer(1, 6))
+        story.append(
+            table(
+                [
+                    ["İlişki", "Kaynak", "Hedef", "Güven", "Durum", "Kanıt"],
+                    *[
+                        [
+                            r["type"],
+                            r["src"],
+                            r["dst"],
+                            f"{float(r['confidence']):.2f}",
+                            r["status"],
+                            "; ".join(e["note"] or e["rule"] for e in r["evidence"]) or "-",
+                        ]
+                        for r in reasoning["relations"]
+                    ],
+                ],
+                [2.0 * cm, 3.2 * cm, 3.2 * cm, 1.2 * cm, 1.6 * cm, 5.8 * cm],
+            )
+        )
+    for conflict in reasoning.get("contradictions") or []:
+        story.append(
+            Paragraph(
+                _t(
+                    f"• Çelişki: {_pdf_text(conflict['src'])} ↔ {_pdf_text(conflict['dst'])}: "
+                    f"{_pdf_text(conflict['message'])} ({_pdf_text(conflict['status'])})"
+                ),
+                small_style,
+            )
+        )
+    if reasoning.get("snapshots"):
+        story.append(Spacer(1, 6))
+        story.append(
+            table(
+                [
+                    ["URL", "Başlık", "sha256", "Alındı"],
+                    *[
+                        [
+                            s["url"],
+                            s.get("title") or "-",
+                            f"{str(s['sha256'])[:16]}…",
+                            s.get("fetched_at") or "-",
+                        ]
+                        for s in reasoning["snapshots"]
+                    ],
+                ],
+                [6.5 * cm, 4.0 * cm, 3.0 * cm, 3.5 * cm],
+            )
+        )
+    return story
 
 
 def generate_pdf_report(report_data: dict[str, Any]) -> bytes:
@@ -958,7 +1108,13 @@ def generate_pdf_report(report_data: dict[str, Any]) -> bytes:
     else:
         story.append(Paragraph(_t("Kayıtlı kanıt yok."), body_style))
 
-    story.append(Paragraph(_t("11. Sınırlamalar"), h2_style))
+    reasoning = report_data.get("reasoning") or {}
+    limits_no = 11
+    if reasoning:
+        limits_no = 12
+        story.extend(_reasoning_pdf_story(reasoning, h2_style, body_style, small_style, _table))
+
+    story.append(Paragraph(_t(f"{limits_no}. Sınırlamalar"), h2_style))
     story.append(
         Paragraph(
             _t(
