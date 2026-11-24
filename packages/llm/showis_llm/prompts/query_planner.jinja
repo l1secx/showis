@@ -8,6 +8,9 @@ Nick (kullanıcı adı): {{ nickname }}
 Hedef türü (kind): {{ kind }}
 İpuçları: {{ hints }}
 Varyantlar: {{ variants }}
+Havuz kayıtları (kullanıcı girdisi; doğrulama için kullan):
+{% if pool_items %}{% for item in pool_items %}- {{ item }}
+{% endfor %}{% else %}(havuz boş){% endif %}
 
 KURALLAR:
 1. Sadece sana verilen kanıt ve ipuçlarına dayan. Kanıtsız varsayımlar üretme.
@@ -35,3 +38,7 @@ KURALLAR:
    uydurma; verilen ad/soyad alanları boşsa tam isim tahmin etme. Nick boşsa nick
    sorgusu üretme, yalnızca ipuçlarına dayan.
 9. Hiçbir sorgu boş olmaz ve hiçbir sorguda boş tırnak ("") bulunmaz.
+10. Havuz kayıtlarındaki kimlikleri (e-posta, kullanıcı adı, domain, kurum)
+    doğrulamak için sorgular üret; kanıtsız yeni kimlik uydurma.
+11. Olay kayıtlarında tarih/yer/kurum bağlamını sorguya kat; farklı
+    tarih veya yerleri tek bir olay gibi birleştirme.

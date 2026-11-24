@@ -367,6 +367,7 @@ export function CasesDashboard() {
                 <div className="flex items-start justify-between gap-3">
                   <Link
                     href={`/cases/${c.id}/scan`}
+                    prefetch={false}
                     className="min-w-0 flex-1 text-[13.5px] font-medium text-ink"
                   >
                     {c.name}
@@ -441,6 +442,7 @@ export function CasesDashboard() {
                       <td className="max-w-[22rem]">
                         <Link
                           href={`/cases/${c.id}/scan`}
+                          prefetch={false}
                           className="block truncate text-[13.5px] font-medium text-ink transition-colors hover:text-accent-ink"
                         >
                           {c.name}

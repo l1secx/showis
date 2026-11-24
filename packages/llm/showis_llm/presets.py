@@ -28,6 +28,18 @@ PRESETS: dict[str, LLMPreset] = {
         default_model="gpt-4o-mini",
         description="Official OpenAI API",
     ),
+    "openrouter": LLMPreset(
+        name="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+        default_model="openai/gpt-4o-mini",
+        description="OpenRouter model gateway (OpenAI-compatible)",
+    ),
+    "groq": LLMPreset(
+        name="groq",
+        base_url="https://api.groq.com/openai/v1",
+        default_model="llama-3.3-70b-versatile",
+        description="Groq fast inference (OpenAI-compatible)",
+    ),
 }
 
 

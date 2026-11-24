@@ -5,9 +5,11 @@ import Link from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
 import { AlertTriangle, Download, Trash2, X } from "lucide-react";
 import { api, type CaseDetail } from "../../../lib/api";
-import { ScanSessionProvider } from "./scan-context";
 
 const TABS = [
+  { key: "pool", label: "Havuz", href: "pool" },
+  { key: "research", label: "AI Araştırma", href: "research" },
+  { key: "supply-chain", label: "Tedarik Zinciri", href: "supply-chain" },
   { key: "scan", label: "Tarama", href: "scan" },
   { key: "findings", label: "Bulgular", href: "findings" },
   { key: "graph", label: "Grafik", href: "graph" },
@@ -121,8 +123,7 @@ export default function CaseLayout({ children }: { children: React.ReactNode }) 
   ].filter(Boolean) as { label: string; value: React.ReactNode }[];
 
   return (
-    <ScanSessionProvider caseId={id}>
-      <div className="space-y-6">
+    <div className="space-y-6">
         {exportError && (
           <div
             role="alert"
@@ -198,6 +199,7 @@ export default function CaseLayout({ children }: { children: React.ReactNode }) 
                 <Link
                   key={t.key}
                   href={href}
+                  prefetch={false}
                   aria-current={active ? "page" : undefined}
                   className={`relative flex items-center pb-2.5 pt-1 text-[13px] transition-colors ${
                     active
@@ -213,7 +215,6 @@ export default function CaseLayout({ children }: { children: React.ReactNode }) 
 
           <div className="pt-6">{children}</div>
         </div>
-      </div>
-    </ScanSessionProvider>
+    </div>
   );
 }

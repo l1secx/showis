@@ -10,8 +10,10 @@
 #   __TLS_HOSTS_PLACEHOLDER__   ->  SHOWIS_TLS_HOSTS (virgulle) -> `https://host:8443, ...`
 #                                   Varsayilan: localhost,127.0.0.1
 #
-# Erisim modeli: basic auth, Caddyfile'daki `@gate` matcher'i ile **/health disindaki
-# tum yollara** uygulanir — UI ve /api/* dahil.
+# Erisim modeli: basic auth, Caddyfile'daki `@gate` matcher'i ile **statik
+# Next.js parçaları ve /health dışındaki** yollara uygulanir — HTML/RSC ve /api/*.
+#   - /_next/static/*, /icon.svg, /favicon.ico : muaftir (yalniz kod/görsel;
+#     her chunk'ta bcrypt çağrısı sayfa geçişini kilitliyordu).
 #   - /health : muaftir (container healthcheck; token/basic auth istemez)
 #   - /api/*  : korumali. /api/* Next proxy'sine gider ve proxy X-API-Token'i sunucu
 #               tarafinda ekler; bu yuzden token edge'de ayirt edici degildir.
@@ -118,7 +120,7 @@ if [ "$RENDER_AUTH" = "1" ]; then
     if [ "${SHOWIS_EDGE_FORWARD_AUTH:-0}" = "1" ]; then
         echo "[caddy-render] edge auth ETKIN (forward_auth -> api /api/v1/auth/edge)" >&2
     else
-    echo "[caddy-render] basic auth ETKIN (@gate: /health disindaki tum yollar — UI + /api/*)" >&2
+    echo "[caddy-render] basic auth ETKIN (@gate: HTML/RSC + /api/*; statik ve /health muaf)" >&2
     fi >&2
 else
     echo "[caddy-render] UYARI: Caddy kullanıcıları tanimli degil; basic auth DEVRE DISI (edge kimlik dogrulamasi yok)" >&2

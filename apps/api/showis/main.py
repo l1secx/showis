@@ -9,14 +9,18 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy.exc import DataError, DBAPIError
 
 import showis.db.session as db_session_module
+from showis.api.v1.ai_providers import router as ai_providers_router
 from showis.api.v1.auth import router as auth_router
 from showis.api.v1.cases import router as cases_router
 from showis.api.v1.findings import router as findings_router
 from showis.api.v1.ops import public_router as ops_public_router
 from showis.api.v1.ops import router as ops_router
+from showis.api.v1.pool import router as pool_router
 from showis.api.v1.reports import router as reports_router
+from showis.api.v1.research import router as research_router
 from showis.api.v1.scans import router as scans_router
 from showis.api.v1.settings import router as settings_router
+from showis.api.v1.supply_chain import router as supply_chain_router
 from showis.core.logging import install_redaction_filter
 from showis.core.security import (
     require_admin_access,
@@ -335,6 +339,20 @@ app.include_router(
     settings_router,
     prefix="/api/v1",
     dependencies=[*auth_required, Depends(require_admin_access)],
+)
+app.include_router(
+    ai_providers_router,
+    prefix="/api/v1",
+    dependencies=[*auth_required],
+)
+app.include_router(
+    pool_router, prefix="/api/v1", dependencies=[*auth_required, *write_required]
+)
+app.include_router(
+    research_router, prefix="/api/v1", dependencies=[*auth_required, *write_required]
+)
+app.include_router(
+    supply_chain_router, prefix="/api/v1", dependencies=[*auth_required, *write_required]
 )
 app.include_router(
     findings_router, prefix="/api/v1", dependencies=[*auth_required, *write_required]

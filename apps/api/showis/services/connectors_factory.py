@@ -13,7 +13,7 @@ import os
 import uuid
 from typing import Any
 
-from showis.db.models import Setting
+from showis.db.models import AIProvider, Setting
 from showis.services.search_guard import SearchProviderSanitizer
 from showis_connectors import (
     BitbucketConnector,
@@ -168,10 +168,103 @@ def build_llm_client_from_settings(settings: dict[str, Setting]) -> LLMClient | 
     )
 
 
-async def build_llm_client(db: AsyncSession) -> LLMClient | None:
+def _build_llm_client(
+    *,
+    api_key: str,
+    base_url: str,
+    model: str,
+    timeout: float,
+) -> LLMClient | None:
+    try:
+        validated = validate_base_url(base_url)
+        guard_url(validated)
+    except (BaseUrlError, SSRFViolationError) as exc:
+        logger.warning(
+            "LLM base_url politika disi (%s); LLM devre disi — saglayiciyi yeniden yapilandirin",
+            type(exc).__name__,
+        )
+        return None
+    if len(model) > 128:
+        logger.warning("LLM model adi cok uzun; varsayilana donuluyor")
+        model = "minimax-m3.1-flash"
+    timeout = min(max(float(timeout), 1.0), 120.0)
+    return LLMClient(
+        base_url=validated,
+        api_key=api_key,
+        model=model,
+        session_id=str(uuid.uuid4()),
+        timeout_seconds=timeout,
+    )
+
+
+def build_llm_client_from_ai_provider(
+    provider: AIProvider, model_override: str | None = None
+) -> LLMClient | None:
+    """Aktif çoklu profilden istemci kurar; sır çözülemezse None."""
+    if not provider.enabled or not provider.secret_encrypted:
+        return None
+    try:
+        api_key = str(decrypt_secret(provider.secret_encrypted) or "")
+    except Exception as exc:  # noqa: BLE001 - bozuk sır LLM'i bloklar
+        logger.warning("AI provider siri cozulemedi (%s): %s", provider.id, exc)
+        return None
+    if not api_key:
+        return None
+    config = provider.config or {}
+    base_url = str(config.get("base_url") or DEFAULT_LLM_BASE_URL)
+    model = str(config.get("model") or "minimax-m3.1-flash")
+    allowed = config.get("models")
+    if model_override:
+        if not isinstance(allowed, list) or model_override in allowed:
+            model = model_override
+        else:
+            logger.warning(
+                "Secilen model profil listesinde yok; varsayilan kullanilir (%s)",
+                provider.id,
+            )
+    try:
+        timeout = float(config.get("timeout_seconds", 30.0))
+    except (TypeError, ValueError):
+        timeout = 30.0
+    return _build_llm_client(
+        api_key=api_key, base_url=base_url, model=model, timeout=timeout
+    )
+
+
+async def build_llm_client(
+    db: AsyncSession,
+    provider_id: str | None = None,
+    model_override: str | None = None,
+) -> LLMClient | None:
+    """Aktif çoklu profili, yoksa eski tek `llm` ayarını kullanır."""
+    try:
+        query = select(AIProvider).where(AIProvider.enabled.is_(True))
+        if provider_id:
+            query = query.where(AIProvider.id == provider_id)
+        else:
+            query = query.where(AIProvider.is_active.is_(True))
+        provider = (await db.execute(query)).scalars().first()
+        if provider is not None:
+            # Seçili/aktif profil bozuksa başka bir sağlayıcıya sessizce düşme.
+            return build_llm_client_from_ai_provider(provider, model_override=model_override)
+        if provider_id:
+            return None
+    except Exception as exc:  # noqa: BLE001 - migration öncesi/bozuk tablo taramayı bloklamasın
+        logger.warning(
+            "AI provider tablosu okunamadi (%s); eski ayara dusuluyor",
+            type(exc).__name__,
+        )
+
     res = await db.execute(select(Setting))
     settings = {s.provider: s for s in res.scalars().all()}
     return build_llm_client_from_settings(settings)
+
+
+async def build_search_provider(db: AsyncSession) -> SearchProviderSanitizer:
+    """Araştırma ajanı için hibrit arama zinciri (BYOK + DDG fallback)."""
+    res = await db.execute(select(Setting))
+    settings = {s.provider: s for s in res.scalars().all()}
+    return _pick_search_provider(settings)
 
 
 async def build_connectors(db: AsyncSession) -> list[Any]:

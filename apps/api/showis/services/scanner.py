@@ -40,6 +40,7 @@ from showis.db.models import (
 from showis.services.audit import record_audit
 from showis.services.enrichment import capture_scan_evidence
 from showis.services.orchestrator import event_broadcaster
+from showis.services.pool import context_items
 from showis.services.targets import db_target_to_contract
 from showis_connectors.websearch.normalize import extract_platform_from_url
 from showis_contracts import (
@@ -591,6 +592,19 @@ class ScannerService:
             )
             for s in db_seeds
         ]
+        # Havuz, kullanıcı girdilerinin tek kaynağıdır; planlayıcı bu kimlikleri
+        # de doğrular. Sorgu ekleme kararı planner'ın son kapısından geçer.
+        pool_rows = await context_items(db, case_id=case.id, limit=60)
+        pool_items = [
+            {
+                "kind": item.kind,
+                "label": item.label,
+                "value": item.value,
+                "attributes": item.attributes or {},
+            }
+            for item in pool_rows
+        ]
+
         budget = Budget(**(scan.budget or {}))
         ctx = ScanContext(
             case_id=case.id,
@@ -646,7 +660,7 @@ class ScannerService:
             try:
                 # Plani uret; hata olursa `query_plan` None kalir ve planner gorevi
                 # eklenmez (connector gorevleri etkilenmez — eski davranis korunur).
-                query_plan = await self.planner.plan(target, variants)
+                query_plan = await self.planner.plan(target, variants, pool_items=pool_items)
             except Exception as exc:
                 logger.warning("Query planlama hatası: %s", exc)
 

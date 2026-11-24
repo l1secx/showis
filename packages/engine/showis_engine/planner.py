@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import re
+from typing import Any
 
 from showis_contracts import Platform, QueryPlan, SearchQuery, Target, VariantSet
 from showis_llm import LLMClient, render_prompt
@@ -330,7 +331,13 @@ def _enforce_handle_queries(target: Target, queries: list[SearchQuery]) -> list[
     if not nick:
         return []
     needle = nick.casefold()
-    kept = [q for q in queries if needle in q.query.casefold()]
+    # Havuz sorguları kullanıcı girdisidir; handle modunda da korunur.
+    # Diğer sorgular nick içermek zorundadır (isim uydurma engeli).
+    kept = [
+        q
+        for q in queries
+        if needle in q.query.casefold() or q.rationale.startswith("Havuz kaydı")
+    ]
     if len(kept) != len(queries):
         logger.debug(
             "Handle modunda nick dışı %d sorgu elendi", len(queries) - len(kept)
@@ -343,8 +350,65 @@ def _finalize_plan(target: Target, queries: list[SearchQuery]) -> QueryPlan:
     return QueryPlan(queries=_enforce_handle_queries(target, _finalize_queries(queries)))
 
 
+def _pool_queries(pool_items: list[dict[str, Any]] | None) -> list[SearchQuery]:
+    """Havuzdaki kullanıcı girdilerinden deterministik arama sorguları.
+
+    Havuz kayıtları doğrudan kullanıcı girdisidir; bu yüzden operatör
+    nötralizasyonu (`sanitize_hint`) uygulanır. Aynı değer iki kez eklenmez.
+    `event` kayıtlarında tarih/yer/kurum bağlamı da sorguya katılır.
+    """
+    if not pool_items:
+        return []
+    queries: list[SearchQuery] = []
+    seen: set[str] = set()
+    for item in pool_items[:24]:
+        kind = str(item.get("kind") or "").strip().lower()
+        raw_value = str(item.get("value") or "").strip()
+        if not raw_value or kind in {"note"}:
+            continue
+        rationale = f"Havuz kaydı ({kind}) için doğrulama araması"
+        context = ""
+        if kind == "event":
+            attrs = item.get("attributes")
+            if isinstance(attrs, dict):
+                date = str(attrs.get("date") or "").strip()
+                date_hint = date[:4] if len(date) >= 4 and date[:4].isdigit() else ""
+                context = sanitize_hint(
+                    " ".join(
+                        part
+                        for part in (
+                            date_hint,
+                            str(attrs.get("place") or "").strip(),
+                            str(attrs.get("organization") or "").strip(),
+                        )
+                        if part
+                    ),
+                    max_length=60,
+                )
+            rationale = "Havuz olayı (tarih/yer/kurum) için doğrulama araması"
+        value = sanitize_hint(raw_value, max_length=120)
+        if not value or len(value) < 3:
+            continue
+        query_text = f'"{value}"' + (f" {context}" if context else "")
+        key = query_text.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        queries.append(
+            SearchQuery(
+                query=query_text,
+                platform=Platform.WEB,
+                rationale=rationale,
+                priority=2,
+            )
+        )
+    return queries
+
+
 def build_template_fallback_queries(
-    target: Target, variants: VariantSet | None = None
+    target: Target,
+    variants: VariantSet | None = None,
+    pool_items: list[dict[str, Any]] | None = None,
 ) -> QueryPlan:
     """LLM mevcut olmadığında veya hata verdiğinde deterministik şablon sorguları üretir."""
     # SEC-07 / K-3: şablon yolu doğrudan çağrıldığında da hedef denetimi zorunludur
@@ -374,6 +438,7 @@ def build_template_fallback_queries(
                     priority=1,
                 )
             )
+        queries.extend(_pool_queries(pool_items))
         return _finalize_plan(target, queries)
     if handle_mode:
         # `_site_queries` 50 satırlık tabloyu üretir; tavan tek başına dolduğu
@@ -384,6 +449,7 @@ def build_template_fallback_queries(
         # Platform-bağımsız geniş sorgu tavan dışında: tablo tavanı doldursa
         # bile handle modunun son çare kapsamı kaybolmaz.
         queries.extend(_agnostic_nick_query(nick))
+        queries.extend(_pool_queries(pool_items))
     else:
         queries.extend(_site_queries(fullname))
         queries.extend(_generic_name_queries(fullname))
@@ -391,8 +457,9 @@ def build_template_fallback_queries(
         queries.extend(_profile_queries(ad))
         queries.extend(_variant_queries(variants))
         queries = queries[:_MAX_TEMPLATE_QUERIES]
-        # İsim sorguları aynen korunur; nick sorguları listenin sonuna eklenir.
+        # İsim sorguları aynen korunur; nick ve havuz sorguları sona eklenir.
         queries.extend(_nickname_queries(nick))
+        queries.extend(_pool_queries(pool_items))
 
     return _finalize_plan(target, queries)
 
@@ -500,6 +567,7 @@ class QueryPlanner:
         target: Target,
         variants: VariantSet,
         max_queries: int = 30,
+        pool_items: list[dict[str, Any]] | None = None,
     ) -> QueryPlan:
         # SEC-07 (defense in depth): inceleme gerektiren hedef için hiç sorgu
         # üretilmez; hedef kaydı aşılsa bile planlama katmanı durdurur.
@@ -512,9 +580,23 @@ class QueryPlanner:
         # E-posta/telefon/domain/IP için LLM'e gerek yok: kimlik anahtarı
         # doğrudan aranır, isim varyantı üretilmez.
         if target.kind not in {"name", "handle"}:
-            return build_template_fallback_queries(target, variants)
+            return build_template_fallback_queries(target, variants, pool_items)
         if self.llm_client is None or self.llm_disabled:
-            return build_template_fallback_queries(target, variants)
+            return build_template_fallback_queries(target, variants, pool_items)
+
+        prompt_pool: list[str] = []
+        for item in (pool_items or [])[:30]:
+            line = f"[{item.get('kind')}] {item.get('value')}"
+            attrs = item.get("attributes")
+            if item.get("kind") == "event" and isinstance(attrs, dict):
+                context = " | ".join(
+                    f"{key}={attrs.get(key)}"
+                    for key in ("date", "place", "organization")
+                    if attrs.get(key)
+                )
+                if context:
+                    line = f"{line} ({context})"
+            prompt_pool.append(line)
 
         try:
             prompt_content = render_prompt(
@@ -526,6 +608,7 @@ class QueryPlanner:
                 # Faz 1 = A: handle modunda LLM isim uydurmasın.
                 kind=target.kind,
                 nickname=target.nickname,
+                pool_items=prompt_pool,
             )
 
             # T-333: LLM erişilemezse ~90 sn beklemek yerine hızla şablona düş.
@@ -541,7 +624,9 @@ class QueryPlanner:
             if isinstance(plan, QueryPlan) and plan.queries:
                 # LLM çıktısı da aynı kapıdan geçer: TEK kötü sorgu tüm planı
                 # (ve devre kesiciyi) düşürmez, yalnızca o sorgu atlanır.
-                guarded = _finalize_plan(target, plan.queries[:max_queries])
+                guarded = _finalize_plan(
+                    target, plan.queries[:max_queries] + _pool_queries(pool_items)
+                )
                 if guarded.queries:
                     return guarded
 
@@ -553,4 +638,4 @@ class QueryPlanner:
                 type(e).__name__,
             )
 
-        return build_template_fallback_queries(target, variants)
+        return build_template_fallback_queries(target, variants, pool_items)

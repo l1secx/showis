@@ -3,12 +3,17 @@
 import { Suspense } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { ScanTab } from "../panels";
+import { ScanSessionProvider } from "../scan-context";
 
 function ScanPageInner() {
   const { id } = useParams<{ id: string }>();
   const params = useSearchParams();
   const mode = params.get("mode") || undefined;
-  return <ScanTab caseId={id} autoStart={params.get("start") === "1"} initialMode={mode} />;
+  return (
+    <ScanSessionProvider caseId={id}>
+      <ScanTab caseId={id} autoStart={params.get("start") === "1"} initialMode={mode} />
+    </ScanSessionProvider>
+  );
 }
 
 export default function ScanPage() {

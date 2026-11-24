@@ -13,6 +13,7 @@ from sqlalchemy import (
     LargeBinary,
     String,
     Text,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -43,6 +44,31 @@ class Setting(Base):
     secret_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     secret_masked: Mapped[str | None] = mapped_column(String(128), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class AIProvider(Base):
+    """Çoklu LLM sağlayıcı profili (OpenAI uyumlu).
+
+    `Setting(provider="llm")` tek sağlayıcılı eski yoldur; bu tablo aynı anda
+    birden fazla profil tutar. Sır yalnız `secret_encrypted` içinde yaşar ve
+    istemciye hiçbir zaman dönmez. Tek aktif profil kısmi unique index ile
+    garanti edilir (uygulama katmanı da aynı kuralı uygular).
+    """
+
+    __tablename__ = "ai_providers"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid_str)
+    name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    preset: Mapped[str] = mapped_column(String(32), default="custom", nullable=False)
+    config: Mapped[dict[str, Any]] = mapped_column(JSON_TYPE, default=dict)
+    secret_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    secret_masked: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
@@ -121,6 +147,162 @@ class CaseComment(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     case: Mapped["Case"] = relationship("Case", back_populates="comments")
+
+
+class PoolItem(Base):
+    """Vaka araştırma havuzu — kullanıcı girdisi, tarama çıktısı ve AI önerisi.
+
+    `normalized` alanı aynı vaka içinde tekrarı engeller (unique constraint).
+    `value` kullanıcıya gösterilen özgün değerdir; `normalized` yalnız
+    karşılaştırma/arama içindir. `provenance` kaynağın URL'si, oturum kimliği
+    veya kanıt kimliği gibi iz bilgilerini taşır.
+    """
+
+    __tablename__ = "pool_items"
+    __table_args__ = (
+        UniqueConstraint("case_id", "kind", "normalized", name="uq_pool_items_case_kind_value"),
+        Index("ix_pool_items_case_status", "case_id", "status"),
+        Index("ix_pool_items_case_source", "case_id", "source"),
+        Index(
+            "ix_pool_items_value_trgm",
+            "value",
+            postgresql_using="gin",
+            postgresql_ops={"value": "gin_trgm_ops"},
+        ),
+        Index(
+            "ix_pool_items_label_trgm",
+            "label",
+            postgresql_using="gin",
+            postgresql_ops={"label": "gin_trgm_ops"},
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid_str)
+    case_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(32), nullable=False, default="other")
+    label: Mapped[str] = mapped_column(String(256), nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="user")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="confirmed")
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    attributes: Mapped[dict[str, Any]] = mapped_column(JSON_TYPE, default=dict)
+    provenance: Mapped[dict[str, Any]] = mapped_column(JSON_TYPE, default=dict)
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class ResearchSession(Base):
+    """AI araştırma oturumu — soru, mod, sağlayıcı ve nihai sentez."""
+
+    __tablename__ = "research_sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid_str)
+    case_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
+    )
+    title: Mapped[str] = mapped_column(String(256), nullable=False)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    #: "research" = araştır/öner, "agent" = tam ajan (yazma + tarama başlatma).
+    mode: Mapped[str] = mapped_column(String(16), nullable=False, default="research")
+    provider_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("ai_providers.id", ondelete="SET NULL"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    stats: Mapped[dict[str, Any]] = mapped_column(JSON_TYPE, default=dict)
+    final_answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    citations: Mapped[list[dict[str, Any]]] = mapped_column(JSON_TYPE, default=list)
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ResearchMessage(Base):
+    """Araştırma akışındaki tek adım: kullanıcı, düşünce, araç veya nihai yanıt."""
+
+    __tablename__ = "research_messages"
+    __table_args__ = (Index("ix_research_messages_session_created", "session_id", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid_str)
+    session_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("research_sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    tool_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    tool_args: Mapped[dict[str, Any]] = mapped_column(JSON_TYPE, default=dict)
+    tool_result: Mapped[dict[str, Any]] = mapped_column(JSON_TYPE, default=dict)
+    citations: Mapped[list[dict[str, Any]]] = mapped_column(JSON_TYPE, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SupplyChainNode(Base):
+    """Tedarik zinciri düğümü — şirket, tedarikçi, ürün, kişi veya yer."""
+
+    __tablename__ = "supply_chain_nodes"
+    __table_args__ = (
+        UniqueConstraint("case_id", "kind", "normalized", name="uq_supply_chain_node"),
+        Index("ix_supply_chain_nodes_case_kind", "case_id", "kind"),
+        Index("ix_supply_chain_nodes_case_status", "case_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid_str)
+    case_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(32), nullable=False, default="company")
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    normalized: Mapped[str] = mapped_column(String(256), nullable=False)
+    country: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    website: Mapped[str | None] = mapped_column(Text, nullable=True)
+    identifiers: Mapped[dict[str, Any]] = mapped_column(JSON_TYPE, default=dict)
+    attributes: Mapped[dict[str, Any]] = mapped_column(JSON_TYPE, default=dict)
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="user")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="confirmed")
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class SupplyChainEdge(Base):
+    """Tedarik zinciri ilişkisi — yönlü kenar ve kanıt/iz bilgisi."""
+
+    __tablename__ = "supply_chain_edges"
+    __table_args__ = (
+        UniqueConstraint(
+            "case_id", "source_id", "target_id", "relation", name="uq_supply_chain_edge"
+        ),
+        Index("ix_supply_chain_edges_case", "case_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid_str)
+    case_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
+    )
+    source_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("supply_chain_nodes.id", ondelete="CASCADE"), nullable=False
+    )
+    target_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("supply_chain_nodes.id", ondelete="CASCADE"), nullable=False
+    )
+    relation: Mapped[str] = mapped_column(String(32), nullable=False, default="related_to")
+    label: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="confirmed")
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="user")
+    evidence: Mapped[dict[str, Any]] = mapped_column(JSON_TYPE, default=dict)
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class Target(Base):
@@ -367,6 +549,23 @@ Index("ix_audit_logs_case_id_created_at", AuditLog.case_id, AuditLog.created_at)
 Index("ix_audit_logs_created_at", AuditLog.created_at)
 #: `_refill_pending` sirasi: once dusuk `priority`, sonra ekleme sirasi (0008).
 Index("ix_tasks_scan_priority", Task.scan_id, Task.priority)
+
+# 0016: tek aktif AI sağlayıcı profili ve vaka başına tek çalışan araştırma.
+Index(
+    "uq_ai_providers_active",
+    AIProvider.is_active,
+    unique=True,
+    postgresql_where=text("is_active"),
+    sqlite_where=text("is_active"),
+)
+Index(
+    "uq_research_sessions_case_active",
+    ResearchSession.case_id,
+    unique=True,
+    postgresql_where=text("status IN ('queued', 'running')"),
+    sqlite_where=text("status IN ('queued', 'running')"),
+)
+Index("ix_research_sessions_case_created", ResearchSession.case_id, ResearchSession.created_at)
 
 # 0006: sorgu indeksleri (FK ve sik filtrelenen alanlar).
 Index("ix_cases_created_at", Case.created_at)

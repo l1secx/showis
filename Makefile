@@ -1,4 +1,4 @@
-.PHONY: help bootstrap dev web-build lint typecheck test schemas docker-up docker-down backup restore demo demo-smoke seed-keys eval gate
+.PHONY: help bootstrap dev web-build lint typecheck test schemas docker-up docker-rebuild docker-down backup restore demo demo-smoke seed-keys eval gate
 
 PYTHON ?= .venv/bin/python
 PIP ?= .venv/bin/pip
@@ -26,7 +26,8 @@ help:
 	@echo "  make typecheck    - Mypy ile statik tip kontrollerini çalıştırır"
 	@echo "  make test         - Tüm birim ve entegrasyon testlerini çalıştırır"
 	@echo "  make schemas      - Pydantic modellerinden JSON ve TypeScript şemalarını üretir"
-	@echo "  make docker-up    - Docker compose servislerini başlatır"
+	@echo "  make docker-up    - Docker compose servislerini başlatır (imajları yeniden derlemez)"
+	@echo "  make docker-rebuild - İmajları yeniden derler ve servisleri başlatır"
 	@echo "  make docker-down  - Docker compose servislerini durdurur"
 
 schemas:
@@ -60,6 +61,10 @@ web-build:
 
 docker-up:
 	docker compose -f infra/docker-compose.yml up -d
+
+# Kod değişikliğinden sonra: imajları yeniden derler, migration entrypoint'te koşar.
+docker-rebuild:
+	docker compose -f infra/docker-compose.yml up -d --build
 
 docker-down:
 	docker compose -f infra/docker-compose.yml down

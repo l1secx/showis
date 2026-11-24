@@ -9,11 +9,10 @@ networks:
   backend:
     driver: bridge
   # D-012 (SEC-01, dokümantasyon): bu ağ "dışa çıkış yalnız worker/browser'da"
-  # niyetini taşır; ancak frontend/backend'de `internal: true` YOK — USE_CELERY=0
-  # (varsayılan) modunda taramalar API sürecinde koştuğu için API'nin dışarı
-  # çıkması gerekir, bu yüzden zorunlu tutulmuyor. Wave 3 planında prod profili
-  # önerilecek (USE_CELERY=1 + internal ağlar); o profilde API'ye egress
-  # verilmemeli.
+  # niyetini taşır; ancak frontend/backend'de `internal: true` YOK. Varsayılan
+  # USE_CELERY=1 ile taramalar worker'da koşar; API yalnız araştırma ajanı ve
+  # connector planlama için dışarı çıkar. Wave 3 prod profilinde API egress'i
+  # ayrıca kısıtlanmalı.
   egress:
     driver: bridge
 
@@ -43,6 +42,7 @@ services:
       # Onerilen: localhost,127.0.0.1,l1sec,<LAN-IP>  (DHCP degisirse guncelleyin)
       - SHOWIS_ALLOWED_HOSTS=${SHOWIS_ALLOWED_HOSTS:-}
       - SHOWIS_TLS_HOSTS=${SHOWIS_TLS_HOSTS:-localhost,127.0.0.1}
+      - SHOWIS_DEFAULT_SNI=${SHOWIS_DEFAULT_SNI:-localhost}
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ./scripts/caddy-render-config.sh:/usr/local/bin/caddy-render-config.sh:ro
@@ -134,6 +134,12 @@ services:
       dockerfile: infra/docker/Dockerfile.api
     container_name: showis-api
     restart: unless-stopped
+    # Docker embedded DNS'in upstream'i bazen host/VPN degisiminde bayatlar
+    # (127.0.0.11 -> erisilemeyen eski resolver). LLM/arama/connector egress'i
+    # icin acik resolver; kurumsal agda SHOWIS_DOCKER_DNS_* ile override edin.
+    dns:
+      - ${SHOWIS_DOCKER_DNS_PRIMARY:-1.1.1.1}
+      - ${SHOWIS_DOCKER_DNS_SECONDARY:-8.8.8.8}
     environment:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-showis}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD tanimli degil - infra/.env (bkz. .env.example)}@postgres:5432/${POSTGRES_DB:-showis}
       - REDIS_URL=redis://redis:6379/0
@@ -147,7 +153,9 @@ services:
       - SHOWIS_EVIDENCE_DIR=/app/data/evidence
       # T-329 (/healthz disk kontrolu) + T-336 tutarlilik: acik veri dizini.
       - SHOWIS_DATA_DIR=/app/data
-      - USE_CELERY=${USE_CELERY:-0}
+      # Taramalar API event loop'undan çıksın: inline tarama sırasında
+      # blocking DNS/robots çağrıları tüm HTTP yanıtlarını yavaşlatıyordu.
+      - USE_CELERY=${USE_CELERY:-1}
       # SEC-01: API kimlik dogrulamasi. Bos birakilirsa API fail-closed (503) calisir,
       # bu yuzden compose seviyesinde zorunlu tutuluyor (fail-fast).
       - SHOWIS_API_TOKEN=${SHOWIS_API_TOKEN:?SHOWIS_API_TOKEN tanimli degil - infra/.env dosyasina ekleyin (bkz. infra/.env.example)}
@@ -165,6 +173,7 @@ services:
       - SHOWIS_SSE_QUEUE_MAXSIZE=${SHOWIS_SSE_QUEUE_MAXSIZE:-}
       - SHOWIS_DOCS_ENABLED=${SHOWIS_DOCS_ENABLED:-}
       - SHOWIS_LLM_BASE_URL_ALLOWLIST=${SHOWIS_LLM_BASE_URL_ALLOWLIST:-}
+      - HIBP_API_KEY=${HIBP_API_KEY:-}
       - SHOWIS_SITECHECK_CACHE_TTL=${SHOWIS_SITECHECK_CACHE_TTL:-}
       - SHOWIS_TRUSTED_PROXIES=${SHOWIS_TRUSTED_PROXIES:-}
       - SHOWIS_TRUST_ACTOR_HEADER=${SHOWIS_TRUST_ACTOR_HEADER:-0}
@@ -243,6 +252,9 @@ services:
       dockerfile: infra/docker/Dockerfile.worker
     container_name: showis-worker
     restart: unless-stopped
+    dns:
+      - ${SHOWIS_DOCKER_DNS_PRIMARY:-1.1.1.1}
+      - ${SHOWIS_DOCKER_DNS_SECONDARY:-8.8.8.8}
     # --concurrency: mem_limit 1g altinda 12 prefork cocuk OOM riski tasir;
     # varsayilan 2, gerektiginde SHOWIS_WORKER_CONCURRENCY ile yukseltilir.
     # umask 077 (T-314): worker kanit dosyasi yazar (EvidenceStore) — yeni dosyalar 0600,
@@ -333,6 +345,9 @@ services:
       dockerfile: infra/docker/Dockerfile.browser
     container_name: showis-browser
     restart: unless-stopped
+    dns:
+      - ${SHOWIS_DOCKER_DNS_PRIMARY:-1.1.1.1}
+      - ${SHOWIS_DOCKER_DNS_SECONDARY:-8.8.8.8}
     networks:
       - backend
       - egress

@@ -159,18 +159,28 @@ def run_scan_task(self, scan_id: str) -> dict:
 
     async def _run() -> dict:
         async with task_session() as session:
-            status = (
-                await session.execute(select(Scan.status).where(Scan.id == scan_id))
+            scan = (
+                await session.execute(select(Scan).where(Scan.id == scan_id))
             ).scalar_one_or_none()
-            if status is None:
+            if scan is None:
                 logger.error("Tarama bulunamadi, gorev atlandi: %s", scan_id)
                 return {"scan_id": scan_id, "status": "missing"}
-            if status in TERMINAL_SCAN_STATUSES:
-                logger.info("Tarama %s durumu '%s'; gorev atlandi (idempotency)", scan_id, status)
-                return {"scan_id": scan_id, "status": "skipped", "scan_status": status}
+            if scan.status in TERMINAL_SCAN_STATUSES:
+                logger.info(
+                    "Tarama %s durumu '%s'; gorev atlandi (idempotency)",
+                    scan_id,
+                    scan.status,
+                )
+                return {"scan_id": scan_id, "status": "skipped", "scan_status": scan.status}
 
+            selected_model = (scan.policy_snapshot or {}).get("llm_model")
             connectors = await build_connectors(session)
-            llm_client = await build_llm_client(session)
+            if selected_model:
+                llm_client = await build_llm_client(
+                    session, model_override=str(selected_model)
+                )
+            else:
+                llm_client = await build_llm_client(session)
             scanner = ScannerService(connectors=connectors, llm_client=llm_client)
             await scanner.execute_scan(scan_id, session)
         return {"scan_id": scan_id, "status": "done"}

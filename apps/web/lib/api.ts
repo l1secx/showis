@@ -237,6 +237,129 @@ export interface CaseDiff {
   counts?: Record<string, number>;
 }
 
+export interface AIProviderProfile {
+  id: string;
+  name: string;
+  preset: string;
+  config: Record<string, any>;
+  secret_masked?: string | null;
+  secret_required: boolean;
+  enabled: boolean;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PoolItem {
+  id: string;
+  case_id: string;
+  kind: string;
+  label: string;
+  value: string;
+  source: "user" | "scan" | "ai" | "import" | string;
+  status: "proposed" | "candidate" | "confirmed" | "rejected" | string;
+  confidence: number;
+  attributes: Record<string, any>;
+  provenance: Record<string, any>;
+  created_by?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PoolList {
+  items: PoolItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface ResearchCitation {
+  label?: string;
+  url?: string | null;
+  pool_item_id?: string | null;
+  node_id?: string | null;
+}
+
+export interface ResearchMessage {
+  id: string;
+  session_id: string;
+  role: "user" | "assistant" | "tool" | "system" | string;
+  content: string;
+  tool_name?: string | null;
+  tool_args: Record<string, any>;
+  tool_result: Record<string, any>;
+  citations: ResearchCitation[];
+  created_at?: string | null;
+}
+
+export interface ResearchSession {
+  id: string;
+  case_id: string;
+  title: string;
+  question?: string;
+  mode: "research" | "agent" | string;
+  provider_id?: string | null;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled" | string;
+  error?: string | null;
+  activity?: string | null;
+  stats?: Record<string, any>;
+  final_answer?: string | null;
+  citations?: ResearchCitation[];
+  created_by?: string | null;
+  created_at?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  messages?: ResearchMessage[];
+}
+
+export interface ResearchMeta {
+  active_provider: {
+    id: string;
+    name: string;
+    model?: string | null;
+    models?: string[];
+    preset: string;
+  } | null;
+  limits: { research: number; agent: number };
+}
+
+export interface SupplyChainNode {
+  id: string;
+  case_id: string;
+  kind: string;
+  name: string;
+  country?: string | null;
+  website?: string | null;
+  identifiers: Record<string, any>;
+  attributes: Record<string, any>;
+  source: string;
+  status: string;
+  confidence: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface SupplyChainEdge {
+  id: string;
+  case_id: string;
+  source_id: string;
+  target_id: string;
+  relation: string;
+  label?: string | null;
+  confidence: number;
+  status: string;
+  source: string;
+  evidence: Record<string, any>;
+  created_at?: string | null;
+}
+
+export interface SupplyChainGraph {
+  nodes: SupplyChainNode[];
+  edges: SupplyChainEdge[];
+  kinds: string[];
+  relations: string[];
+}
+
 export interface ReportInfo {
   id: string;
   case_id: string;
@@ -387,4 +510,117 @@ export const api = {
     req<ReportInfo>(`/cases/${caseId}/report`, { method: "POST", body: JSON.stringify({ format }) }),
   getStix: (caseId: string) => req<any>(`/cases/${caseId}/stix`),
   getMisp: (caseId: string) => req<any>(`/cases/${caseId}/misp`),
+
+  // --- Araştırma havuzu ---
+  getPool: (caseId: string, params: { q?: string; kind?: string; source?: string; status?: string; limit?: number; offset?: number } = {}) => {
+    const search = new URLSearchParams();
+    if (params.q) search.set("q", params.q);
+    if (params.kind) search.set("kind", params.kind);
+    if (params.source) search.set("source", params.source);
+    if (params.status) search.set("status", params.status);
+    if (params.limit != null) search.set("limit", String(params.limit));
+    if (params.offset != null) search.set("offset", String(params.offset));
+    const qs = search.toString();
+    return req<PoolList>(`/cases/${caseId}/pool${qs ? `?${qs}` : ""}`);
+  },
+  addPoolItem: (caseId: string, body: Record<string, any>) =>
+    req<PoolItem>(`/cases/${caseId}/pool`, { method: "POST", body: JSON.stringify(body) }),
+  updatePoolItem: (caseId: string, itemId: string, body: Record<string, any>) =>
+    req<PoolItem>(`/cases/${caseId}/pool/${itemId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  deletePoolItem: (caseId: string, itemId: string) =>
+    req<null>(`/cases/${caseId}/pool/${itemId}`, { method: "DELETE" }),
+  checkPoolBreach: (caseId: string, itemId: string) =>
+    req<{ item_id: string; breach: Record<string, any> }>(
+      `/cases/${caseId}/pool/${itemId}/breach-check`,
+      { method: "POST" }
+    ),
+
+  // --- AI araştırma ---
+  getResearchMeta: (caseId: string) => req<ResearchMeta>(`/cases/${caseId}/research/meta`),
+  listResearch: (caseId: string) =>
+    req<{ items: ResearchSession[]; total: number }>(`/cases/${caseId}/research`),
+  createResearch: (
+    caseId: string,
+    body: { question: string; mode: string; provider_id?: string; model?: string }
+  ) =>
+    req<ResearchSession>(`/cases/${caseId}/research`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  getResearch: (caseId: string, sessionId: string) =>
+    req<ResearchSession>(`/cases/${caseId}/research/${sessionId}`),
+  addResearchMessage: (caseId: string, sessionId: string, question: string) =>
+    req<ResearchSession>(`/cases/${caseId}/research/${sessionId}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ question }),
+    }),
+  cancelResearch: (caseId: string, sessionId: string) =>
+    req<{ id: string; status: string }>(`/cases/${caseId}/research/${sessionId}/cancel`, {
+      method: "POST",
+    }),
+  deleteResearch: (caseId: string, sessionId: string) =>
+    req<null>(`/cases/${caseId}/research/${sessionId}`, { method: "DELETE" }),
+
+  // --- AI sağlayıcı profilleri ---
+  listAIProviders: () => req<AIProviderProfile[]>("/ai/providers"),
+  listAIProviderPresets: () =>
+    req<Record<string, { base_url: string; default_model: string; description: string }>>(
+      "/ai/providers/presets"
+    ),
+  createAIProvider: (body: Record<string, any>) =>
+    req<AIProviderProfile>("/ai/providers", { method: "POST", body: JSON.stringify(body) }),
+  updateAIProvider: (providerId: string, body: Record<string, any>) =>
+    req<AIProviderProfile>(`/ai/providers/${providerId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  activateAIProvider: (providerId: string) =>
+    req<AIProviderProfile>(`/ai/providers/${providerId}/activate`, { method: "POST" }),
+  testAIProvider: (providerId: string) =>
+    req<{ ok: boolean; message?: string; error?: string; model?: string }>(
+      `/ai/providers/${providerId}/test`,
+      { method: "POST" }
+    ),
+  discoverAIProviderModels: (body: {
+    provider_id?: string;
+    base_url?: string;
+    secret?: string;
+  }) =>
+    req<{ models: string[] }>("/ai/providers/discover", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  deleteAIProvider: (providerId: string) =>
+    req<null>(`/ai/providers/${providerId}`, { method: "DELETE" }),
+
+  // --- Tedarik zinciri ---
+  getSupplyChain: (caseId: string) =>
+    req<SupplyChainGraph>(`/cases/${caseId}/supply-chain`),
+  addSupplyChainNode: (caseId: string, body: Record<string, any>) =>
+    req<SupplyChainNode>(`/cases/${caseId}/supply-chain/nodes`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  updateSupplyChainNode: (caseId: string, nodeId: string, body: Record<string, any>) =>
+    req<SupplyChainNode>(`/cases/${caseId}/supply-chain/nodes/${nodeId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  deleteSupplyChainNode: (caseId: string, nodeId: string) =>
+    req<null>(`/cases/${caseId}/supply-chain/nodes/${nodeId}`, { method: "DELETE" }),
+  addSupplyChainEdge: (caseId: string, body: Record<string, any>) =>
+    req<SupplyChainEdge>(`/cases/${caseId}/supply-chain/edges`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  updateSupplyChainEdge: (caseId: string, edgeId: string, body: Record<string, any>) =>
+    req<SupplyChainEdge>(`/cases/${caseId}/supply-chain/edges/${edgeId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  deleteSupplyChainEdge: (caseId: string, edgeId: string) =>
+    req<null>(`/cases/${caseId}/supply-chain/edges/${edgeId}`, { method: "DELETE" }),
 };

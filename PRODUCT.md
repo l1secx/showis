@@ -70,6 +70,19 @@ uygun mu" arasındaki dengeyi ürünün içine gömüldüğü için benzer araç
 - Bağlayıcılar: 29 bağlayıcı (profil), 64 platform site kontrolü, hibrit arama zinciri
   (Brave → SerpAPI → Google CSE → DuckDuckGo), varyant motoru, paralel tarama ve bütçe
   kontrolü (fail-closed).
+- **Araştırma havuzu:** Hedef, ipuçları, seed'ler, notlar, yorumlar, **tarihli
+  olaylar** ve AI önerileri vaka içi tek havuzda; tekilleştirme, arama,
+  kaynak/durum filtresi ve onay akışı. Olay kayıtları tarih/yer/kurum bağlamıyla
+  tarama sorgularını ve kanıt zincirini yönlendirir.
+- **AI araştırma ajanı:** Çoklu OpenAI uyumlu sağlayıcı profili (OpenCode Go,
+  OpenRouter, Groq, özel); model keşfi ve izinli model seçimi; vaka seçicisi;
+  havuz araması, web araması, sayfa okuma, HIBP kontrolü ve yazma araçlarıyla
+  adım adım araştırma; "araştır/öner" ve "tam ajan" modları; canlı aktivite
+  özeti, SSE akışı, kaynaklı nihai sentez ve takip sorusu.
+- **HIBP ihlal kontrolü:** E-posta havuz kayıtları için ihlal adı, tarihi, sızan
+  veri sınıfları ve açıklaması; sonuç kanıt kaydına işlenir.
+- **Tedarik zinciri modülü:** Şirket, tedarikçi, ürün ve yönlü ilişkiler için ayrı
+  düğüm/kenar modeli; Cytoscape grafiği ve AI önerisi onay akışı.
 - Authenticity: hesap yaşı, aktivite, boş bio, varsayılan avatar ve cross-link tutarlılığı
   deterministik çözümleyiciyle skora katkı verir.
 - **CSP `style-src 'self'`:** uzak font ve stil yüklemesi engellidir. Arayüz yazı tipleri

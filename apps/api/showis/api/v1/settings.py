@@ -42,7 +42,7 @@ _MAX_CONFIG_VALUE = 512
 _MAX_SECRET_LENGTH = 512
 _MAX_MODEL_LENGTH = 128
 
-PROVIDER_NAMES = {"github", "brave", "serpapi", "cse", "llm"}
+PROVIDER_NAMES = {"github", "brave", "serpapi", "cse", "llm", "hibp"}
 HTTP_FALLBACK_URL = "https://opencode.ai/inference/go/openai/v1"
 
 
@@ -345,6 +345,21 @@ async def test_provider_connection(setting_id: str, db: AsyncSession = Depends(g
                 return {
                     "ok": False,
                     "error": provider_error_message("Google CSE", resp.status_code),
+                }
+
+            if provider == "hibp":
+                if not token:
+                    return {"ok": False, "error": "HIBP API key is missing"}
+                resp = await client.get(
+                    "https://haveibeenpwned.com/api/v3/breachedaccount/test@example.com",
+                    headers={"hibp-api-key": token, **headers},
+                    params={"truncateResponse": "false"},
+                )
+                if resp.status_code in (200, 404):
+                    return {"ok": True, "message": "HIBP connection verified"}
+                return {
+                    "ok": False,
+                    "error": provider_error_message("HIBP", resp.status_code),
                 }
 
             if provider == "llm":

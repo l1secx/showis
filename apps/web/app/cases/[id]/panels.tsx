@@ -121,8 +121,21 @@ export function ScanTab({
   autoStart?: boolean;
   initialMode?: string;
 }) {
-  const { scan, events, mode, setMode, estimate, starting, error, start, cancel, scanId } =
-    useScanSession();
+  const {
+    scan,
+    events,
+    mode,
+    setMode,
+    availableModels,
+    llmModel,
+    setLlmModel,
+    estimate,
+    starting,
+    error,
+    start,
+    cancel,
+    scanId,
+  } = useScanSession();
   const [now, setNow] = useState(() => Date.now());
   const autoStarted = useRef(false);
   const [monitor, setMonitor] = useState<CaseMonitor | null>(null);
@@ -327,6 +340,24 @@ export function ScanTab({
                 );
               })}
             </fieldset>
+
+            {availableModels.length > 1 && (
+              <label className="mt-4 block">
+                <span className="label">Tarama modeli</span>
+                <select
+                  className="select"
+                  value={llmModel || availableModels[0]}
+                  onChange={(e) => setLlmModel(e.target.value)}
+                  disabled={running}
+                >
+                  {availableModels.map((model) => (
+                    <option key={model} value={model}>
+                      {model}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
 
             {/* Tahmin: veri şeridi */}
             {/* Tahmin: panelin içinde ikinci bir kutu değil, ayraçla ayrılmış
@@ -1097,7 +1128,9 @@ export function FindingsTab({ caseId }: { caseId: string }) {
   }, [caseId]);
 
   useEffect(() => {
-    void load();
+    // Tarama sırasında her yeni bulgu ayrı istek açmasın: kısa debounce.
+    const timer = setTimeout(() => void load(), findingsVersion === 0 ? 0 : 350);
+    return () => clearTimeout(timer);
   }, [load, findingsVersion]);
 
   const persist = (key: string, value: string) => {

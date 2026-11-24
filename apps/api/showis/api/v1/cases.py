@@ -20,10 +20,26 @@ from fastapi import (
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, field_validator, model_validator
 from showis.core.security import ROLE_ANALYST, Actor, require_token
-from showis.db.models import Case, CaseComment, Edge, Entity, Evidence, Finding, Report, Scan
+from showis.db.models import (
+    AIProvider,
+    Case,
+    CaseComment,
+    Edge,
+    Entity,
+    Evidence,
+    Finding,
+    PoolItem,
+    Report,
+    ResearchMessage,
+    ResearchSession,
+    Scan,
+    SupplyChainEdge,
+    SupplyChainNode,
+)
 from showis.db.models import Seed as DbSeed
 from showis.db.models import Target as DbTarget
 from showis.db.session import get_db
+from showis.services.ai_providers import allowed_models
 from showis.services.audit import list_audit_logs, record_request_audit
 from showis.services.connectors_factory import build_connectors, build_llm_client
 from showis.services.identity_graph import (
@@ -32,6 +48,7 @@ from showis.services.identity_graph import (
 )
 from showis.services.maltego import build_maltego_xml
 from showis.services.misp import build_misp_event
+from showis.services.pool import add_comment_item, seed_pool_for_case
 from showis.services.report_service import create_report, purge_case_reports
 from showis.services.retention import _evidence_file_path
 from showis.services.scanner import ScannerService
@@ -277,6 +294,8 @@ class ScanStartRequest(BaseModel):
     #: Geriye dönük uyumlu alan: değerler mod profilinin üstüne çıkamaz,
     #: bilinmeyen anahtarlar yok sayılır (SEC-05).
     budget: dict[str, Any] | None = None
+    #: Aktif AI profilinin izinli modellerinden biri; boşsa profil varsayılanı.
+    llm_model: str | None = Field(default=None, max_length=128)
 
 
 
@@ -358,6 +377,7 @@ async def create_case(
     )
     db.add(target)
 
+    seed_rows: list[DbSeed] = []
     for s in data.seeds:
         seed = DbSeed(
             case_id=case.id,
@@ -367,6 +387,14 @@ async def create_case(
             email=s.email,
         )
         db.add(seed)
+        seed_rows.append(seed)
+
+    # Havuz, vaka girdilerinin tek görünür kaynağıdır; AI araştırması ve
+    # planlayıcı buradan beslenir.
+    await db.flush()
+    pool_created = await seed_pool_for_case(
+        db, case=case, target=target, seeds=seed_rows, created_by=actor.username
+    )
 
     await db.commit()
     await record_request_audit(
@@ -381,6 +409,7 @@ async def create_case(
             "authorization_confirmed": data.authorization_confirmed,
             "robots_policy": "honor",
             "public_sources_only": True,
+            "pool_items_created": pool_created,
         },
     )
 
@@ -1007,8 +1036,19 @@ def _dispatch_celery_task(scan: Scan) -> bool:
 async def _run_scan_inline(scan_id: str) -> None:
     """Süreç içi tarama (USE_CELERY=0 veya broker erişilemezse)."""
     async with db_session_module.async_session_factory() as session:
+        scan = (
+            await session.execute(select(Scan).where(Scan.id == scan_id))
+        ).scalar_one_or_none()
+        selected_model = (
+            (scan.policy_snapshot or {}).get("llm_model") if scan is not None else None
+        )
         connectors = await build_connectors(session)
-        llm_client = await build_llm_client(session)
+        if selected_model:
+            llm_client = await build_llm_client(
+                session, model_override=str(selected_model)
+            )
+        else:
+            llm_client = await build_llm_client(session)
         scanner = ScannerService(connectors=connectors, llm_client=llm_client)
         await scanner.execute_scan(scan_id, session)
 
@@ -1131,12 +1171,30 @@ async def start_scan(
         )
 
     mode = norm_mode(payload.mode)
+    selected_model = (payload.llm_model or "").strip() or None
+    if selected_model:
+        provider = (
+            await db.execute(
+                select(AIProvider).where(
+                    AIProvider.enabled.is_(True), AIProvider.is_active.is_(True)
+                )
+            )
+        ).scalars().first()
+        allowed = allowed_models(provider) if provider else []
+        if allowed and selected_model not in allowed:
+            raise HTTPException(
+                status_code=422,
+                detail="Seçilen model aktif sağlayıcının izinli modellerinde yok",
+            )
+    policy_snapshot: dict[str, Any] = {"tier": "B", "safe_mode": True}
+    if selected_model:
+        policy_snapshot["llm_model"] = selected_model
     scan = Scan(
         case_id=case.id,
         status="queued",
         mode=mode,
         budget=_clamp_budget(payload.budget, mode),
-        policy_snapshot={"tier": "B", "safe_mode": True},
+        policy_snapshot=policy_snapshot,
         stats={},
     )
     db.add(scan)
@@ -1182,6 +1240,7 @@ async def start_scan(
             "mode": scan.mode,
             "budget": scan.budget,
             "budget_clamped": bool(payload.budget),
+            "llm_model": (scan.policy_snapshot or {}).get("llm_model"),
             "celery_task_id": (scan.stats or {}).get("celery_task_id"),
             "celery_dispatch_failed": dispatch_failed,
         },
@@ -1510,6 +1569,14 @@ async def add_case_comment(
     db.add(row)
     await db.commit()
     await db.refresh(row)
+    # Kullanıcı yorumu da havuzun parçasıdır; AI araştırması bu notu görür.
+    # Havuz yazımı başarısız olsa bile yorum kaydı korunur.
+    try:
+        await add_comment_item(db, comment=row, created_by=author)
+        await db.commit()
+    except Exception:  # noqa: BLE001 - yorum kaydı havuz hatasına kurban gitmesin
+        await db.rollback()
+        logger.warning("Yorum havuza eklenemedi (comment=%s)", row.id, exc_info=True)
     await record_request_audit(
         db=db,
         request=request,
@@ -1780,6 +1847,44 @@ async def export_case(
     evidence = (
         (await db.execute(select(Evidence).where(Evidence.case_id == case_id))).scalars().all()
     )
+    pool_items = (
+        (await db.execute(select(PoolItem).where(PoolItem.case_id == case_id))).scalars().all()
+    )
+    research_sessions = (
+        (await db.execute(select(ResearchSession).where(ResearchSession.case_id == case_id)))
+        .scalars()
+        .all()
+    )
+    research_messages = (
+        (
+            await db.execute(
+                select(ResearchMessage)
+                .join(ResearchSession, ResearchMessage.session_id == ResearchSession.id)
+                .where(ResearchSession.case_id == case_id)
+                .order_by(ResearchMessage.created_at.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    supply_nodes = (
+        (
+            await db.execute(
+                select(SupplyChainNode).where(SupplyChainNode.case_id == case_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    supply_edges = (
+        (
+            await db.execute(
+                select(SupplyChainEdge).where(SupplyChainEdge.case_id == case_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
     clusters_by_entity, clusters = compute_identity_clusters(entities, edges)
 
     await record_request_audit(
@@ -1889,6 +1994,82 @@ async def export_case(
             }
             for ev in evidence
         ],
+        "pool": [
+            {
+                "id": item.id,
+                "kind": item.kind,
+                "label": item.label,
+                "value": item.value,
+                "source": item.source,
+                "status": item.status,
+                "confidence": item.confidence,
+                "attributes": item.attributes,
+                "provenance": item.provenance,
+                "created_at": item.created_at.isoformat() if item.created_at else None,
+            }
+            for item in pool_items
+        ],
+        "research": [
+            {
+                "id": session.id,
+                "title": session.title,
+                "question": session.question,
+                "mode": session.mode,
+                "status": session.status,
+                "error": session.error,
+                "final_answer": session.final_answer,
+                "citations": session.citations,
+                "stats": session.stats,
+                "created_at": session.created_at.isoformat() if session.created_at else None,
+                "messages": [
+                    {
+                        "role": message.role,
+                        "content": message.content,
+                        "tool_name": message.tool_name,
+                        "tool_args": message.tool_args,
+                        "tool_result": message.tool_result,
+                        "citations": message.citations,
+                        "created_at": message.created_at.isoformat()
+                        if message.created_at
+                        else None,
+                    }
+                    for message in research_messages
+                    if message.session_id == session.id
+                ],
+            }
+            for session in research_sessions
+        ],
+        "supply_chain": {
+            "nodes": [
+                {
+                    "id": node.id,
+                    "kind": node.kind,
+                    "name": node.name,
+                    "country": node.country,
+                    "website": node.website,
+                    "identifiers": node.identifiers,
+                    "attributes": node.attributes,
+                    "source": node.source,
+                    "status": node.status,
+                    "confidence": node.confidence,
+                }
+                for node in supply_nodes
+            ],
+            "edges": [
+                {
+                    "id": edge.id,
+                    "source_id": edge.source_id,
+                    "target_id": edge.target_id,
+                    "relation": edge.relation,
+                    "label": edge.label,
+                    "confidence": edge.confidence,
+                    "status": edge.status,
+                    "source": edge.source,
+                    "evidence": edge.evidence,
+                }
+                for edge in supply_edges
+            ],
+        },
     }
 
 

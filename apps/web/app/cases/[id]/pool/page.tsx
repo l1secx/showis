@@ -1,0 +1,757 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useParams, useRouter } from "next/navigation";
+import {
+  Check,
+  ChevronDown,
+  Loader2,
+  Plus,
+  Search,
+  ShieldAlert,
+  Sparkles,
+  Trash2,
+  X,
+} from "lucide-react";
+import { api, type PoolItem } from "../../../../lib/api";
+
+const KINDS = [
+  "name",
+  "username",
+  "email",
+  "phone",
+  "domain",
+  "ip",
+  "url",
+  "person",
+  "organization",
+  "product",
+  "location",
+  "event",
+  "note",
+  "identifier",
+  "other",
+];
+
+const KIND_TR: Record<string, string> = {
+  name: "Ad",
+  username: "Kullanıcı adı",
+  email: "E-posta",
+  phone: "Telefon",
+  domain: "Domain",
+  ip: "IP",
+  url: "URL",
+  person: "Kişi",
+  organization: "Kurum",
+  product: "Ürün",
+  location: "Yer",
+  event: "Olay",
+  note: "Not",
+  identifier: "Kimlik",
+  other: "Diğer",
+};
+
+const SOURCE_TR: Record<string, string> = {
+  user: "Kullanıcı",
+  scan: "Tarama",
+  ai: "AI",
+  import: "İçe aktarma",
+};
+
+const STATUS_TR: Record<string, string> = {
+  proposed: "onay bekliyor",
+  candidate: "aday",
+  confirmed: "onaylandı",
+  rejected: "reddedildi",
+};
+
+const STATUS_TONE: Record<string, string> = {
+  proposed: "text-warn",
+  candidate: "text-warn",
+  confirmed: "text-ok",
+  rejected: "text-danger",
+};
+
+const STATUS_DOT: Record<string, string> = {
+  proposed: "bg-warn",
+  candidate: "bg-warn",
+  confirmed: "bg-ok",
+  rejected: "bg-danger",
+};
+
+function Status({ value }: { value: string }) {
+  return (
+    <span className={`status ${STATUS_TONE[value] || "text-ink-3"}`}>
+      <span
+        className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_DOT[value] || "bg-ink-4"}`}
+        aria-hidden
+      />
+      {STATUS_TR[value] || value}
+    </span>
+  );
+}
+
+function BreachDetails({ check }: { check: any }) {
+  if (!check || typeof check !== "object") return null;
+  const breached = Boolean(check.breached);
+  const breaches: any[] = Array.isArray(check.breaches) ? check.breaches : [];
+  return (
+    <details className="mt-1.5 rounded-[4px] border border-line bg-sunken/60 px-2 py-1.5 text-[11.5px]">
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 marker:content-none">
+        <ShieldAlert size={11} aria-hidden className={breached ? "text-danger" : "text-ok"} />
+        <span className={breached ? "font-medium text-danger" : "font-medium text-ok"}>
+          {breached ? `${check.count || breaches.length} veri ihlali` : "HIBP: ihlal bulunamadı"}
+        </span>
+        <span className="truncate text-ink-3">
+          {check.checked_at ? new Date(check.checked_at).toLocaleString("tr-TR") : ""}
+        </span>
+      </summary>
+      {breached ? (
+        <ul className="mt-1.5 space-y-2">
+          {breaches.map((breach, index) => (
+            <li key={`${breach.name || index}`} className="border-t border-line pt-1.5 first:border-t-0 first:pt-0">
+              <p className="font-medium text-ink-2">
+                {breach.title || breach.name}
+                {breach.breach_date ? ` · ${breach.breach_date}` : ""}
+              </p>
+              {Array.isArray(breach.data_classes) && breach.data_classes.length > 0 && (
+                <p className="text-ink-3">{breach.data_classes.join(", ")}</p>
+              )}
+              {breach.description && (
+                <p className="mt-0.5 line-clamp-3 text-ink-3">{breach.description}</p>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-1.5 text-ink-3">
+          Bu e-posta bilinen HIBP ihlallerinde görünmüyor. Yine de yeni ihlaller oluşabilir.
+        </p>
+      )}
+    </details>
+  );
+}
+
+export default function PoolPage() {
+  const { id } = useParams<{ id: string }>();
+  const router = useRouter();
+  const [items, setItems] = useState<PoolItem[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [breachBusy, setBreachBusy] = useState<string | null>(null);
+  const [bulkBreach, setBulkBreach] = useState(false);
+
+  const [query, setQuery] = useState("");
+  const [appliedQuery, setAppliedQuery] = useState("");
+  const [kind, setKind] = useState("");
+  const [source, setSource] = useState("");
+  const [status, setStatus] = useState("");
+
+  const [newKind, setNewKind] = useState("note");
+  const [newLabel, setNewLabel] = useState("");
+  const [newValue, setNewValue] = useState("");
+  // Olay türü: tarih/yer/kurum, tarama sorgusunu ve kanıt zincirini yönlendirir.
+  const [newEventDate, setNewEventDate] = useState("");
+  const [newEventPlace, setNewEventPlace] = useState("");
+  const [newEventOrg, setNewEventOrg] = useState("");
+  const [newEventSource, setNewEventSource] = useState("");
+
+  const counts = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const item of items) map[item.status] = (map[item.status] || 0) + 1;
+    return map;
+  }, [items]);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await api.getPool(id, {
+        q: appliedQuery || undefined,
+        kind: kind || undefined,
+        source: source || undefined,
+        status: status || undefined,
+        limit: 200,
+      });
+      setItems(data.items);
+      setTotal(data.total);
+    } catch (e: any) {
+      setError(e.message || "Havuz yüklenemedi");
+    } finally {
+      setLoading(false);
+    }
+  }, [id, appliedQuery, kind, source, status]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const addItem = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newValue.trim()) return;
+    setSaving(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const attributes: Record<string, string> = {};
+      if (newKind === "event") {
+        if (newEventDate) attributes.date = newEventDate;
+        if (newEventPlace.trim()) attributes.place = newEventPlace.trim();
+        if (newEventOrg.trim()) attributes.organization = newEventOrg.trim();
+        if (newEventSource.trim()) attributes.source_url = newEventSource.trim();
+      }
+      const created = await api.addPoolItem(id, {
+        kind: newKind,
+        label: newLabel.trim() || null,
+        value: newValue.trim(),
+        attributes,
+        provenance: newEventSource.trim()
+          ? { url: newEventSource.trim(), kind: "event" }
+          : {},
+      });
+      if (newKind === "email") {
+        // Anahtar yoksa endpoint 503 döner; kayıt yine de korunur.
+        try {
+          await api.checkPoolBreach(id, created.id);
+        } catch {
+          /* HIBP yapılandırılmamış olabilir */
+        }
+      }
+      setNewLabel("");
+      setNewValue("");
+      setNewEventDate("");
+      setNewEventPlace("");
+      setNewEventOrg("");
+      setNewEventSource("");
+      setNotice("Havuza eklendi. Aynı değer varsa mevcut kayıtla birleştirildi.");
+      await load();
+    } catch (err: any) {
+      setError(err.message || "Kayıt eklenemedi");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const setItemStatus = async (item: PoolItem, next: "confirmed" | "rejected") => {
+    setError(null);
+    try {
+      await api.updatePoolItem(id, item.id, { status: next });
+      await load();
+    } catch (e: any) {
+      setError(e.message || "Durum güncellenemedi");
+    }
+  };
+
+  const removeItem = async (item: PoolItem) => {
+    if (!confirm(`"${item.label}" havuzdan silinsin mi?`)) return;
+    setError(null);
+    try {
+      await api.deletePoolItem(id, item.id);
+      await load();
+    } catch (e: any) {
+      setError(e.message || "Kayıt silinemedi");
+    }
+  };
+
+  const checkBreach = async (item: PoolItem, silent = false) => {
+    setBreachBusy(item.id);
+    setError(null);
+    if (!silent) setNotice(null);
+    try {
+      const result = await api.checkPoolBreach(id, item.id);
+      if (!silent) {
+        setNotice(
+          result.breach.breached
+            ? `${item.value}: ${result.breach.count} ihlal bulundu.`
+            : `${item.value}: HIBP'de ihlal bulunamadı.`
+        );
+      }
+      await load();
+    } catch (e: any) {
+      setError(e.message || "HIBP kontrolü başarısız");
+    } finally {
+      setBreachBusy(null);
+    }
+  };
+
+  const checkAllEmails = async () => {
+    setBulkBreach(true);
+    setError(null);
+    try {
+      const page = await api.getPool(id, { kind: "email", limit: 200 });
+      const emails = page.items.filter((item) => item.kind === "email");
+      if (emails.length === 0) {
+        setNotice("Havuzda e-posta kaydı yok.");
+        return;
+      }
+      for (const email of emails) {
+        await api.checkPoolBreach(id, email.id);
+      }
+      setNotice(`${emails.length} e-posta HIBP'de kontrol edildi.`);
+      await load();
+    } catch (e: any) {
+      setError(e.message || "Toplu HIBP kontrolü başarısız");
+    } finally {
+      setBulkBreach(false);
+    }
+  };
+
+  const researchItem = (item: PoolItem) => {
+    const snippet = item.value.slice(0, 180);
+    const question = `"${snippet}" hakkında vaka havuzundaki bilgileri ve kamuya açık kaynakları kullanarak ayrıntılı araştırma yap. Bulguları kanıtlarıyla sun.`;
+    router.push(`/cases/${id}/research?q=${encodeURIComponent(question)}`);
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 className="section-heading">Araştırma havuzu</h2>
+          <p className="page-subtitle">
+            Vaka girdileri, yorumlar, tarama çıktıları ve AI önerileri tek yerde. AI
+            araştırması bu havuzu okur; onay bekleyen önerileri siz karara bağlarsınız.
+          </p>
+        </div>
+        <div className="flex shrink-0 flex-wrap gap-2">
+          <Link href={`/cases/${id}/scan`} className="btn-secondary btn-sm">
+            Havuzla tarama
+          </Link>
+          <Link href={`/cases/${id}/research`} className="btn-primary btn-sm">
+            <Sparkles size={13} aria-hidden />
+            AI araştırması
+          </Link>
+        </div>
+      </div>
+
+      {error && (
+        <div
+          role="alert"
+          className="rounded-[6px] border border-danger-line bg-danger-soft px-3 py-2 text-[12.5px] text-danger"
+        >
+          {error}
+        </div>
+      )}
+      {notice && (
+        <div
+          role="status"
+          className="rounded-[6px] border border-ok-line bg-ok-soft px-3 py-2 text-[12.5px] text-ok"
+        >
+          {notice}
+        </div>
+      )}
+
+      <div className="panel">
+        <div className="panel-head flex-wrap">
+          <div>
+            <h2 className="panel-title">Kayıtlar</h2>
+            <p className="mt-0.5 text-[12px] text-ink-3">
+              {total} kayıt · {counts.proposed || 0} onay bekliyor ·{" "}
+              {counts.candidate || 0} aday · {counts.confirmed || 0} onaylı
+            </p>
+          </div>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              setAppliedQuery(query.trim());
+            }}
+            className="flex items-center gap-2"
+          >
+            <div className="relative">
+              <Search
+                size={13}
+                aria-hidden
+                className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-3"
+              />
+              <input
+                className="input w-[210px] pl-8"
+                placeholder="Havuzda ara"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                aria-label="Havuzda ara"
+              />
+            </div>
+            <button type="submit" className="btn-secondary btn-sm">
+              Ara
+            </button>
+          </form>
+        </div>
+
+        <div className="flex flex-wrap items-end gap-3 border-t border-line px-5 py-3">
+          <label className="block">
+            <span className="label">Tür</span>
+            <select className="select w-auto" value={kind} onChange={(e) => setKind(e.target.value)}>
+              <option value="">Tümü</option>
+              {KINDS.map((k) => (
+                <option key={k} value={k}>
+                  {KIND_TR[k]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="label">Kaynak</span>
+            <select
+              className="select w-auto"
+              value={source}
+              onChange={(e) => setSource(e.target.value)}
+            >
+              <option value="">Tümü</option>
+              {Object.entries(SOURCE_TR).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="label">Durum</span>
+            <select
+              className="select w-auto"
+              value={status}
+              onChange={(e) => setStatus(e.target.value)}
+            >
+              <option value="">Tümü</option>
+              {Object.entries(STATUS_TR).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={checkAllEmails}
+            disabled={bulkBreach || breachBusy !== null}
+            className="btn-secondary btn-sm"
+          >
+            {bulkBreach ? (
+              <Loader2 size={12} className="animate-spin" aria-hidden />
+            ) : (
+              <ShieldAlert size={12} aria-hidden />
+            )}
+            E-postaları kontrol et
+          </button>
+        </div>
+
+        <details className="group border-t border-line">
+          <summary className="flex cursor-pointer list-none items-center gap-2 px-5 py-3 text-[13px] font-medium text-ink marker:content-none">
+            <ChevronDown
+              size={14}
+              aria-hidden
+              className="text-ink-3 transition-transform group-open:rotate-180"
+            />
+            <Plus size={13} aria-hidden />
+            Havuza kayıt ekle
+          </summary>
+          <form onSubmit={addItem} className="grid gap-3 border-t border-line p-5 sm:grid-cols-4">
+            <label className="block">
+              <span className="label">Tür</span>
+              <select
+                className="select"
+                value={newKind}
+                onChange={(e) => setNewKind(e.target.value)}
+              >
+                {KINDS.map((k) => (
+                  <option key={k} value={k}>
+                    {KIND_TR[k]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block sm:col-span-1">
+              <span className="label">Etiket</span>
+              <input
+                className="input"
+                placeholder="ör. Şirket e-postası"
+                value={newLabel}
+                onChange={(e) => setNewLabel(e.target.value)}
+                maxLength={256}
+              />
+            </label>
+            <label className="block sm:col-span-2">
+              <span className="label">
+                Değer <span className="text-danger">*</span>
+              </span>
+              {newKind === "note" ? (
+                <textarea
+                  className="input min-h-[74px] resize-y"
+                  placeholder="Araştırmaya girecek bilgi"
+                  value={newValue}
+                  onChange={(e) => setNewValue(e.target.value)}
+                  maxLength={20000}
+                  required
+                />
+              ) : (
+                <input
+                  className="input"
+                  placeholder="Araştırmaya girecek bilgi"
+                  value={newValue}
+                  onChange={(e) => setNewValue(e.target.value)}
+                  maxLength={20000}
+                  required
+                />
+              )}
+            </label>
+            {newKind === "event" && (
+              <>
+                <label className="block">
+                  <span className="label">Tarih</span>
+                  <input
+                    type="date"
+                    className="input"
+                    value={newEventDate}
+                    onChange={(e) => setNewEventDate(e.target.value)}
+                  />
+                </label>
+                <label className="block">
+                  <span className="label">Yer</span>
+                  <input
+                    className="input"
+                    placeholder="Ankara"
+                    value={newEventPlace}
+                    onChange={(e) => setNewEventPlace(e.target.value)}
+                  />
+                </label>
+                <label className="block">
+                  <span className="label">Kurum</span>
+                  <input
+                    className="input"
+                    placeholder="Acme"
+                    value={newEventOrg}
+                    onChange={(e) => setNewEventOrg(e.target.value)}
+                  />
+                </label>
+                <label className="block">
+                  <span className="label">Kaynak URL</span>
+                  <input
+                    className="input font-mono"
+                    placeholder="https://..."
+                    value={newEventSource}
+                    onChange={(e) => setNewEventSource(e.target.value)}
+                  />
+                </label>
+                <p className="text-[11.5px] leading-relaxed text-ink-3 sm:col-span-4">
+                  Olay kaydı; tarih/yer/kurum kombinasyonuyla tarama sorgularına ve
+                  AI araştırmasına bağlam verir. Kanıt bağlantısı varsa ekleyin.
+                </p>
+              </>
+            )}
+            <div className="sm:col-span-4">
+              <button type="submit" disabled={saving} className="btn-primary btn-sm">
+                {saving ? <Loader2 size={13} className="animate-spin" aria-hidden /> : <Plus size={13} aria-hidden />}
+                Ekle
+              </button>
+            </div>
+          </form>
+        </details>
+
+        <div className="border-t border-line">
+          {loading ? (
+            <p className="flex items-center gap-2 px-5 py-8 text-[13px] text-ink-3">
+              <Loader2 size={14} className="animate-spin" aria-hidden />
+              Havuz yükleniyor
+            </p>
+          ) : items.length === 0 ? (
+            <div className="px-5 py-10 text-center">
+              <p className="text-[13px] font-medium text-ink">Havuz boş</p>
+              <p className="mt-1 text-[12.5px] text-ink-3">
+                Vaka girdileri otomatik eklenir. Yukarıdan yeni kayıt ekleyebilirsiniz.
+              </p>
+            </div>
+          ) : (
+            <>
+              {/* Masaüstü tablo */}
+              <div className="scroll-x hidden md:block">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Etiket</th>
+                      <th>Değer</th>
+                      <th>Tür</th>
+                      <th>Kaynak</th>
+                      <th>Durum</th>
+                      <th className="text-right">İşlem</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.map((item) => (
+                      <tr key={item.id}>
+                        <td>
+                          <p className="font-medium text-ink">{item.label}</p>
+                          {item.kind === "event" && (
+                            <p className="mt-0.5 text-[11.5px] text-ink-3">
+                              {[
+                                item.attributes?.date,
+                                item.attributes?.place,
+                                item.attributes?.organization,
+                              ]
+                                .filter(Boolean)
+                                .join(" · ") || "Tarih/yer belirtilmedi"}
+                            </p>
+                          )}
+                        </td>
+                        <td className="max-w-[320px]">
+                          <span
+                            className="line-clamp-2 break-words text-ink-2"
+                            title={item.value}
+                          >
+                            {item.value}
+                          </span>
+                          {item.kind === "email" && (
+                            <BreachDetails check={item.attributes?.breach_check} />
+                          )}
+                        </td>
+                        <td className="text-ink-3">{KIND_TR[item.kind] || item.kind}</td>
+                        <td className="text-ink-3">{SOURCE_TR[item.source] || item.source}</td>
+                        <td>
+                          <Status value={item.status} />
+                        </td>
+                        <td>
+                          <div className="flex justify-end gap-1">
+                            {(item.status === "proposed" || item.status === "candidate") && (
+                              <>
+                                <button
+                                  type="button"
+                                  className="btn-quiet btn-sm"
+                                  onClick={() => setItemStatus(item, "confirmed")}
+                                  title="Onayla"
+                                >
+                                  <Check size={12} aria-hidden />
+                                  Onayla
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn-danger-quiet btn-sm"
+                                  onClick={() => setItemStatus(item, "rejected")}
+                                  title="Reddet"
+                                >
+                                  <X size={12} aria-hidden />
+                                </button>
+                              </>
+                            )}
+                            {item.kind === "email" && (
+                              <button
+                                type="button"
+                                className="btn-quiet btn-sm"
+                                onClick={() => checkBreach(item)}
+                                disabled={breachBusy === item.id || bulkBreach}
+                                title="HIBP veri ihlali kontrolü"
+                              >
+                                {breachBusy === item.id ? (
+                                  <Loader2 size={12} className="animate-spin" aria-hidden />
+                                ) : (
+                                  <ShieldAlert size={12} aria-hidden />
+                                )}
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              className="btn-quiet btn-sm"
+                              onClick={() => researchItem(item)}
+                              title="Bu kayıtla AI araştırması başlat"
+                            >
+                              <Sparkles size={12} aria-hidden />
+                            </button>
+                            <button
+                              type="button"
+                              className="btn-danger-quiet btn-sm"
+                              onClick={() => removeItem(item)}
+                              title="Sil"
+                            >
+                              <Trash2 size={12} aria-hidden />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Mobil kayıt listesi */}
+              <ul className="divide-y divide-line md:hidden">
+                {items.map((item) => (
+                  <li key={item.id} className="px-5 py-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-[13px] font-medium text-ink">{item.label}</p>
+                        <p className="mt-0.5 break-words text-[12.5px] text-ink-2">{item.value}</p>
+                        <p className="mt-1 text-[12px] text-ink-3">
+                          {KIND_TR[item.kind] || item.kind} ·{" "}
+                          {SOURCE_TR[item.source] || item.source}
+                        </p>
+                        {item.kind === "event" && (
+                          <p className="mt-0.5 text-[11.5px] text-ink-3">
+                            {[
+                              item.attributes?.date,
+                              item.attributes?.place,
+                              item.attributes?.organization,
+                            ]
+                              .filter(Boolean)
+                              .join(" · ") || "Tarih/yer belirtilmedi"}
+                          </p>
+                        )}
+                        {item.kind === "email" && (
+                          <BreachDetails check={item.attributes?.breach_check} />
+                        )}
+                      </div>
+                      <Status value={item.status} />
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {(item.status === "proposed" || item.status === "candidate") && (
+                        <>
+                          <button
+                            type="button"
+                            className="btn-quiet btn-sm"
+                            onClick={() => setItemStatus(item, "confirmed")}
+                          >
+                            Onayla
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-danger-quiet btn-sm"
+                            onClick={() => setItemStatus(item, "rejected")}
+                          >
+                            Reddet
+                          </button>
+                        </>
+                      )}
+                      {item.kind === "email" && (
+                        <button
+                          type="button"
+                          className="btn-quiet btn-sm"
+                          onClick={() => checkBreach(item)}
+                          disabled={breachBusy === item.id || bulkBreach}
+                        >
+                          {breachBusy === item.id ? "Kontrol ediliyor" : "Leak kontrolü"}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="btn-quiet btn-sm"
+                        onClick={() => researchItem(item)}
+                      >
+                        AI araştır
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-danger-quiet btn-sm"
+                        onClick={() => removeItem(item)}
+                      >
+                        Sil
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

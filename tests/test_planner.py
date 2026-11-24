@@ -23,6 +23,46 @@ def test_planner_fallback_templates():
     assert any("site:hackthebox.com" in q for q in query_strings)
 
 
+def test_planner_fallback_includes_pool_identifiers():
+    target = Target(kind="name", first_name="Kemal", last_name="Aydın")
+    plan = build_template_fallback_queries(
+        target,
+        generate_variants("Kemal", "Aydın"),
+        [{"kind": "domain", "value": "acme.example"}, {"kind": "email", "value": "k@acme.example"}],
+    )
+    queries = " ".join(q.query for q in plan.queries)
+    assert "acme.example" in queries
+    assert "k@acme.example" in queries or "k_acme.example" in queries
+
+
+def test_handle_mode_keeps_pool_queries():
+    target = handle_target("keremboz")
+    plan = build_template_fallback_queries(
+        target, None, [{"kind": "organization", "value": "Acme Lojistik"}]
+    )
+    queries = " ".join(q.query for q in plan.queries)
+    assert "Acme Lojistik" in queries
+    assert all("keremboz" in q.query or q.rationale.startswith("Havuz kaydı") for q in plan.queries)
+
+
+def test_planner_event_query_uses_place_and_organization():
+    target = name_target("Kemal", "Aydın")
+    plan = build_template_fallback_queries(
+        target,
+        None,
+        [
+            {
+                "kind": "event",
+                "value": "Konferans konuşması",
+                "attributes": {"place": "Ankara", "organization": "Acme"},
+            }
+        ],
+    )
+    event_queries = [q for q in plan.queries if "Konferans" in q.query]
+    assert event_queries
+    assert any("Ankara" in q.query and "Acme" in q.query for q in event_queries)
+
+
 # ---------------------------------------------------------------------------
 # Faz 1 = A: handle-farkında planlama
 # ---------------------------------------------------------------------------

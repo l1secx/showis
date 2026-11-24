@@ -39,6 +39,9 @@ interface ScanSession {
   events: SseEvent[];
   mode: string;
   setMode: (mode: string) => void;
+  availableModels: string[];
+  llmModel: string;
+  setLlmModel: (model: string) => void;
   estimate: ScanEstimate | null;
   starting: boolean;
   error: string | null;
@@ -59,6 +62,7 @@ export function useScanSession(): ScanSession {
 
 const scanKey = (caseId: string) => `showis:scan:${caseId}`;
 const modeKey = (caseId: string) => `showis:mode:${caseId}`;
+const modelKey = (caseId: string) => `showis:llm-model:${caseId}`;
 
 function readSession(key: string): string | null {
   if (typeof window === "undefined") return null;
@@ -76,6 +80,8 @@ export function ScanSessionProvider({
   const [scan, setScan] = useState<ScanStatus | null>(null);
   const [events, setEvents] = useState<SseEvent[]>([]);
   const [mode, setModeState] = useState(() => readSession(modeKey(caseId)) || "O2");
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [llmModel, setLlmModelState] = useState(() => readSession(modelKey(caseId)) || "");
   const [estimate, setEstimate] = useState<ScanEstimate | null>(null);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -83,6 +89,9 @@ export function ScanSessionProvider({
 
   const esRef = useRef<EventSource | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const eventFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingEventsRef = useRef<SseEvent[]>([]);
 
   const refreshScan = useCallback(async (id: string) => {
     try {
@@ -90,6 +99,36 @@ export function ScanSessionProvider({
     } catch {
       /* gecici hata: sonraki turda tekrar denenir */
     }
+  }, []);
+
+  /** SSE olay seli: tam scan durumunu her olayda çekmek yerine 750 ms'de bir çek. */
+  const scheduleRefresh = useCallback(
+    (id: string) => {
+      if (refreshTimerRef.current) return;
+      refreshTimerRef.current = setTimeout(() => {
+        refreshTimerRef.current = null;
+        void refreshScan(id);
+      }, 750);
+    },
+    [refreshScan]
+  );
+
+  /** Yüksek hacimli olayları 350 ms'lik partiler hâlinde tek render'a indir. */
+  const flushEvents = useCallback((immediate = false) => {
+    const flush = () => {
+      eventFlushTimerRef.current = null;
+      const batch = pendingEventsRef.current;
+      pendingEventsRef.current = [];
+      if (batch.length === 0) return;
+      setEvents((prev) => [...prev.slice(-199), ...batch].slice(-200));
+    };
+    if (immediate) {
+      if (eventFlushTimerRef.current) clearTimeout(eventFlushTimerRef.current);
+      flush();
+      return;
+    }
+    if (eventFlushTimerRef.current) return;
+    eventFlushTimerRef.current = setTimeout(flush, 350);
   }, []);
 
   const subscribe = useCallback(
@@ -104,16 +143,24 @@ export function ScanSessionProvider({
         } catch {
           /* gecersiz JSON: yoksay */
         }
-        setEvents((prev) =>
-          [...prev.slice(-299), { type, data, at: new Date().toLocaleTimeString("tr-TR") }]
-        );
+        pendingEventsRef.current.push({
+          type,
+          data,
+          at: new Date().toLocaleTimeString("tr-TR"),
+        });
+        const terminal =
+          type === "scan.completed" || type === "scan.failed" || type === "scan.cancelled";
+        flushEvents(terminal);
         if (type === "finding.created") setFindingsVersion((v) => v + 1);
-        if (type.startsWith("scan.") || type === "finding.created") refreshScan(id);
+        if (type.startsWith("scan.") || type === "finding.created") {
+          if (terminal) void refreshScan(id);
+          else scheduleRefresh(id);
+        }
       };
       EVENT_TYPES.forEach((t) => es.addEventListener(t, push(t) as EventListener));
       es.onerror = () => es.close();
     },
-    [refreshScan]
+    [flushEvents, refreshScan, scheduleRefresh]
   );
 
   const stopTimers = useCallback(() => {
@@ -121,6 +168,11 @@ export function ScanSessionProvider({
     esRef.current = null;
     if (pollRef.current) clearInterval(pollRef.current);
     pollRef.current = null;
+    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    refreshTimerRef.current = null;
+    if (eventFlushTimerRef.current) clearTimeout(eventFlushTimerRef.current);
+    eventFlushTimerRef.current = null;
+    pendingEventsRef.current = [];
   }, []);
 
   // Sayfa yenilendiginde / sekmeye donuldugunde oturumu geri yukle.
@@ -128,9 +180,20 @@ export function ScanSessionProvider({
     if (!scanId) return;
     refreshScan(scanId);
     subscribe(scanId);
-    pollRef.current = setInterval(() => refreshScan(scanId), 3000);
+    pollRef.current = setInterval(() => refreshScan(scanId), 5000);
     return stopTimers;
   }, [scanId, refreshScan, subscribe, stopTimers]);
+
+  // Terminal durumda SSE/polling gereksiz: bağlantıyı ve zamanlayıcıyı kapat.
+  useEffect(() => {
+    if (!scan) return;
+    if (["completed", "failed", "cancelled"].includes(scan.status)) {
+      esRef.current?.close();
+      esRef.current = null;
+      if (pollRef.current) clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, [scan]);
 
   // Tahmini sure: mod degisince yeniden hesaplanir.
   useEffect(() => {
@@ -144,9 +207,40 @@ export function ScanSessionProvider({
     };
   }, [caseId, mode]);
 
+  // Aktif profilin izinli modelleri; tarama başlatırken seçilir.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listAIProviders()
+      .then((providers) => {
+        if (cancelled) return;
+        const active = providers.find((provider) => provider.is_active && provider.enabled);
+        const config = active?.config || {};
+        const raw = Array.isArray(config.models) ? config.models : [];
+        const models = raw
+          .map((model: unknown) => String(model))
+          .filter((model: string) => model.trim());
+        const fallback = String(config.model || "");
+        const list = models.length ? models : fallback ? [fallback] : [];
+        setAvailableModels(list);
+        setLlmModelState((current) =>
+          current && list.includes(current) ? current : list[0] || ""
+        );
+      })
+      .catch(() => !cancelled && setAvailableModels([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [caseId]);
+
   const setMode = (next: string) => {
     setModeState(next);
     if (typeof window !== "undefined") window.sessionStorage.setItem(modeKey(caseId), next);
+  };
+
+  const setLlmModel = (next: string) => {
+    setLlmModelState(next);
+    if (typeof window !== "undefined") window.sessionStorage.setItem(modelKey(caseId), next);
   };
 
   const start = async () => {
@@ -154,7 +248,10 @@ export function ScanSessionProvider({
     setError(null);
     setEvents([]);
     try {
-      const res = await api.startScan(caseId, { mode });
+      const res = await api.startScan(caseId, {
+        mode,
+        llm_model: llmModel || undefined,
+      });
       if (typeof window !== "undefined") window.sessionStorage.setItem(scanKey(caseId), res.scan_id);
       setScanId(res.scan_id);
       subscribe(res.scan_id);
@@ -184,6 +281,9 @@ export function ScanSessionProvider({
       events,
       mode,
       setMode,
+      availableModels,
+      llmModel,
+      setLlmModel,
       estimate,
       starting,
       error,
@@ -193,7 +293,19 @@ export function ScanSessionProvider({
       refresh: () => scanId && refreshScan(scanId),
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [caseId, scanId, scan, events, mode, estimate, starting, error, findingsVersion]
+    [
+      caseId,
+      scanId,
+      scan,
+      events,
+      mode,
+      availableModels,
+      llmModel,
+      estimate,
+      starting,
+      error,
+      findingsVersion,
+    ]
   );
 
   return <ScanSessionContext.Provider value={value}>{children}</ScanSessionContext.Provider>;

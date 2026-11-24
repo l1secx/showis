@@ -6,9 +6,10 @@
 #     /*      -> web:3000  (UI)
 #
 # Erisim modeli (T-113):
-#   * Edge kimlik dogrulamasi = HTTP Basic (basicauth @gate). /health VE /healthz
-#     disindaki her yol korumali: UI + /api/* (/healthz bilincli muaf — T-330/F-04,
-#     yalniz ok|degraded + check adi doner).
+#   * Edge kimlik dogrulamasi = HTTP Basic (basicauth @gate). /health, /healthz
+#     ve statik Next.js parçaları dışındaki her yol korumali: HTML/RSC + /api/*.
+#     Statik JS/CSS yalnız koddur; her chunk için auth çağrısı sayfa geçişini
+#     kilitlediği için muaftır. (/healthz bilincli muaf — T-330/F-04.)
 #   * /api/* Next proxy'sine gider; proxy token'i her istege kendisi ekliyor. Yani
 #     X-API-Token edge'de ayirt edici degil, tek gercek kapi basic auth.
 #   * SSE (text/event-stream): ayni origin'de tarayici basic auth kimligini EventSource
@@ -25,6 +26,12 @@
 #   * Host dogrulamasi: SHOWIS_ALLOWED_HOSTS doluysa diger Host'lara 421 (render edilir).
 #   * `Server` basligi gizlenir (hem Caddy hem upstream: header_down).
 
+# SNI göndermeyen istemciler (ör. IP ile HTTPS açan tarayıcı) için varsayılan
+# sertifika kimliği. SHOWIS_DEFAULT_SNI TLS host'larından biri olmalı.
+{
+	default_sni {$SHOWIS_DEFAULT_SNI:localhost}
+}
+
 :8083 {
 	log {
 		output stdout
@@ -33,7 +40,12 @@
 	# /health disindaki her sey edge kimlik dogrulamasina tabi. `path` TAM eslesir;
 	# `/health/../api` gibi yollar normalize edilip /api olur ve gate'e girer.
 	@gate {
-		not path /health /healthz
+		# Statik Next.js parçaları kimlik doğrulamasından muaf: her chunk
+		# için bcrypt/forward_auth çağrısı sayfa geçişlerini kilitliyordu.
+		# HTML/RSC ve /api/* korumalı kalır; statik JS/CSS yalnız koddur.
+		# /_next/image bilinçli olarak muaf DEĞİL (kullanılmıyor, dış URL
+		# optimizasyon yüzeyi açılmasın).
+		not path /health /healthz /_next/static/* /icon.svg /favicon.ico
 	}
 
 	# Render edilen blok 1: basic auth (env doluysa).
@@ -166,7 +178,12 @@ __TLS_HOSTS_PLACEHOLDER__ {
 		format json
 	}
 	@gate {
-		not path /health /healthz
+		# Statik Next.js parçaları kimlik doğrulamasından muaf: her chunk
+		# için bcrypt/forward_auth çağrısı sayfa geçişlerini kilitliyordu.
+		# HTML/RSC ve /api/* korumalı kalır; statik JS/CSS yalnız koddur.
+		# /_next/image bilinçli olarak muaf DEĞİL (kullanılmıyor, dış URL
+		# optimizasyon yüzeyi açılmasın).
+		not path /health /healthz /_next/static/* /icon.svg /favicon.ico
 	}
 	__BASIC_AUTH_PLACEHOLDER__
 	__HOST_CHECK_PLACEHOLDER__

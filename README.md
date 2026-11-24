@@ -24,9 +24,27 @@ raporlayan kişisel OSINT web uygulaması.
   (`followers_count`, repo/post sayıları), boş bio, varsayılan avatar ve cross-link
   tutarlılığı skora katkı olarak işlenir (deterministik resolver, 7+ sinyal).
 - **Görsel Avatar Eşleme (dHash):** algısal 64-bit fark karması + birebir SHA-256.
-- **LLM Dinamik Planlayıcı & Açıklayıcı:** OpenCode Go / OpenAI uyumlu BYOK;
-  `SHOWIS_LLM_BASE_URL_ALLOWLIST` ile host allowlist, veri redaksiyonu (`redact_text`),
-  şablon fallback.
+- **AI Sağlayıcı Profilleri:** OpenCode Go, OpenCode Zen, OpenAI, OpenRouter, Groq
+  ve özel OpenAI uyumlu uç noktalar ayrı profil olarak eklenir; aynı anda biri
+  aktiftir. Anahtar girilince sağlayıcının `/models` ucu okunur; kullanıcı izinli
+  modelleri seçer. Tarama ve AI araştırmasında bu modeller arasından seçim yapılır.
+  Anahtarlar Fernet ile şifrelenir, base_url değişince geçersiz kılınır;
+  `SHOWIS_LLM_BASE_URL_ALLOWLIST` host allowlist'i ve veri redaksiyonu korunur.
+- **HIBP veri ihlali kontrolü:** Havuzdaki e-posta kayıtları Have I Been Pwned
+  üzerinden kontrol edilir; ihlal adı, tarihi, sızan veri sınıfları ve açıklaması
+  kayda işlenir. Anahtar Ayarlar > HIBP veya `HIBP_API_KEY` ile verilir.
+- **Araştırma Havuzu:** Vaka hedefi, ipuçları, seed'ler, notlar, yorumlar, tarama
+  ve AI önerileri tek havuzda toplanır (`pool_items`); tekilleştirme, tür/kaynak/
+  durum filtresi ve onay akışı vardır. **Olay** türü tarih/yer/kurum/kaynak URL'si
+  taşır; planlayıcı ve AI bu bağlamı doğrulama sorgularına katar. Planlayıcı havuz
+  kimliklerini de doğrular.
+- **AI Araştırma Ajanı:** Vaka seçicisi, havuz araması, web araması, sayfa okuma,
+  HIBP kontrolü, havuz/tedarik zinciri kaydı ve (tam ajan modunda) tarama başlatma
+  araçlarıyla adım adım araştırma yürütür; canlı “şu anda ne yapıyor” özeti, SSE
+  akışı, kaynaklı nihai sentez ve takip sorusu.
+- **Tedarik Zinciri Modülü:** Kişi kimlik grafiğinden ayrı `supply_chain_nodes` /
+  `supply_chain_edges` modeli; şirket, tedarikçi, ürün ve yönlü ilişkiler,
+  Cytoscape grafiği ve AI önerisi onay akışı.
 - **Hibrit Arama:** Brave → SerpAPI → Google CSE → DuckDuckGo fallback zinciri + URL tekilleştirme.
 - **Varyant Motoru:** Türkçe karakter normalizasyonu + akıllı kullanıcı adı adayları.
 - **Paralel Tarama:** `SHOWIS_SCAN_CONCURRENCY` (varsayılan 4) sınırlı eşzamanlılık;
@@ -72,6 +90,8 @@ python3 -c "import secrets; print(secrets.token_urlsafe(32))"   # değeri .env i
 python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 
 make docker-up     # tüm servisler
+# Kod değişikliğinden sonra imajları da yenile:
+make docker-rebuild
 docker compose -f infra/docker-compose.yml ps
 ```
 
@@ -166,14 +186,38 @@ python scripts/backfill_edges.py --case-id <case-id> --dry-run
 Kalibrasyon: `packages/engine/showis_engine/calibration.json` (151 örnek, 11 tarama;
 `scripts/calibrate_scan.py`). `GET /cases/{id}/scan/estimate?mode=O2` tahmini ±%11 içinde.
 
+Arayüz gecikmesi için alınan önlemler:
+
+- `/_next/static/*` Caddy edge auth'tan muaf; her JS/CSS chunk'ında bcrypt çağrısı yapılmaz.
+- Başarılı edge Basic auth 5 dakika bellekte önbelleğe alınır (parola düz saklanmaz).
+- Case sekmeleri ve vaka satırlarında Next.js prefetch kapatıldı; 10 sekme × 50 satır
+  prefetch seli engellenir.
+- `ScanSessionProvider` yalnız Tarama/Bulgular sayfalarında; diğer sekmelerde polling yok.
+- SSE olayları 350 ms'lik partilerle işlenir; tam scan durumu her olayda değil 750 ms'de bir çekilir.
+- Varsayılan `USE_CELERY=1`: taramalar worker'da koşar, API event loop'u kilitlenmez.
+
 ## Kullanım
 
-1. **Ayarlar** → sağlayıcı anahtarlarını gir (BYOK, maskeli saklanır)
-2. **Yeni Vaka** → amaç + hukuki dayanak + hedef ad/soyad + ipuçları + seed'ler
-3. **Tarama** → O1/O2/O3 seç, tahmini süreyi gör, canlı akışı izle (iptal edilebilir)
-4. **Bulgular** → skor kırılımı + kanıt paneli → Onayla/Reddet (karar yeniden taramada korunur)
-5. **Grafik** → entity/edge ağı, filtreler, dışa aktarma
-6. **Rapor** → PDF/JSON/HTML üret + indir (yönetici özeti + tablolar + kronoloji)
+1. **Ayarlar** → `LLM` sekmesinden bir veya daha fazla AI sağlayıcı profili ekle
+   (OpenCode Go, OpenAI, özel uç nokta). Anahtarı gir, **Modelleri getir** ile
+   erişilebilir modelleri listele, izinli modelleri seç, birini aktifleştir.
+2. **Ayarlar → HIBP** → Have I Been Pwned API anahtarını gir. Anahtar yoksa
+   e-posta ihlal kontrolü çalışmaz.
+3. **Yeni Vaka** → amaç + hukuki dayanak + hedef + ipuçları + seed'ler. Girdiğiniz
+   tüm alanlar vaka araştırma havuzuna otomatik eklenir.
+4. **Havuz** → kayıtları ara/filtrele, AI önerilerini onayla/reddet, e-postaları
+   HIBP'de kontrol et, tek kayıtla AI araştırması başlat.
+5. **AI Araştırma** → üstteki vaka seçicisiyle vaka değiştir; "Araştır ve öner"
+   veya "Tam ajan" modunu ve modeli seç, soruyu yaz. Ajanın o an ne yaptığı canlı
+   özet olarak görünür; kaynaklı nihai sentez sunulur. Takip sorusu sorulabilir.
+6. **Tedarik Zinciri** → şirket/tedarikçi/ürün düğümleri ve yönlü ilişkiler;
+   AI önerileri onay bekler.
+7. **Tarama** → O1/O2/O3 ve model seç, tahmini süreyi gör, canlı akışı izle
+   (iptal edilebilir). Planlayıcı havuz kimliklerini de arar.
+8. **Bulgular** → skor kırılımı + kanıt paneli → Onayla/Reddet (karar yeniden taramada korunur)
+9. **Grafik** → entity/edge ağı, filtreler, dışa aktarma
+10. **Rapor** → PDF/JSON/HTML üret + indir (yönetici özeti + tablolar + kronoloji).
+    JSON dışa aktarma havuz, AI araştırması ve tedarik zincirini de kapsar.
 
 ## Mimari
 
@@ -183,8 +227,14 @@ apps/web     Next.js 15 + Tailwind — arayüz (X-API-Token'ı sunucu tarafında
 packages/contracts   Pydantic modeller (tek doğruluk kaynağı)
 packages/connectors  github, tryhackme, hackthebox, websearch, publicapi/*, sitecheck
 packages/engine      http(+bütçe/limiter), policy(SSRF/robots), variants, resolver,
-                     planner, identity_edges, browser, report, links, scan_modes
+                     planner (havuz bağlamlı), identity_edges, browser, report,
+                     links, scan_modes
 packages/llm         OpenAI-uyumlu istemci + prompt'lar + redaksiyon
+apps/api/showis/services/pool.py          havuz normalizasyonu/arama/tohumlama
+apps/api/showis/services/research.py      AI ajan döngüsü + araçlar + SSE
+apps/api/showis/services/supply_chain.py  tedarik zinciri modeli/grafiği
+apps/api/showis/services/ai_providers.py  çoklu LLM profili + model keşfi
+apps/api/showis/services/hibp.py          Have I Been Pwned ihlal kontrolü
 packages/settings    Fernet şifreli BYOK
 infra/       docker-compose, Dockerfile'lar, caddy, script'ler
 ```

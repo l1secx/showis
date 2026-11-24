@@ -704,10 +704,11 @@ export default function NewCasePage() {
             <h2 className="section-heading">Nasıl çalışır</h2>
             <ol className="mt-3 space-y-2.5">
               {[
-                "Hedef kimliği ve ipuçlarından arama sorguları üretilir.",
+                "Girdiğiniz tüm alanlar vaka araştırma havuzuna eklenir.",
+                "Hedef kimliği, ipuçları ve havuz kayıtlarından arama sorguları üretilir.",
                 "Her sonuç isim ve kullanıcı adı benzerliğiyle skorlanır.",
                 "Bulunan kullanıcı adları 48 sitede doğrulanır.",
-                "Sonuçlar onaylı, aday veya ipucu olarak kayda düşer.",
+                "Bulgu ve AI önerileri onayınızdan sonra kesinleşir.",
               ].map((step, i) => (
                 <li key={i} className="flex gap-2.5 text-[12.5px] leading-relaxed text-ink-3">
                   <span className="numeric w-4 shrink-0 text-ink-3">{i + 1}.</span>

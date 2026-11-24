@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import os
 import re
 import secrets
@@ -37,6 +38,38 @@ _EDGE_MAX_FAILURES = 10
 _EDGE_MAX_FAILURES_PER_IP = 30
 #: Bilinmeyen kullanıcıda da bcrypt maliyeti ödemek için sabit dummy hash.
 _DUMMY_HASH = b"$2b$12$G7m5dmsg9ZbagnOXaAm9D.UJ1/4wBdyzhW51SQVMuDLhgpi1TkWm."
+
+#: Başarılı edge kimlikleri kısa süre önbelleğe alınır. Caddy her istekte
+#: forward_auth çağırdığı için bcrypt maliyeti sayfa geçişlerini kilitliyordu.
+#: Anahtar; kullanıcı + parola özeti + parola hash'idir; parola düz saklanmaz.
+_EDGE_SUCCESS_TTL = 300.0
+_EDGE_SUCCESS_CACHE: dict[str, float] = {}
+
+
+def _edge_success_key(username: str, password: str, password_hash: str) -> str:
+    payload = f"{username}\0{password}\0{password_hash}".encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _edge_cache_lookup(key: str) -> bool:
+    expires = _EDGE_SUCCESS_CACHE.get(key)
+    if expires is None:
+        return False
+    if expires <= time.monotonic():
+        _EDGE_SUCCESS_CACHE.pop(key, None)
+        return False
+    return True
+
+
+def _edge_cache_store(key: str) -> None:
+    now = time.monotonic()
+    if len(_EDGE_SUCCESS_CACHE) > 4096:
+        for stale, expires in list(_EDGE_SUCCESS_CACHE.items()):
+            if expires <= now:
+                _EDGE_SUCCESS_CACHE.pop(stale, None)
+        if len(_EDGE_SUCCESS_CACHE) > 4096:
+            _EDGE_SUCCESS_CACHE.clear()
+    _EDGE_SUCCESS_CACHE[key] = now + _EDGE_SUCCESS_TTL
 
 
 def edge_users() -> dict[str, str]:
@@ -114,10 +147,17 @@ async def edge_auth(
     password_hash = edge_users().get(username)
     valid = False
     if password_hash:
-        try:
-            valid = bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
-        except ValueError:
-            valid = False
+        cache_key = _edge_success_key(username, password, password_hash)
+        valid = _edge_cache_lookup(cache_key)
+        if not valid:
+            try:
+                valid = bcrypt.checkpw(
+                    password.encode("utf-8"), password_hash.encode("utf-8")
+                )
+            except ValueError:
+                valid = False
+            if valid:
+                _edge_cache_store(cache_key)
     else:
         # Kullanıcı yoksa da bcrypt maliyeti öde (kullanıcı enumerasyonunu zorlaştır).
         try:
