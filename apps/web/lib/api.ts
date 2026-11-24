@@ -280,6 +280,7 @@ export interface ResearchCitation {
   url?: string | null;
   pool_item_id?: string | null;
   node_id?: string | null;
+  snapshot_id?: string | null;
 }
 
 export interface ResearchMessage {
@@ -347,6 +348,25 @@ export interface PoolRelationRow {
   evidence: { rule: string; source: string; weight: number; note: string }[];
   status: "proposed" | "candidate" | "confirmed" | "rejected" | string;
   source: string;
+}
+
+export interface EvidenceSnapshotRow {
+  id: string;
+  case_id: string;
+  session_id: string | null;
+  url: string;
+  title: string;
+  sha256: string;
+  text_sha256: string;
+  text_length: number;
+  text_truncated: boolean;
+  http_status: number | null;
+  source: string;
+  fetched_at: string | null;
+  expires_at: string | null;
+  excerpt?: string;
+  text?: string;
+  integrity_ok?: boolean;
 }
 
 export interface HypothesisRow {
@@ -635,6 +655,12 @@ export const api = {
       contradictions: { kind: string; item_ids: string[]; message: string }[];
     }>(`/cases/${caseId}/reasoning/correlate`, { method: "POST" }),
   getReasoningGraph: (caseId: string) => req<ReasoningGraph>(`/cases/${caseId}/reasoning/graph`),
+  listSnapshots: (caseId: string, q?: string) =>
+    req<{ items: EvidenceSnapshotRow[]; total: number }>(
+      `/cases/${caseId}/evidence/snapshots${q ? `?q=${encodeURIComponent(q)}` : ""}`
+    ),
+  getSnapshot: (caseId: string, snapshotId: string) =>
+    req<EvidenceSnapshotRow>(`/cases/${caseId}/evidence/snapshots/${snapshotId}`),
   listHypotheses: (caseId: string) =>
     req<{ items: HypothesisRow[]; total: number }>(`/cases/${caseId}/reasoning/hypotheses`),
   generateHypotheses: (caseId: string) =>

@@ -1082,6 +1082,14 @@ function ResearchPageInner() {
                                     ) : (
                                       citation.label
                                     )}
+                                    {citation.snapshot_id && (
+                                      <Link
+                                        href={`/cases/${id}/evidence?snapshot=${citation.snapshot_id}`}
+                                        className="ml-2 text-[11px] text-ink-3 hover:underline"
+                                      >
+                                        arşiv kopyası
+                                      </Link>
+                                    )}
                                   </li>
                                 ))}
                               </ul>

@@ -10,6 +10,7 @@ const TABS = [
   { key: "pool", label: "Havuz", href: "pool" },
   { key: "research", label: "AI Araştırma", href: "research" },
   { key: "hypotheses", label: "Hipotezler", href: "hypotheses" },
+  { key: "evidence", label: "Kanıt", href: "evidence" },
   { key: "supply-chain", label: "Tedarik Zinciri", href: "supply-chain" },
   { key: "scan", label: "Tarama", href: "scan" },
   { key: "findings", label: "Bulgular", href: "findings" },
