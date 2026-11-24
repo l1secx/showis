@@ -18,13 +18,9 @@ MAX_SNAPSHOT_TEXT = 20_000
 LIST_LIMIT = 200
 
 
-def _expiry(case: Case) -> datetime | None:
-    created = case.created_at
-    if created is None:
-        return None
-    if created.tzinfo is None:
-        created = created.replace(tzinfo=timezone.utc)
-    return created + timedelta(days=int(case.retention_days or 30))
+def _expiry(case: Case) -> datetime:
+    """Saklama süresi arşivlendiği andan başlar (vaka yaşından bağımsız)."""
+    return datetime.now(timezone.utc) + timedelta(days=int(case.retention_days or 30))
 
 
 async def save_snapshot(
@@ -96,9 +92,7 @@ def snapshot_to_dict(row: EvidenceSnapshot, *, with_text: bool = False) -> dict[
     return data
 
 
-async def snapshot_ids_for_urls(
-    db: AsyncSession, case_id: str, urls: list[str]
-) -> dict[str, str]:
+async def snapshot_ids_for_urls(db: AsyncSession, case_id: str, urls: list[str]) -> dict[str, str]:
     """URL → en son snapshot id (vaka kapsamlı)."""
     if not urls:
         return {}

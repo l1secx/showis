@@ -117,9 +117,14 @@ async def check_breaches(db: AsyncSession, case: Case) -> list[WatchAlert]:
         except BreachError as exc:
             logger.info("İzleme sızıntı kontrolü başarısız: %s", str(exc)[:120])
             continue
+        current_providers = set(report.get("providers") or [])
+        previous_providers = set((previous or {}).get("providers") or [])
+        if previous is not None and not current_providers >= previous_providers:
+            # Bir sağlayıcı bu sefer yanıt vermedi: eksik rapor taban çizgisini ezmez.
+            continue
         item.attributes = {**(item.attributes or {}), "breach_check": report}
-        if previous is None:
-            continue  # taban çizgisi
+        if previous is None or current_providers > previous_providers:
+            continue  # taban çizgisi veya yeni sağlayıcı geldi: eski ihlaller "yeni" sayılmaz
         known = _breach_names(previous)
         for breach in report.get("breaches") or []:
             name = str(breach.get("name") or breach.get("title") or "").strip()

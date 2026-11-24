@@ -17,8 +17,14 @@ _seed_case = _workspace._seed_case
 _item = _rel._item
 
 
-def _report(*names: str, stealers: int = 0, checked_at: str = "2020-01-01T00:00:00+00:00"):
+def _report(
+    *names: str,
+    stealers: int = 0,
+    checked_at: str = "2020-01-01T00:00:00+00:00",
+    providers: list[str] | None = None,
+):
     return {
+        "providers": providers or [],
         "email": "a@example.com",
         "breaches": [
             {"name": n, "breach_date": "2024-01-01", "data_classes": ["Email"]} for n in names
@@ -166,3 +172,37 @@ async def test_run_due_watches_only_enabled_active_cases(db_factory, monkeypatch
         await db.commit()
         assert await watch_mod.run_due_watches(db) == {"cases": 1, "alerts": 3}
     assert seen == [case_id]
+
+
+@pytest.mark.asyncio
+async def test_partial_provider_report_does_not_poison_baseline(db_factory, monkeypatch):
+    case_id = await _seed_case(db_factory)
+    reports = iter(
+        [
+            _report(providers=["hudsonrock"]),  # XON çöktü: eksik taban çizgisi
+            _report("Eski1", "Eski2", providers=["xposedornot", "hudsonrock"]),  # XON döndü
+            _report("Eski1", "Eski2", "Yeni", providers=["xposedornot", "hudsonrock"]),
+            _report("Eski1", providers=["hudsonrock"]),  # bu sefer XON yok: atlanmalı
+            _report("Eski1", "Eski2", "Yeni", providers=["xposedornot", "hudsonrock"]),
+        ]
+    )
+
+    async def fake_check(db, email):
+        return next(reports)
+
+    monkeypatch.setattr(watch_mod, "check_email", fake_check)
+    async with db_factory() as db:
+        await _item(db, case_id, "email", "a@example.com", source="user", status="confirmed")
+        await db.commit()
+        case = await _case(db, case_id)
+        assert (await watch_mod.run_watch(db, case))["total"] == 0  # taban çizgisi
+        # Sağlayıcı geri geldi: tarihsel ihlaller sahte uyarı üretmez.
+        assert (await watch_mod.run_watch(db, case))["total"] == 0
+        # Gerçekten yeni ihlal uyarı üretir.
+        assert (await watch_mod.run_watch(db, case))["breach"] == 1
+        # Eksik rapor taban çizgisini ezmez ve uyarı üretmez...
+        assert (await watch_mod.run_watch(db, case))["total"] == 0
+        # ...bu yüzden tam rapor dönünce aynı ihlal ikinci kez uyarılmaz.
+        assert (await watch_mod.run_watch(db, case))["total"] == 0
+        alerts = (await db.execute(select(WatchAlert))).scalars().all()
+        assert [a.detail["breach"] for a in alerts] == ["Yeni"]

@@ -181,3 +181,19 @@ async def test_archive_failure_does_not_break_research(db_factory, monkeypatch):
         page = FetchResult(url="https://example.org/z", title="", text="t")
         assert await runtime.archive_page(page, source="research") is None
         assert any("arşiv" in err for err in runtime.errors)
+
+
+@pytest.mark.asyncio
+async def test_snapshot_retention_starts_at_archive_time_for_old_case(db_factory):
+    async with db_factory() as db:
+        case = await _case(db)
+        case.created_at = datetime.now(timezone.utc) - timedelta(days=60)  # 30 günlük pencere geçti
+        row = await save_snapshot(
+            db, case=case, url="https://example.org/yeni", title="", text="x", sha256=""
+        )
+        await db.commit()
+        expires = row.expires_at
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        assert expires > datetime.now(timezone.utc) + timedelta(days=29)
+        assert await purge_expired_snapshots(db) == 0
