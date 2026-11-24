@@ -45,6 +45,7 @@ pydantic==2.14.3
 pydantic_core==2.50.4
 python-dateutil==2.9.0.post0
 python-multipart==0.0.34
+pyyaml==6.0.4
 redis==8.1.0
 reportlab==5.1.0
 six==1.17.0

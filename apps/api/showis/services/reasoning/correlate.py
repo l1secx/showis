@@ -1,6 +1,7 @@
 """Deterministik korelasyon kuralları (SpiderFoot tarzı) ve tutarlılık denetimi.
 
-Kurallar Python'da tanımlıdır (`RULES`); her kural bir `Match` listesi döndürür.
+Kurallar `rules.yaml` içinde tanımlıdır (`RULES`); dosya yüklenemezse Python
+varsayılanları (`DEFAULT_RULES`) kullanılır. Her kural bir `Match` listesi döndürür.
 Eşleşmeler (src, dst, type) bazında birleştirilir; bir ilişki ancak **en az iki
 bağımsız kanıt** varsa `candidate` olur, aksi halde `proposed` kalır. `confirmed`
 yalnız kullanıcıdan gelir.
@@ -9,13 +10,18 @@ yalnız kullanıcıdan gelir.
 from __future__ import annotations
 
 import itertools
+import logging
+import re
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any, Callable, Sequence
 
+import yaml
 from showis.db.models import PoolItem, PoolRelation
 from showis.services.reasoning.graph import (
     IDENTITY_TYPES,
+    RELATION_TYPES,
     identity_clusters,
     independent_sources,
     upsert_relation,
@@ -24,6 +30,8 @@ from showis.services.reasoning.scoring import score
 from showis.services.research_playbook import is_aggregator_url
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
 
 MIN_HANDLE_LEN = 4
 MAX_GROUP = 8
@@ -208,7 +216,16 @@ def rule_profile_owner(items: Sequence[PoolItem]) -> list[Match]:
     return matches
 
 
-RULES: tuple[Rule, ...] = (
+#: Yerleşik eşleştiriciler; `rules.yaml` yalnız ağırlık/açık-kapalı ve açıklamayı ayarlar.
+BUILTIN_MATCHERS: dict[str, Callable[[Sequence[PoolItem]], list[Match]]] = {
+    "same_handle": rule_same_handle,
+    "username_email_local": rule_username_email,
+    "shared_aggregator": rule_shared_aggregator,
+    "same_avatar": rule_same_avatar,
+    "profile_owner": rule_profile_owner,
+}
+#: YAML yüklenemezse kullanılan Python varsayılanları.
+DEFAULT_RULES: tuple[Rule, ...] = (
     Rule("same_handle", "Aynı kullanıcı adı farklı platformlarda", 2.0, rule_same_handle),
     Rule("username_email_local", "Kullanıcı adı = e-posta yerel kısmı", 1.0, rule_username_email),
     Rule(
@@ -220,12 +237,115 @@ RULES: tuple[Rule, ...] = (
     Rule("same_avatar", "Aynı avatar özeti", 3.0, rule_same_avatar),
     Rule("profile_owner", "Profil bağlantısı ↔ kullanıcı adı", 1.5, rule_profile_owner),
 )
+RULES_PATH = Path(__file__).with_name("rules.yaml")
+MAX_RULE_WEIGHT = 5.0
+_ATTRIBUTE_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+_RULE_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+
+
+class RulesError(ValueError):
+    """`rules.yaml` biçimi geçersiz."""
+
+
+def _shared_attribute_matcher(
+    rule_id: str, attribute: str, relation: str, weight: float, min_length: int
+) -> Callable[[Sequence[PoolItem]], list[Match]]:
+    def apply(items: Sequence[PoolItem]) -> list[Match]:
+        groups: dict[str, list[PoolItem]] = defaultdict(list)
+        for item in _live(items):
+            value = _attr(item, attribute).casefold()
+            if len(value) >= min_length:
+                groups[value].append(item)
+        matches: list[Match] = []
+        for value, members in groups.items():
+            if len(members) < 2 or len(members) > MAX_GROUP:
+                continue
+            for left, right in itertools.combinations(sorted(members, key=lambda m: m.id), 2):
+                matches.append(
+                    Match(
+                        left.id,
+                        right.id,
+                        relation,
+                        weight,
+                        rule_id,
+                        value,
+                        f"aynı {attribute}",
+                    )
+                )
+        return matches
+
+    return apply
+
+
+def _number(raw: Any, field: str, rule_id: str, *, low: float, high: float) -> float:
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)) or not low < raw <= high:
+        raise RulesError(f"{rule_id}: {field} ({low}, {high}] aralığında sayı olmalı")
+    return float(raw)
+
+
+def parse_rules(data: Any) -> tuple[Rule, ...]:
+    """Doğrulanmış YAML verisinden kural listesi üretir; geçersizse `RulesError`."""
+    if not isinstance(data, dict) or data.get("version") != 1:
+        raise RulesError("version: 1 gerekli")
+    entries = data.get("rules")
+    if not isinstance(entries, list) or not entries:
+        raise RulesError("rules boş olmayan liste olmalı")
+    rules: list[Rule] = []
+    seen: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise RulesError("her kural bir eşleme olmalı")
+        rule_id = str(entry.get("id") or "")
+        if not _RULE_ID_RE.match(rule_id):
+            raise RulesError(f"geçersiz kural id: {rule_id!r}")
+        if rule_id in seen:
+            raise RulesError(f"yinelenen kural id: {rule_id}")
+        seen.add(rule_id)
+        enabled = entry.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise RulesError(f"{rule_id}: enabled bool olmalı")
+        weight = _number(entry.get("weight"), "weight", rule_id, low=0, high=MAX_RULE_WEIGHT)
+        description = str(entry.get("description") or rule_id)[:200]
+        kind = entry.get("type", "builtin")
+        if kind == "builtin":
+            matcher = BUILTIN_MATCHERS.get(rule_id)
+            if matcher is None:
+                raise RulesError(f"bilinmeyen yerleşik kural: {rule_id}")
+        elif kind == "shared_attribute":
+            attribute = str(entry.get("attribute") or "")
+            relation = str(entry.get("relation") or "")
+            if not _ATTRIBUTE_RE.match(attribute):
+                raise RulesError(f"{rule_id}: geçersiz attribute")
+            if relation not in RELATION_TYPES or relation == "contradicts":
+                raise RulesError(f"{rule_id}: geçersiz relation: {relation!r}")
+            min_length = int(
+                _number(entry.get("min_length", 4), "min_length", rule_id, low=0, high=64)
+            )
+            matcher = _shared_attribute_matcher(rule_id, attribute, relation, weight, min_length)
+        else:
+            raise RulesError(f"{rule_id}: bilinmeyen type: {kind!r}")
+        if enabled:
+            rules.append(Rule(rule_id, description, weight, matcher))
+    return tuple(rules)
+
+
+def load_rules(path: Path = RULES_PATH) -> tuple[Rule, ...]:
+    """`rules.yaml` yüklenir; eksik veya geçersizse Python varsayılanları döner."""
+    try:
+        return parse_rules(yaml.safe_load(path.read_text(encoding="utf-8")))
+    except (OSError, yaml.YAMLError, RulesError, TypeError, ValueError) as exc:
+        logger.warning("rules.yaml yüklenemedi, varsayılan kurallar kullanılıyor: %s", exc)
+        return DEFAULT_RULES
+
+
+RULES: tuple[Rule, ...] = load_rules()
 
 
 def run_rules(items: Sequence[PoolItem]) -> list[Match]:
+    """Kuralları çalıştırır; eşleşme ağırlığı kuralın (YAML) ağırlığıyla belirlenir."""
     matches: list[Match] = []
     for rule in RULES:
-        matches.extend(rule.apply(items))
+        matches.extend(replace(match, weight=rule.weight) for match in rule.apply(items))
     return matches
 
 
@@ -423,12 +543,16 @@ async def run_correlation(db: AsyncSession, case_id: str) -> dict[str, Any]:
 
 
 __all__ = [
+    "DEFAULT_RULES",
     "IDENTITY_TYPES",
     "RULES",
+    "RulesError",
     "Contradiction",
     "Match",
     "build_timeline",
     "find_contradictions",
+    "load_rules",
+    "parse_rules",
     "run_correlation",
     "run_rules",
 ]

@@ -1,0 +1,33 @@
+# Korelasyon kuralları (SpiderFoot tarzı). Yükleyici: correlate.load_rules().
+#
+# Yerleşik kural (`id` Python eşleştiricisinin adıdır): yalnız `weight`, `enabled`
+# ve `description` değiştirilebilir.
+# `type: shared_attribute`: aynı `attribute` (PoolItem.attributes) değerini paylaşan
+# öğeler arasında `relation` türünde ilişki önerir.
+#
+# Geçersiz dosya yüklenmez; yerleşik Python varsayılanları kullanılır. İlişki ancak
+# en az iki bağımsız kanıtla `candidate` olur; `confirmed` yalnız kullanıcıdan gelir.
+version: 1
+rules:
+  - id: same_handle
+    description: Aynı kullanıcı adı farklı platformlarda
+    weight: 2.0
+  - id: username_email_local
+    description: Kullanıcı adı = e-posta yerel kısmı
+    weight: 1.0
+  - id: shared_aggregator
+    description: Aynı bağlantı toplayıcıda listeleniyor
+    weight: 2.5
+  - id: same_avatar
+    description: Aynı avatar özeti
+    weight: 3.0
+  - id: profile_owner
+    description: Profil bağlantısı ↔ kullanıcı adı
+    weight: 1.5
+  - id: same_phone
+    type: shared_attribute
+    description: Aynı normalize telefon numarası
+    attribute: phone_e164
+    relation: same_person
+    weight: 2.5
+    min_length: 8
