@@ -249,7 +249,7 @@ async def test_case_silme_rapor_dosyalarini_diskten_siler(
 
 @pytest.mark.asyncio
 async def test_rapor_silme_basarisizsa_audit_yazilir(
-    client, session_factory, tmp_path
+    client, session_factory, tmp_path, monkeypatch
 ):
     case_id = await _create_case(client)
     locked_dir = tmp_path / "locked"
@@ -260,8 +260,15 @@ async def test_rapor_silme_basarisizsa_audit_yazilir(
         session.add(Report(case_id=case_id, format="pdf", storage_key=str(target)))
         await session.commit()
 
-    # Yazma izni kaldır: unlink EACCES ile başarısız olur
-    locked_dir.chmod(0o500)
+    # uid'den bağımsız: hedef dosyanın unlink çağrısı OSError fırlatır
+    real_unlink = Path.unlink
+
+    def _fail_unlink(self: Path, *args: object, **kwargs: object) -> None:
+        if self == target:
+            raise PermissionError(13, "izin yok")
+        real_unlink(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "unlink", _fail_unlink)
     try:
         res = await client.delete(f"/api/v1/cases/{case_id}")
         assert res.status_code == 204, res.text
@@ -274,4 +281,4 @@ async def test_rapor_silme_basarisizsa_audit_yazilir(
         assert logs, "silinemeyen rapor için audit kaydı bekleniyor"
         assert logs[0].details["failed_count"] >= 1
     finally:
-        locked_dir.chmod(0o700)
+        monkeypatch.undo()
