@@ -56,6 +56,8 @@ class ResearchControl:
     asked: int = 0
     on_question: QuestionHook | None = None
     on_answered: AnsweredHook | None = None
+    #: Soru sorulmadan hemen önce çağrılır: süreç ölürse oturum kaldığı yerden sürsün.
+    on_checkpoint: Callable[[], Awaitable[None]] | None = None
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     # -- yönlendirme ---------------------------------------------------
@@ -93,6 +95,11 @@ class ResearchControl:
             )
             self.pending = pending
             try:
+                if self.on_checkpoint is not None:
+                    try:
+                        await self.on_checkpoint()
+                    except Exception:  # noqa: BLE001 - kontrol noktası soruyu engellemesin
+                        logger.warning("Kontrol noktasi yazilamadi", exc_info=True)
                 if self.on_question is not None:
                     await self.on_question(pending)
                 try:

@@ -291,6 +291,30 @@ class ResearchSession(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class ResearchControlState(Base):
+    """Araştırma oturumunun kalıcı kontrol durumu (steer kuyruğu, soru/yanıt, durdurma).
+
+    Süreç yeniden başlasa da `awaiting_user` oturumu sorusunu korur ve yanıtla sürer.
+    """
+
+    __tablename__ = "research_control_state"
+
+    session_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("research_sessions.id", ondelete="CASCADE"), primary_key=True
+    )
+    interrupt: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    #: Ekleme-yalnız yönlendirme metinleri.
+    steering: Mapped[list[str]] = mapped_column(JSON_TYPE, default=list)
+    #: {"id","question","options","asked_at"} veya None.
+    pending_question: Mapped[dict[str, Any] | None] = mapped_column(JSON_TYPE, nullable=True)
+    #: Süreç kapalıyken verilen yanıt: {"question_id","question","answer","answered_at"}.
+    answer: Mapped[dict[str, Any] | None] = mapped_column(JSON_TYPE, nullable=True)
+    asked_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
 class ResearchMessage(Base):
     """Araştırma akışındaki tek adım: kullanıcı, düşünce, araç veya nihai yanıt."""
 

@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from showis.db.models import Case, PoolItem, ResearchMessage, ResearchSession, Setting
 from showis.db.session import get_db
+from showis.services import research_state
 from showis.services.ai_providers import active_provider, allowed_models, get_provider
 from showis.services.audit import record_request_audit
 from showis.services.pool import ensure_case_pool
@@ -315,7 +316,12 @@ async def get_research_session(
         .scalars()
         .all()
     )
-    return session_to_dict(session, messages=messages)
+    stored = await research_state.get_state(db, session.id)
+    return session_to_dict(
+        session,
+        messages=messages,
+        stored_question=research_state.pending_question_dict(stored),
+    )
 
 
 @router.post("/{case_id}/research/{session_id}/messages", status_code=202)
@@ -329,7 +335,7 @@ async def add_research_message(
 ):
     session = await _require_session(db, case_id, session_id)
     if session.status in ACTIVE_STATUSES:
-        return await _steer_running_session(db, request, session, data.question)
+        return await _steer_running_session(db, request, session, data.question, background_tasks)
     if await _active_session(db, case_id) is not None:
         raise HTTPException(
             status_code=409, detail="Bu vakada çalışan başka bir araştırma oturumu var"
@@ -365,8 +371,41 @@ async def add_research_message(
     return session_to_dict(session)
 
 
+async def _answer_offline(
+    db: AsyncSession,
+    background_tasks: BackgroundTasks,
+    session: ResearchSession,
+    question_id: str | None,
+    text: str,
+) -> bool:
+    """API yeniden başlamış: DB'deki soruyu yanıtlar ve oturumu kuyruğa alır."""
+    if session.status != "awaiting_user" or get_control(session.id) is not None:
+        return False
+    stored = await research_state.store_offline_answer(db, session.id, question_id, text)
+    if stored is None:
+        return False
+    db.add(
+        ResearchMessage(
+            session_id=session.id,
+            role="user",
+            tool_name="answer",
+            content=stored["answer"],
+            tool_args={"question_id": stored["question_id"]},
+        )
+    )
+    session.status = "queued"
+    session.error = None
+    await db.commit()
+    background_tasks.add_task(run_research_session, session.id)
+    return True
+
+
 async def _steer_running_session(
-    db: AsyncSession, request: Request, session: ResearchSession, text: str
+    db: AsyncSession,
+    request: Request,
+    session: ResearchSession,
+    text: str,
+    background_tasks: BackgroundTasks,
 ) -> dict[str, Any]:
     """Çalışan oturuma mesaj: bekleyen soruya yanıt ya da yönlendirme kuyruğu (409 yok)."""
     control = get_control(session.id)
@@ -374,7 +413,10 @@ async def _steer_running_session(
         # Ajan soru sormuş ve bekliyor: sohbetten gelen metin yanıt sayılır.
         if control.answer(control.pending.id, text):
             return {"id": session.id, "status": "running", "queued": False, "answered": True}
+    if control is None and await _answer_offline(db, background_tasks, session, None, text):
+        return {"id": session.id, "status": "queued", "queued": False, "answered": True}
     queued = control.push_steer(text) if control is not None else False
+    await research_state.append_steer(db, session.id, text)
     db.add(
         ResearchMessage(
             session_id=session.id,
@@ -414,6 +456,7 @@ async def interrupt_research(
         raise HTTPException(status_code=409, detail="Oturum çalışmıyor")
     control = get_control(session.id)
     if control is not None:
+        await research_state.set_interrupt(db, session.id, True)
         control.request_interrupt()
         status_text = "interrupting"
     else:
@@ -476,12 +519,21 @@ async def answer_research_question(
     session_id: str,
     data: ResearchAnswer,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
-    """Ajanın `ask_user` sorusunu yanıtlar; oturum kaldığı yerden sürer."""
+    """Ajanın `ask_user` sorusunu yanıtlar; oturum kaldığı yerden sürer.
+
+    API yeniden başlamışsa soru DB'den okunur ve oturum yanıtla yeniden kuyruğa alınır.
+    """
     session = await _require_session(db, case_id, session_id)
     control = get_control(session.id)
-    if control is None or not control.answer(data.question_id, data.answer):
+    if control is not None:
+        if not control.answer(data.question_id, data.answer):
+            raise HTTPException(status_code=409, detail="Bekleyen soru yok")
+    elif not await _answer_offline(
+        db, background_tasks, session, data.question_id, data.answer
+    ):
         raise HTTPException(status_code=409, detail="Bekleyen soru yok")
     await record_request_audit(
         db=db,

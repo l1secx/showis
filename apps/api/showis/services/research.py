@@ -38,6 +38,7 @@ from showis.db.models import (
     Target,
 )
 from showis.db.session import task_session
+from showis.services import research_state
 from showis.services.ai_providers import AIProviderValidationError
 from showis.services.audit import record_audit
 from showis.services.breach import BreachError, check_email
@@ -412,11 +413,14 @@ def message_to_dict(message: ResearchMessage) -> dict[str, Any]:
     }
 
 
-def _pending_question(session_id: str) -> dict[str, Any] | None:
+def _pending_question(
+    session_id: str, stored: dict[str, Any] | None = None
+) -> dict[str, Any] | None:
+    """Canlı soru; süreç yeniden başlamışsa DB'de saklanan soru."""
     control = get_control(session_id)
     pending = control.pending if control is not None else None
     if pending is None:
-        return None
+        return stored
     return {"question_id": pending.id, "question": pending.question, "options": pending.options}
 
 
@@ -425,6 +429,7 @@ def session_to_dict(
     *,
     messages: Sequence[ResearchMessage] = (),
     summary: bool = False,
+    stored_question: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if summary:
         return {
@@ -449,7 +454,7 @@ def session_to_dict(
         "stats": session.stats or {},
         "final_answer": session.final_answer,
         "citations": session.citations or [],
-        "pending_question": _pending_question(session.id),
+        "pending_question": _pending_question(session.id, stored_question),
         "created_by": session.created_by,
         "created_at": session.created_at.isoformat() if session.created_at else None,
         "started_at": session.started_at.isoformat() if session.started_at else None,
@@ -1141,6 +1146,7 @@ class ResearchRuntime:
         self.control: ResearchControl | None = get_control(session.id)
         self.steering_notes: list[str] = []
         self.steer_cursor = 0
+        self.current_wave = 1
 
     def absorb_steering(self) -> list[str]:
         """Bekleyen analist yönlendirmelerini alır ve not listesine ekler."""
@@ -3250,10 +3256,8 @@ def _format_pool_rows(rows: Sequence[dict[str, Any]], limit: int = 80) -> str:
     return "\n".join(lines)
 
 
-async def _park_interrupted(runtime: ResearchRuntime, *, next_wave: int) -> None:
-    """Durdurma isteğinde durumu saklar; `resume` kaldığı dalgadan sürdürür."""
-    await runtime.persist()
-    runtime.stats["resume"] = {
+def _resume_snapshot(runtime: ResearchRuntime, next_wave: int) -> dict[str, Any]:
+    return {
         "next_wave": next_wave,
         "queries": list(runtime.query_seen.keys())[-200:],
         "leads": [
@@ -3261,6 +3265,26 @@ async def _park_interrupted(runtime: ResearchRuntime, *, next_wave: int) -> None
             for lead in list(runtime.leads.values())[:80]
         ],
     }
+
+
+async def _checkpoint_for_question(runtime: ResearchRuntime) -> None:
+    """`ask_user` öncesi: bulguları yazar ve geçerli dalgayı `resume` olarak saklar.
+
+    Alt ajanlar DB kullanmaz ve ana döngü `gather`da beklerken oturum boştadır.
+    """
+    await runtime.persist()
+    runtime.session.stats = {
+        **runtime.stats,
+        "resume": _resume_snapshot(runtime, runtime.current_wave),
+    }
+    await runtime.db.commit()
+
+
+async def _park_interrupted(runtime: ResearchRuntime, *, next_wave: int) -> None:
+    """Durdurma isteğinde durumu saklar; `resume` kaldığı dalgadan sürdürür."""
+    await runtime.persist()
+    runtime.stats["resume"] = _resume_snapshot(runtime, next_wave)
+    await research_state.set_interrupt(runtime.db, runtime.session.id, False)
     runtime.stats["coverage"] = runtime.coverage()
     runtime.stats["activity"] = "Araştırma durduruldu; devam ettirilebilir"
     runtime.session.stats = {**runtime.stats}
@@ -3359,6 +3383,8 @@ async def _run_loop(
     )
     runtime.reasoner_client = reasoner_client or client
     runtime.extractor_client = extractor_client or client
+    if runtime.control is not None:
+        runtime.control.on_checkpoint = lambda: _checkpoint_for_question(runtime)
     if resume:
         for text in resume.get("queries", [])[:200]:
             runtime.query_seen.setdefault(str(text), "önceki çalışma")
@@ -3429,6 +3455,11 @@ async def _run_loop(
             if offline:
                 stop_reason = "çevrimdışı test"
                 break
+            runtime.current_wave = wave
+            if runtime.control is not None and not runtime.control.interrupt:
+                stored = await research_state.get_state(db, session.id)
+                if stored is not None and stored.interrupt:
+                    runtime.control.request_interrupt()
             if runtime.interrupted():
                 await _park_interrupted(runtime, next_wave=wave)
                 return
@@ -3596,6 +3627,13 @@ def _make_question_hook(session_id: str):
                 return
             row.status = "awaiting_user"
             row.stats = {**(row.stats or {}), "activity": "Analistin yanıtı bekleniyor"}
+            await research_state.save_pending_question(
+                db,
+                session_id,
+                question_id=pending.id,
+                question=pending.question,
+                options=pending.options,
+            )
             db.add(
                 ResearchMessage(
                     session_id=session_id,
@@ -3632,6 +3670,7 @@ def _make_answered_hook(session_id: str):
                 return
             if row.status == "awaiting_user":
                 row.status = "running"
+            await research_state.clear_pending_question(db, session_id)
             db.add(
                 ResearchMessage(
                     session_id=session_id,
@@ -3706,9 +3745,27 @@ async def run_research_session(session_id: str) -> None:
                 raise ResearchError("araştırma sorusu bulunamadı")
             # İlk soru dışındaki kullanıcı mesajları (takip soruları, kuyruktaki
             # yönlendirmeler) yeni çalışmaya analist yönlendirmesi olarak girer.
+            stored = await research_state.get_state(db, session.id)
+            if stored is None:
+                # Eski oturum (kontrol durumu yok): yönlendirmeler mesajlardan okunur.
+                skip = {"answer"}
+            else:
+                # Yönlendirmeler DB durumundan gelir; tekrar yüklenmesin.
+                skip = {"answer", "steer"}
+                for note in stored.steering or []:
+                    control.push_steer(str(note))
+                control.asked = int(stored.asked_count or 0)
             for message in history[1:]:
-                if message.role == "user" and message.tool_name != "answer":
+                if message.role == "user" and message.tool_name not in skip:
                     control.push_steer(message.content or "")
+            # Süreç kapalıyken verilen ask_user yanıtı: ajana analist notu olarak girer.
+            offline_answer = await research_state.consume_answer(db, session.id)
+            if offline_answer:
+                control.push_steer(
+                    f'Önceki sorunuza ("{offline_answer["question"]}") analist yanıtı: '
+                    f'{offline_answer["answer"]}'
+                )
+            await research_state.set_interrupt(db, session.id, False)
             stats = dict(session.stats or {})
             if not isinstance(stats.get("resume"), dict):
                 stats.update(
