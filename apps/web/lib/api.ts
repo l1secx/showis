@@ -242,6 +242,8 @@ export interface AIProviderProfile {
   name: string;
   preset: string;
   config: Record<string, any>;
+  roles?: Record<string, string>;
+  capabilities?: Record<string, { tools: boolean; stream: boolean; thinking: boolean }>;
   secret_masked?: string | null;
   secret_required: boolean;
   enabled: boolean;
@@ -588,7 +590,17 @@ export const api = {
   // --- AI sağlayıcı profilleri ---
   listAIProviders: () => req<AIProviderProfile[]>("/ai/providers"),
   listAIProviderPresets: () =>
-    req<Record<string, { base_url: string; default_model: string; description: string }>>(
+    req<
+      Record<
+        string,
+        {
+          base_url: string;
+          default_model: string;
+          description: string;
+          suggested_roles?: Record<string, string>;
+        }
+      >
+    >(
       "/ai/providers/presets"
     ),
   createAIProvider: (body: Record<string, any>) =>

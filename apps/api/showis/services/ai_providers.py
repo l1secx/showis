@@ -19,7 +19,14 @@ from showis.core.redact import provider_error_message, sanitize_error
 from showis.db.models import AIProvider
 from showis_engine.policy import SSRFViolationError, guard_url
 from showis_llm.base_url import BaseUrlError, validate_base_url
-from showis_llm.presets import PRESETS, get_preset
+from showis_llm.presets import (
+    ANTHROPIC_DEFAULT_ROLES,
+    PRESETS,
+    ROLES,
+    detect_api_style,
+    get_preset,
+    model_capabilities,
+)
 from showis_settings.crypto import decrypt_secret, encrypt_secret, mask_secret
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -160,6 +167,38 @@ def allowed_models(provider: AIProvider) -> list[str]:
     return [model] if model else []
 
 
+def validate_roles(roles: dict[str, Any] | None, *, models: list[str]) -> dict[str, str]:
+    """Rol → model eşlemesi; modeller profilin izinli listesinde olmalı."""
+    if roles is None:
+        return {}
+    if not isinstance(roles, dict):
+        raise AIProviderValidationError("roles nesne olmali")
+    unknown = sorted(set(roles) - set(ROLES))
+    if unknown:
+        raise AIProviderValidationError(f"izinli roller: {list(ROLES)} (gelen: {unknown})")
+    cleaned: dict[str, str] = {}
+    for role, model in roles.items():
+        text = str(model or "").strip()
+        if not text:
+            continue
+        if len(text) > MAX_MODEL:
+            raise AIProviderValidationError(f"roles.{role} cok uzun")
+        if models and text not in models:
+            raise AIProviderValidationError(f"roles.{role} izinli model listesinde degil")
+        cleaned[role] = text
+    return cleaned
+
+
+def suggested_roles(preset: str) -> dict[str, str]:
+    return dict(ANTHROPIC_DEFAULT_ROLES) if preset == "anthropic" else {}
+
+
+def provider_capabilities(provider: AIProvider) -> dict[str, dict[str, bool]]:
+    """İzinli her model için tahmini yetenekler (tools/stream/thinking)."""
+    style = detect_api_style(str((provider.config or {}).get("base_url") or DEFAULT_BASE_URL))
+    return {model: model_capabilities(model, style) for model in allowed_models(provider)}
+
+
 def validate_name(name: str) -> str:
     cleaned = " ".join(str(name or "").split())
     if not cleaned or len(cleaned) > MAX_NAME:
@@ -213,6 +252,7 @@ async def create_provider(
     secret: str | None,
     enabled: bool = True,
     activate: bool = False,
+    roles: dict[str, Any] | None = None,
 ) -> AIProvider:
     clean_name = validate_name(name)
     preset_key = str(preset or "custom").strip().lower()
@@ -234,6 +274,7 @@ async def create_provider(
         name=clean_name,
         preset=preset_key,
         config=cleaned,
+        roles=validate_roles(roles, models=cleaned["models"]),
         secret_encrypted=encrypt_secret(secret) if secret else None,
         secret_masked=mask_secret(secret) if secret else None,
         enabled=enabled,
@@ -257,6 +298,7 @@ async def update_provider(
     config: dict[str, Any] | None = None,
     secret: str | None = None,
     enabled: bool | None = None,
+    roles: dict[str, Any] | None = None,
 ) -> tuple[AIProvider, bool]:
     """Profili günceller; sır geçersiz kılındıysa `(provider, True)` döner."""
     changed: list[str] = []
@@ -289,6 +331,9 @@ async def update_provider(
         provider.config = cleaned
         changed.append("config")
     new_url = str((provider.config or {}).get("base_url") or DEFAULT_BASE_URL)
+    if roles is not None:
+        provider.roles = validate_roles(roles, models=allowed_models(provider))
+        changed.append("roles")
 
     secret_invalidated = False
     await _validate_secret(secret)
@@ -342,6 +387,16 @@ async def delete_provider(db: AsyncSession, provider: AIProvider) -> None:
     await db.commit()
 
 
+def _auth_headers(base_url: str, api_key: str) -> dict[str, str]:
+    if detect_api_style(base_url) == "anthropic":
+        return {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "User-Agent": USER_AGENT,
+        }
+    return {"Authorization": f"Bearer {api_key}", "User-Agent": USER_AGENT}
+
+
 async def discover_models(
     *, base_url: str, api_key: str, timeout: float = 20.0
 ) -> list[str]:
@@ -351,11 +406,8 @@ async def discover_models(
         await asyncio.to_thread(guard_url, base)
     except (BaseUrlError, SSRFViolationError) as exc:
         raise AIProviderValidationError("base_url politika disi") from exc
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "User-Agent": USER_AGENT,
-        "Accept": "application/json",
-    }
+    headers = _auth_headers(base, api_key)
+    headers["Accept"] = "application/json"
     try:
         async with httpx.AsyncClient(timeout=min(max(timeout, 5.0), 60.0)) as client:
             resp = await client.get(f"{base.rstrip('/')}/models", headers=headers)
@@ -409,16 +461,14 @@ async def test_provider(provider: AIProvider) -> dict[str, Any]:
         return {"ok": False, "error": "API key is missing"}
     model = str((provider.config or {}).get("model") or DEFAULT_MODEL)
     timeout = float((provider.config or {}).get("timeout_seconds") or 15.0)
-    headers = {
-        "User-Agent": USER_AGENT,
-        "Authorization": f"Bearer {token}",
-        "x-opencode-session": "provider-test",
-        "Content-Type": "application/json",
-    }
+    anthropic = detect_api_style(base_url) == "anthropic"
+    headers = {**_auth_headers(base_url, token), "Content-Type": "application/json"}
+    if not anthropic:
+        headers["x-opencode-session"] = "provider-test"
     try:
         async with httpx.AsyncClient(timeout=min(timeout, 30.0)) as client:
             resp = await client.post(
-                f"{base_url.rstrip('/')}/chat/completions",
+                f"{base_url.rstrip('/')}/{'messages' if anthropic else 'chat/completions'}",
                 headers=headers,
                 json={
                     "model": model,

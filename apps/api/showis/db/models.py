@@ -65,6 +65,8 @@ class AIProvider(Base):
     name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     preset: Mapped[str] = mapped_column(String(32), default="custom", nullable=False)
     config: Mapped[dict[str, Any]] = mapped_column(JSON_TYPE, default=dict)
+    #: Model rolleri: {planner, reasoner, extractor, summarizer} -> model kimliği.
+    roles: Mapped[dict[str, Any]] = mapped_column(JSON_TYPE, default=dict, server_default="{}")
     secret_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     secret_masked: Mapped[str | None] = mapped_column(String(128), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)

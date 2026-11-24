@@ -64,6 +64,7 @@ from showis_engine.http import HttpClient
 from showis_engine.policy import SSRFViolationError, guard_url
 from showis_llm import LLMClient
 from showis_llm.base_url import BaseUrlError, validate_base_url
+from showis_llm.presets import ROLE_TIMEOUTS, detect_api_style
 from showis_settings.crypto import decrypt_secret
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -184,6 +185,8 @@ def _build_llm_client(
     base_url: str,
     model: str,
     timeout: float,
+    role: str | None = None,
+    thinking_budget: int | None = None,
 ) -> LLMClient | None:
     try:
         validated = validate_base_url(base_url)
@@ -197,18 +200,20 @@ def _build_llm_client(
     if len(model) > 128:
         logger.warning("LLM model adi cok uzun; varsayilana donuluyor")
         model = "minimax-m3.1-flash"
-    timeout = min(max(float(timeout), 1.0), 120.0)
+    timeout = min(max(float(timeout), 1.0), 180.0)
     return LLMClient(
         base_url=validated,
         api_key=api_key,
         model=model,
         session_id=str(uuid.uuid4()),
         timeout_seconds=timeout,
+        role=role,
+        thinking_budget=thinking_budget,
     )
 
 
 def build_llm_client_from_ai_provider(
-    provider: AIProvider, model_override: str | None = None
+    provider: AIProvider, model_override: str | None = None, role: str | None = None
 ) -> LLMClient | None:
     """Aktif çoklu profilden istemci kurar; sır çözülemezse None."""
     if not provider.enabled or not provider.secret_encrypted:
@@ -232,12 +237,29 @@ def build_llm_client_from_ai_provider(
                 "Secilen model profil listesinde yok; varsayilan kullanilir (%s)",
                 provider.id,
             )
+    # Rol modeli: açık model seçimi (override) rolü ezer.
+    roles = provider.roles if isinstance(provider.roles, dict) else {}
+    role_model = str(roles.get(role) or "").strip() if role else ""
+    if role_model and not model_override:
+        model = role_model
     try:
         timeout = float(config.get("timeout_seconds", 30.0))
     except (TypeError, ValueError):
         timeout = 30.0
+    thinking_budget: int | None = None
+    if role:
+        # Rol zaman aşımı: reasoner 180 sn, extractor 30 sn (profil süresinden küçükse yükselt).
+        role_timeout = ROLE_TIMEOUTS.get(role, timeout)
+        timeout = max(timeout, role_timeout) if role in ("planner", "reasoner") else role_timeout
+        if role == "reasoner" and detect_api_style(base_url) == "anthropic":
+            thinking_budget = 4096
     return _build_llm_client(
-        api_key=api_key, base_url=base_url, model=model, timeout=timeout
+        api_key=api_key,
+        base_url=base_url,
+        model=model,
+        timeout=timeout,
+        role=role,
+        thinking_budget=thinking_budget,
     )
 
 
@@ -245,6 +267,7 @@ async def build_llm_client(
     db: AsyncSession,
     provider_id: str | None = None,
     model_override: str | None = None,
+    role: str | None = None,
 ) -> LLMClient | None:
     """Aktif çoklu profili, yoksa eski tek `llm` ayarını kullanır."""
     try:
@@ -256,7 +279,9 @@ async def build_llm_client(
         provider = (await db.execute(query)).scalars().first()
         if provider is not None:
             # Seçili/aktif profil bozuksa başka bir sağlayıcıya sessizce düşme.
-            return build_llm_client_from_ai_provider(provider, model_override=model_override)
+            return build_llm_client_from_ai_provider(
+                provider, model_override=model_override, role=role
+            )
         if provider_id:
             return None
     except Exception as exc:  # noqa: BLE001 - migration öncesi/bozuk tablo taramayı bloklamasın

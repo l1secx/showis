@@ -25,6 +25,7 @@ class AIProviderCreate(BaseModel):
     secret: str | None = None
     enabled: bool = True
     activate: bool = False
+    roles: dict[str, str] = Field(default_factory=dict)
 
 
 class AIProviderDiscover(BaseModel):
@@ -39,6 +40,7 @@ class AIProviderPatch(BaseModel):
     config: dict[str, Any] | None = None
     secret: str | None = None
     enabled: bool | None = None
+    roles: dict[str, str] | None = None
 
 
 class AIProviderResponse(BaseModel):
@@ -46,6 +48,8 @@ class AIProviderResponse(BaseModel):
     name: str
     preset: str
     config: dict[str, Any]
+    roles: dict[str, Any] = Field(default_factory=dict)
+    capabilities: dict[str, dict[str, bool]] = Field(default_factory=dict)
     secret_masked: str | None = None
     secret_required: bool = False
     enabled: bool
@@ -60,6 +64,8 @@ def _response(provider: AIProvider, *, secret_required: bool = False) -> AIProvi
         name=provider.name,
         preset=provider.preset,
         config=provider.config or {},
+        roles=provider.roles or {},
+        capabilities=service.provider_capabilities(provider),
         secret_masked=provider.secret_masked,
         secret_required=secret_required or not provider.secret_encrypted,
         enabled=provider.enabled,
@@ -71,7 +77,10 @@ def _response(provider: AIProvider, *, secret_required: bool = False) -> AIProvi
 
 @router.get("/presets")
 async def list_presets():
-    return service.available_presets()
+    presets = service.available_presets()
+    for key, value in presets.items():
+        value["suggested_roles"] = service.suggested_roles(key)
+    return presets
 
 
 @router.get("", response_model=list[AIProviderResponse])
@@ -96,6 +105,7 @@ async def create_ai_provider(
             secret=data.secret,
             enabled=data.enabled,
             activate=data.activate,
+            roles=data.roles,
         )
     except service.AIProviderValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -138,6 +148,7 @@ async def update_ai_provider(
             config=data.config,
             secret=data.secret,
             enabled=data.enabled,
+            roles=data.roles,
         )
     except service.AIProviderValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

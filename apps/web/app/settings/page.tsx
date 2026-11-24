@@ -86,8 +86,17 @@ export default function SettingsPage() {
   // Çoklu AI sağlayıcı profilleri
   const [aiProviders, setAiProviders] = useState<AIProviderProfile[]>([]);
   const [aiPresets, setAiPresets] = useState<
-    Record<string, { base_url: string; default_model: string; description: string }>
+    Record<
+      string,
+      {
+        base_url: string;
+        default_model: string;
+        description: string;
+        suggested_roles?: Record<string, string>;
+      }
+    >
   >({});
+  const [aiRoles, setAiRoles] = useState<Record<string, string>>({});
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
   const [aiName, setAiName] = useState("OpenCode Go");
   const [aiPreset, setAiPreset] = useState("opencode-go");
@@ -155,6 +164,7 @@ export default function SettingsPage() {
     setAiSecret("");
     setModelOptions([]);
     setSelectedModels([]);
+    setAiRoles({});
   };
 
   const editAIProvider = (provider: AIProviderProfile) => {
@@ -170,6 +180,7 @@ export default function SettingsPage() {
         : [];
     setModelOptions(models);
     setSelectedModels(models);
+    setAiRoles(provider.roles || {});
     setAiSecret("");
     setStatusMsg(null);
   };
@@ -194,6 +205,7 @@ export default function SettingsPage() {
           name: aiName.trim(),
           preset: aiPreset,
           config,
+          roles: aiRoles,
           secret: aiSecret ? aiSecret : undefined,
         });
         setStatusMsg({
@@ -207,6 +219,7 @@ export default function SettingsPage() {
           name: aiName.trim(),
           preset: aiPreset,
           config,
+          roles: aiRoles,
           secret: aiSecret || undefined,
           activate: aiProviders.length === 0 && Boolean(aiSecret),
         });
@@ -781,6 +794,64 @@ export default function SettingsPage() {
                         <p className="mt-1.5 text-[11.5px] text-ink-3">
                           Seçilen modeller tarama ve araştırma ekranlarında model
                           seçicisinde görünür. Varsayılan model yukarıdaki “Model” alanıdır.
+                        </p>
+                      </fieldset>
+                    )}
+
+                    {selectedModels.length > 0 && (
+                      <fieldset className="mt-4 border-t border-line pt-3">
+                        <legend className="sr-only">Model rolleri</legend>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="label">Model rolleri</span>
+                          {aiPresets[aiPreset]?.suggested_roles &&
+                            Object.keys(aiPresets[aiPreset].suggested_roles || {}).length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const suggested = aiPresets[aiPreset].suggested_roles || {};
+                                  setAiRoles(
+                                    Object.fromEntries(
+                                      Object.entries(suggested).filter(([, model]) =>
+                                        selectedModels.includes(model)
+                                      )
+                                    )
+                                  );
+                                }}
+                                className="btn-quiet btn-sm"
+                              >
+                                Önerilenleri uygula
+                              </button>
+                            )}
+                        </div>
+                        <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                          {[
+                            ["planner", "Planlayıcı (güçlü model)"],
+                            ["reasoner", "Muhakeme (güçlü model)"],
+                            ["extractor", "Çıkarım (ucuz/hızlı)"],
+                            ["summarizer", "Özet (orta)"],
+                          ].map(([role, title]) => (
+                            <label key={role} className="block">
+                              <span className="label">{title}</span>
+                              <select
+                                className="input"
+                                value={aiRoles[role] || ""}
+                                onChange={(e) =>
+                                  setAiRoles((current) => ({ ...current, [role]: e.target.value }))
+                                }
+                              >
+                                <option value="">Varsayılan model</option>
+                                {selectedModels.map((model) => (
+                                  <option key={model} value={model}>
+                                    {model}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          ))}
+                        </div>
+                        <p className="mt-1.5 text-[11.5px] text-ink-3">
+                          Planlama ve muhakeme güçlü modelde, sayfa çıkarımı ve özet ucuz modelde
+                          çalışır. Boş rol, varsayılan modele düşer.
                         </p>
                       </fieldset>
                     )}
