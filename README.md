@@ -38,10 +38,13 @@ raporlayan kişisel OSINT web uygulaması.
   durum filtresi ve onay akışı vardır. **Olay** türü tarih/yer/kurum/kaynak URL'si
   taşır; planlayıcı ve AI bu bağlamı doğrulama sorgularına katar. Planlayıcı havuz
   kimliklerini de doğrular.
-- **AI Araştırma Ajanı:** Vaka seçicisi, havuz araması, web araması, sayfa okuma,
-  HIBP kontrolü, havuz/tedarik zinciri kaydı ve (tam ajan modunda) tarama başlatma
-  araçlarıyla adım adım araştırma yürütür; canlı “şu anda ne yapıyor” özeti, SSE
-  akışı, kaynaklı nihai sentez ve takip sorusu.
+- **Derin AI Araştırma Ajanı:** Hızlı/standart/derin bütçe profilleri; seed isim +
+  kullanıcı adı kombinasyonlarını, platform `site:` sorgularını ve linktree/about.me/
+  beacons gibi toplayıcıları deterministik olarak dener. Süpervizör her dalgada
+  paralel alt ajanlar (sosyal eşleme, kimlik doğrulama, ihlal, zaman çizelgesi)
+  çalıştırır; sayfa içi profil linklerini izler, kapsama doyuncaya veya bütçe
+  bitinceye kadar durmaz. Havuzdaki tüm kanıtlardan yapılandırılmış **biyografi**
+  üretir; canlı aktivite, SSE akışı, kaynaklı nihai sentez ve takip sorusu vardır.
 - **Tedarik Zinciri Modülü:** Kişi kimlik grafiğinden ayrı `supply_chain_nodes` /
   `supply_chain_edges` modeli; şirket, tedarikçi, ürün ve yönlü ilişkiler,
   Cytoscape grafiği ve AI önerisi onay akışı.
@@ -231,7 +234,8 @@ packages/engine      http(+bütçe/limiter), policy(SSRF/robots), variants, reso
                      links, scan_modes
 packages/llm         OpenAI-uyumlu istemci + prompt'lar + redaksiyon
 apps/api/showis/services/pool.py          havuz normalizasyonu/arama/tohumlama
-apps/api/showis/services/research.py      AI ajan döngüsü + araçlar + SSE
+apps/api/showis/services/research.py      derin ajan dalgaları + araçlar + SSE
+apps/api/showis/services/research_playbook.py  kimlik/sorgu/link/biyografi çıkarımı
 apps/api/showis/services/supply_chain.py  tedarik zinciri modeli/grafiği
 apps/api/showis/services/ai_providers.py  çoklu LLM profili + model keşfi
 apps/api/showis/services/hibp.py          Have I Been Pwned ihlal kontrolü

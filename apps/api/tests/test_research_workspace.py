@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import httpx
@@ -523,28 +524,24 @@ async def test_agent_loop_searches_pool_and_finishes(db_factory):
         await session.commit()
         session_id = session_row.id
 
-        from showis.services.research import AgentAction, AgentStep, _run_loop
+        from showis.services.research import BioDraft, ResearchReport, _run_loop
 
         fake = _FakeLLM(
             [
-                AgentStep(
-                    thought="Önce havuzu tara.",
-                    action=AgentAction(tool="search_pool", input={"query": "keremboz"}),
+                BioDraft(
+                    headline="Kerem Boz",
+                    summary="Havuzda keremboz kullanıcı adı kayıtlı.",
+                    identities=["@keremboz"],
+                    accounts=["github.com/keremboz"],
+                    confidence=0.6,
                 ),
-                AgentStep(
-                    thought="Kanıt bulundu.",
-                    final="Havuzda keremboz kullanıcı adı kayıtlı.",
-                    citations=[
-                        {
-                            "label": "Havuz kaydı",
-                            "url": None,
-                            "pool_item_id": None,
-                        }
-                    ],
+                ResearchReport(
+                    answer="Havuzda keremboz kullanıcı adı kayıtlı.",
+                    citations=[{"label": "Havuz kaydı"}],
                 ),
             ]
         )
-        stats: dict[str, Any] = {}
+        stats: dict[str, Any] = {"depth": "quick", "offline": True}
         await _run_loop(
             session,
             session=session_row,
@@ -563,19 +560,170 @@ async def test_agent_loop_searches_pool_and_finishes(db_factory):
         await session.refresh(session_row)
         assert session_row.status == "completed"
         assert "keremboz" in (session_row.final_answer or "")
-        assert session_row.stats["tool_calls"] == 1
-        assert session_row.stats["activity"] == "Nihai sentez yazılıyor"
-        messages = (
-            (
-                await session.execute(
-                    select(ResearchMessage)
-                    .where(ResearchMessage.session_id == session_id)
-                    .order_by(ResearchMessage.created_at.asc())
+        assert "Biyografi" in (session_row.final_answer or "")
+        assert session_row.stats["bio_item_id"]
+        assert session_row.stats["stop_reason"] == "çevrimdışı test"
+        bio = (
+            await session.execute(
+                select(PoolItem).where(
+                    PoolItem.case_id == case_id, PoolItem.kind == "bio"
                 )
             )
-            .scalars()
-            .all()
+        ).scalars().first()
+        assert bio is not None and "Kerem Boz" in bio.value
+
+
+@pytest.mark.asyncio
+async def test_deep_research_runtime_follows_aggregator_to_social_profiles(
+    db_factory, monkeypatch
+):
+    """Linktree sonucu sayfa içi profillere ve havuza dönüşür."""
+    case_id = await _seed_case(db_factory)
+    from showis.services.research import FetchResult, ResearchRuntime
+    from showis.services.research_playbook import (
+        ProfileRef,
+        build_identity_profile,
+    )
+    from showis_contracts import Platform
+
+    class FakeProvider:
+        async def search(self, query, limit=10):
+            class Hit:
+                def __init__(self, title, url, snippet=""):
+                    self.title = title
+                    self.url = url
+                    self.snippet = snippet
+
+            return [
+                Hit("Kerem Boz | Linktree", "https://linktr.ee/keremboz"),
+                Hit("keremboz (Kerem Boz) · GitHub", "https://github.com/keremboz"),
+            ]
+
+    async def fake_fetch(url, *, timeout=25.0, respect_robots=True):
+        assert url == "https://linktr.ee/keremboz"
+        return FetchResult(
+            url=url,
+            title="Kerem Boz | Linktree",
+            text="Kişisel bağlantılar ve sosyal hesaplar",
+            profiles=[
+                ProfileRef(
+                    platform=Platform.INSTAGRAM,
+                    identifier="kboz",
+                    url="https://instagram.com/kboz",
+                ),
+                ProfileRef(
+                    platform=Platform.GITHUB,
+                    identifier="keremboz",
+                    url="https://github.com/keremboz",
+                ),
+            ],
+            emails=["kerem@example.com"],
         )
-        assert any(
-            message.role == "tool" and message.tool_name == "search_pool" for message in messages
+
+    monkeypatch.setattr("showis.services.research._fetch_public_page", fake_fetch)
+
+    async with db_factory() as session:
+        case = (await session.execute(select(DbCase).where(DbCase.id == case_id))).scalar_one()
+        target = (
+            await session.execute(select(DbTarget).where(DbTarget.case_id == case_id))
+        ).scalar_one()
+        row = ResearchSession(
+            case_id=case_id,
+            title="Derin test",
+            question="keremboz kim?",
+            mode="research",
+            status="running",
+            created_by="test",
         )
+        session.add(row)
+        await session.commit()
+
+        runtime = ResearchRuntime(
+            db=session,
+            session=row,
+            case=case,
+            target=target,
+            client=None,  # type: ignore[arg-type]
+            identity=build_identity_profile(
+                first_name="Kerem", last_name="Boz", nickname="keremboz"
+            ),
+            pool_items=[],
+            stats={"depth": "quick"},
+            started=time.monotonic(),
+        )
+        runtime.search_provider = FakeProvider()
+        hits = await runtime.search('"keremboz"')
+        assert hits
+        assert any(item.kind == "username" for item in runtime.drafts)
+        await runtime.drain_pages()
+        kinds = {item.kind for item in runtime.drafts}
+        assert "email" in kinds
+        usernames = {item.value for item in runtime.drafts if item.kind == "username"}
+        assert {"keremboz", "kboz"} <= usernames
+        await runtime.persist()
+
+    async with db_factory() as session:
+        items = (
+            await session.execute(select(PoolItem).where(PoolItem.case_id == case_id))
+        ).scalars().all()
+    values = {item.value for item in items}
+    assert "https://instagram.com/kboz" in values or "kboz" in values
+    assert "kerem@example.com" in values
+
+
+def test_quality_pool_rows_removes_search_and_footer_noise():
+    from showis.services.research import _quality_pool_rows
+
+    rows = [
+        {
+            "kind": "name",
+            "status": "confirmed",
+            "source": "user",
+            "confidence": 0.0,
+            "value": "Kerem Boz",
+            "label": "Ad",
+            "attributes": {},
+        },
+        {
+            "kind": "url",
+            "status": "proposed",
+            "source": "ai",
+            "confidence": 0.6,
+            "value": "https://x.com/l1secc",
+            "label": "X profili",
+            "attributes": {"platform": "web", "profile_url": "https://x.com/l1secc"},
+        },
+        {
+            "kind": "url",
+            "status": "proposed",
+            "source": "ai",
+            "confidence": 0.6,
+            "value": "https://github.com/join?plan=business",
+            "label": "GitHub footer",
+            "attributes": {"platform": "github"},
+        },
+        {
+            "kind": "note",
+            "status": "proposed",
+            "source": "ai",
+            "confidence": 0.9,
+            "value": "Arama bütçesi tükendi",
+            "label": "Metodoloji",
+            "attributes": {},
+        },
+        {
+            "kind": "url",
+            "status": "proposed",
+            "source": "ai",
+            "confidence": 0.6,
+            "value": "https://github.com/l1secc",
+            "label": "Page not found · GitHub",
+            "attributes": {"platform": "github"},
+        },
+    ]
+    kept = {(row["kind"], row["value"]) for row in _quality_pool_rows(rows)}
+    assert ("name", "Kerem Boz") in kept
+    assert ("url", "https://x.com/l1secc") in kept
+    assert ("url", "https://github.com/join?plan=business") not in kept
+    assert ("note", "Arama bütçesi tükendi") not in kept
+    assert ("url", "https://github.com/l1secc") not in kept

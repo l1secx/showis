@@ -16,6 +16,7 @@ import {
 import {
   api,
   type CaseListItem,
+  type PoolItem,
   type ResearchMessage,
   type ResearchMeta,
   type ResearchSession,
@@ -102,6 +103,8 @@ function ResearchPageInner() {
 
   const [question, setQuestion] = useState("");
   const [mode, setMode] = useState<"research" | "agent">("research");
+  const [depth, setDepth] = useState<"quick" | "standard" | "deep">("deep");
+  const [bioItem, setBioItem] = useState<PoolItem | null>(null);
   const [followUp, setFollowUp] = useState("");
   const prefilled = useRef(false);
   const esRef = useRef<EventSource | null>(null);
@@ -206,6 +209,25 @@ function ResearchPageInner() {
     };
   }, [id, selectedId, isRunning, loadSession, loadSessions]);
 
+  useEffect(() => {
+    if (!session || session.status !== "completed") {
+      setBioItem(null);
+      return;
+    }
+    let cancelled = false;
+    api
+      .getPool(id, { kind: "bio", limit: 1 })
+      .then((data) => {
+        if (!cancelled) setBioItem(data.items[0] || null);
+      })
+      .catch(() => {
+        if (!cancelled) setBioItem(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [id, session?.id, session?.status]);
+
   const start = async (e: React.FormEvent) => {
     e.preventDefault();
     if (question.trim().length < 10) {
@@ -219,6 +241,7 @@ function ResearchPageInner() {
       const created = await api.createResearch(id, {
         question: question.trim(),
         mode,
+        depth,
         model: researchModel || undefined,
       });
       setSelectedId(created.id);
@@ -429,6 +452,55 @@ function ResearchPageInner() {
               )}
 
               <fieldset>
+                <legend className="label">Araştırma derinliği</legend>
+                <div className="mt-1 grid gap-2 sm:grid-cols-3">
+                  {[
+                    {
+                      value: "quick" as const,
+                      title: "Hızlı",
+                      desc: "~5 dk · 14 arama · 1 dalga",
+                    },
+                    {
+                      value: "standard" as const,
+                      title: "Standart",
+                      desc: "~15 dk · 30 arama · 2 dalga",
+                    },
+                    {
+                      value: "deep" as const,
+                      title: "Derin",
+                      desc: "~30 dk · 60 arama · 3 dalga · 4 alt ajan",
+                    },
+                  ].map((option) => (
+                    <label
+                      key={option.value}
+                      className={`flex cursor-pointer items-start gap-2.5 rounded-[6px] border px-3 py-2.5 transition-colors ${
+                        depth === option.value
+                          ? "border-accent bg-accent-soft"
+                          : "border-line-2 bg-surface hover:border-ink-4"
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="research-depth"
+                        value={option.value}
+                        checked={depth === option.value}
+                        onChange={() => setDepth(option.value)}
+                        className="mt-[3px] h-3.5 w-3.5 shrink-0 accent-[rgb(var(--accent))]"
+                      />
+                      <span>
+                        <span className="block text-[13px] font-medium text-ink">
+                          {option.title}
+                        </span>
+                        <span className="mt-0.5 block text-[12px] leading-snug text-ink-3">
+                          {option.desc}
+                        </span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+
+              <fieldset>
                 <legend className="label">Yetki modu</legend>
                 <div className="mt-1 grid gap-2 sm:grid-cols-2">
                   {[
@@ -500,11 +572,30 @@ function ResearchPageInner() {
                   <div className="mt-1 flex flex-wrap items-center gap-3 text-[12px] text-ink-3">
                     <Status value={session.status} />
                     <span>{session.mode === "agent" ? "Tam ajan" : "Araştır ve öner"}</span>
-                    {typeof session.stats?.tool_calls === "number" && (
-                      <span>{session.stats.tool_calls} araç çağrısı</span>
+                    <span>
+                      {session.stats?.depth === "quick"
+                        ? "Hızlı"
+                        : session.stats?.depth === "standard"
+                          ? "Standart"
+                          : "Derin"}
+                    </span>
+                    {typeof session.stats?.waves === "number" && (
+                      <span>{session.stats.waves} dalga</span>
                     )}
-                    {typeof session.stats?.web_searches === "number" && (
-                      <span>{session.stats.web_searches} web araması</span>
+                    {typeof session.stats?.subagents === "number" && (
+                      <span>{session.stats.subagents} alt ajan</span>
+                    )}
+                    {typeof session.stats?.queries === "number" && (
+                      <span>{session.stats.queries} arama</span>
+                    )}
+                    {typeof session.stats?.pages === "number" && (
+                      <span>{session.stats.pages} sayfa</span>
+                    )}
+                    {typeof session.stats?.findings === "number" && (
+                      <span>{session.stats.findings} bulgu</span>
+                    )}
+                    {typeof session.stats?.leads === "number" && (
+                      <span>{session.stats.leads} ipucu</span>
                     )}
                     {typeof session.stats?.writes === "number" && (
                       <span>{session.stats.writes} yazma</span>
@@ -549,6 +640,26 @@ function ResearchPageInner() {
                   <span className="font-medium">
                     {session.activity || session.stats?.activity || "AI çalışıyor"}
                   </span>
+                </div>
+              )}
+
+              {bioItem && (
+                <div className="border-t border-line bg-accent-soft/30 px-5 py-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Sparkles size={13} className="text-accent-ink" aria-hidden />
+                    <span className="text-[12px] font-medium text-accent-ink">
+                      AI biyografisi
+                    </span>
+                    <Link
+                      href={`/cases/${id}/pool?kind=bio`}
+                      className="ml-auto text-[12px] font-medium underline"
+                    >
+                      Havuzda aç
+                    </Link>
+                  </div>
+                  <div className="mt-2 max-h-[320px] overflow-auto whitespace-pre-wrap break-words text-[12.5px] leading-relaxed text-ink-2">
+                    {bioItem.value}
+                  </div>
                 </div>
               )}
 

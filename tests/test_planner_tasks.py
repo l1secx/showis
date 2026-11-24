@@ -30,17 +30,17 @@ def svc() -> ScannerService:
 
 def test_planner_specs_respect_mode_cap(svc):
     plan = plan_with([f'"k{i}" site:github.com' for i in range(30)])
-    assert len(svc._planner_task_specs(plan, "O2", [])) == 8
+    assert len(svc._planner_task_specs(plan, "O2", [])) == 14
     assert svc._planner_task_specs(plan, "O1", []) == []
 
 
 def test_planner_specs_cap_applies_after_filtering(svc):
     """Tavan **filtreden sonra** uygulanır: elenen ilk 3 girdi yer kaplamaz.
 
-    Aksi halde `queries[:cap]` ile ilk 8 eleman alinir, 3'u elenince 5 gorev
-    uretilir; oysa planda 8 gecerli sorgu daha var.
+    Aksi halde `queries[:cap]` ile ilk elemanlar alinir, elenenler yer kaplar;
+    oysa planda tavani dolduracak kadar gecerli sorgu daha var.
     """
-    valid = [f'"v{i}" site:github.com' for i in range(10)]
+    valid = [f'"v{i}" site:github.com' for i in range(20)]
     dropped = [
         valid[0],  # tekrar: asagida ayni sorgu geçerli olarak var
         '"" site:y.com',  # arama terimi yok
@@ -50,9 +50,9 @@ def test_planner_specs_cap_applies_after_filtering(svc):
 
     specs = svc._planner_task_specs(plan, "O2", [])
 
-    assert len(specs) == 8
-    # Sirayla: ilk 8 gecerli sorgu (9. ve 10. tavana takilir)
-    assert [s.params["query"] for s in specs] == valid[:8]
+    assert len(specs) == 14
+    # Sirayla: ilk 14 gecerli sorgu (kalanlar tavana takilir)
+    assert [s.params["query"] for s in specs] == valid[:14]
 
 
 def test_planner_specs_dedupe_and_drop_empty(svc):
@@ -92,12 +92,14 @@ def test_planner_specs_are_marked_and_sanitized(svc):
     assert specs[0].params["limit"] == PLANNER_SEARCH_LIMIT
 
 
-def test_planner_specs_o3_caps_at_twenty(svc):
-    """O3 tavani 20: 30 tekil sorgudan tam 20 gorev uretilir."""
-    plan = plan_with([f'"k{i}" site:github.com' for i in range(30)])
+def test_planner_specs_o3_caps_at_thirty_two(svc):
+    """O3 tavani 32: 40 tekil sorgudan tam 32 gorev uretilir."""
+    plan = plan_with([f'"k{i}" site:github.com' for i in range(40)])
     specs = svc._planner_task_specs(plan, "O3", [])
-    assert len(specs) == 20
-    assert [s.params["query"] for s in specs] == [f'"k{i}" site:github.com' for i in range(20)]
+    assert len(specs) == 32
+    assert [s.params["query"] for s in specs] == [
+        f'"k{i}" site:github.com' for i in range(32)
+    ]
 
 
 def test_planner_specs_clamp_priority(svc):

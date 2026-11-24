@@ -15,6 +15,7 @@ from showis.services.ai_providers import active_provider, allowed_models, get_pr
 from showis.services.audit import record_request_audit
 from showis.services.pool import ensure_case_pool
 from showis.services.research import (
+    DEPTH_PROFILES,
     MAX_STEPS_AGENT,
     MAX_STEPS_RESEARCH,
     cancel_research_session,
@@ -35,6 +36,7 @@ TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 class ResearchStart(BaseModel):
     question: str = Field(min_length=10, max_length=4000)
     mode: Literal["research", "agent"] = "research"
+    depth: Literal["quick", "standard", "deep"] = "deep"
     title: str | None = Field(default=None, max_length=256)
     provider_id: str | None = Field(default=None, max_length=64)
     model: str | None = Field(default=None, max_length=128)
@@ -123,6 +125,17 @@ async def research_meta(case_id: str, db: AsyncSession = Depends(get_db)):
         "limits": {
             "research": MAX_STEPS_RESEARCH,
             "agent": MAX_STEPS_AGENT,
+        },
+        "depth_profiles": {
+            key: {
+                "label": profile.label,
+                "max_searches": profile.max_searches,
+                "max_pages": profile.max_pages,
+                "max_waves": profile.max_waves,
+                "wall_seconds": profile.wall_seconds,
+                "min_findings": profile.min_findings,
+            }
+            for key, profile in DEPTH_PROFILES.items()
         },
     }
 
@@ -237,7 +250,10 @@ async def start_research(
         provider_id=provider.id if provider else None,
         status="queued",
         created_by=username,
-        stats={"llm_model": data.model} if data.model else {},
+        stats={
+            "depth": data.depth,
+            **({"llm_model": data.model} if data.model else {}),
+        },
     )
     db.add(session)
     try:
@@ -264,6 +280,7 @@ async def start_research(
         target=f"ResearchSession: {session.id}",
         details={
             "mode": session.mode,
+            "depth": data.depth,
             "provider_id": session.provider_id,
             "question_length": len(session.question),
         },

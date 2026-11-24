@@ -27,7 +27,10 @@ def test_norm_mode_bilinmeyen_deger_o2():
     assert norm_mode("o3") == "O3"
 
 
-@pytest.mark.parametrize("mode,expected", [("O1", 0), ("O2", 8), ("O3", 20), ("o3", 20), ("x", 8)])
+@pytest.mark.parametrize(
+    "mode,expected",
+    [("O1", 0), ("O2", 14), ("O3", 32), ("o3", 32), ("x", 14)],
+)
 def test_planner_cap_by_mode(mode, expected):
     assert planner_cap(mode) == expected
 
@@ -56,7 +59,7 @@ def test_estimate_okul_ipucu_sorgu_sayisini_artirir():
 
 @pytest.mark.parametrize("mode", ["O1", "O2", "O3"])
 def test_estimate_counts_planner_search_tasks(mode):
-    """Phase 2 planner sorguları arama adımında sayılır (O1=0, O2=8, O3=20)."""
+    """Phase 2 planner sorguları arama adımında sayılır (O1=0, O2=14, O3=32)."""
     est = estimate_scan(_target(), mode)
     assert est["steps"][0]["key"] == "search"
     assert est["steps"][0]["tasks"] == 1 + planner_cap(mode)
@@ -73,7 +76,7 @@ def test_o2_gercek_olcume_yakin_tahmin(monkeypatch):
     """
     monkeypatch.delenv("SHOWIS_SCAN_CONCURRENCY", raising=False)
     est = estimate_scan(_target("ODTÜ"), "O2")
-    assert 280 <= est["seconds"] <= 520, est["seconds"]
+    assert 300 <= est["seconds"] <= 620, est["seconds"]
     assert 120 <= est["tasks"] <= 260
     assert {s["key"] for s in est["steps"]} >= {"search", "api", "sitecheck"}
 

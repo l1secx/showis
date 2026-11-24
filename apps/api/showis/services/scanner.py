@@ -40,8 +40,9 @@ from showis.db.models import (
 from showis.services.audit import record_audit
 from showis.services.enrichment import capture_scan_evidence
 from showis.services.orchestrator import event_broadcaster
-from showis.services.pool import context_items
+from showis.services.pool import context_items, create_item
 from showis.services.targets import db_target_to_contract
+from showis_connectors.linkfollow import is_aggregator_url
 from showis_connectors.websearch.normalize import extract_platform_from_url
 from showis_contracts import (
     Budget,
@@ -289,6 +290,7 @@ class _PivotCandidate:
     connector: str
     kind: str
     username: str
+    url: str = ""
 
 
 def _pivot_username(value: Any) -> str | None:
@@ -325,6 +327,31 @@ def build_pivot_candidates(
             return
         seen.add(key)
         found.append(_PivotCandidate(connector=connector, kind=kind, username=uname))
+
+    def add_aggregator(url: Any) -> None:
+        """Bağlantı toplayıcı sayfasını linkfollow görevine çevirir."""
+        text = str(url or "").strip()
+        if not text.startswith(("http://", "https://")) or not is_aggregator_url(text):
+            return
+        key = ("linkfollow", text)
+        if key in known or key in seen:
+            return
+        seen.add(key)
+        found.append(
+            _PivotCandidate(
+                connector="linkfollow",
+                kind="fetch_page",
+                username="",
+                url=text,
+            )
+        )
+
+    for entity in entities:
+        attrs = entity.attributes or {}
+        add_aggregator(entity.url)
+        add_aggregator(attrs.get("link_url"))
+        add_aggregator(attrs.get("url"))
+        add_aggregator(attrs.get("website"))
 
     for entity in entities:
         attrs = entity.attributes or {}
@@ -923,6 +950,7 @@ class ScannerService:
         await db.commit()
 
         await self._write_findings(db, scan, case, target, list(entity_map.values()), seed_emails)
+        await self._sync_entities_to_pool(db, scan, list(entity_map.values()))
 
         # Final durum: KOSULLU UPDATE — DB'de `cancelled` yazildiysa `completed`
         # ile ezilmez (SEC-06). Istatistikler her durumda yazilir.
@@ -1102,7 +1130,11 @@ class ScannerService:
         #: yalnızca bağlantının geldiği derin connector'da doğrulanır.
         pivot_known: set[tuple[str, str]] = set()
         pivot_added = 0
-        pivot_cap = 2 if str(scan.mode).upper() == "O1" else 5
+        pivot_cap = {
+            "O1": 3,
+            "O2": 14,
+            "O3": 36,
+        }.get(str(scan.mode).upper(), 14)
         existing_tasks = (
             await db.execute(
                 select(DbTask.connector, DbTask.params).where(DbTask.scan_id == scan_id)
@@ -1110,6 +1142,10 @@ class ScannerService:
         ).all()
         for existing_connector, existing_params in existing_tasks:
             params = existing_params or {}
+            existing_url = str(params.get("url") or "").strip()
+            if existing_url:
+                pivot_known.add((str(existing_connector), existing_url))
+                continue
             for key in ("username", "id", "hash"):
                 value = _pivot_username(params.get(key))
                 if value:
@@ -1229,6 +1265,11 @@ class ScannerService:
                 if connector is None:
                     continue
                 platform = getattr(connector, "platform", Platform.WEB)
+                params = (
+                    {"url": candidate.url}
+                    if candidate.url
+                    else {"username": candidate.username}
+                )
                 db.add(
                     DbTask(
                         id=str(uuid.uuid4()),
@@ -1236,12 +1277,14 @@ class ScannerService:
                         connector=candidate.connector,
                         platform=platform.value,
                         kind=candidate.kind,
-                        params={"username": candidate.username},
+                        params=params,
                         priority=3,
                         status="pending",
                     )
                 )
-                pivot_known.add((candidate.connector, candidate.username))
+                pivot_known.add(
+                    (candidate.connector, candidate.url or candidate.username)
+                )
                 queued += 1
                 pivot_added += 1
 
@@ -1520,6 +1563,146 @@ class ScannerService:
                 inflight.clear()
 
         return stats
+
+    async def _sync_entities_to_pool(
+        self, db: AsyncSession, scan: Scan, entities: list[Entity]
+    ) -> int:
+        """Tarama bulgularını havuza aday kayıt olarak aktarır.
+
+        Biyografi ve sonraki AI araştırmaları tarama çıktısını görebilsin diye
+        yüksek değerli alanlar (profil URL'si, e-posta, kurum, yer) yazılır.
+        Kullanıcı kayıtları asla ezilmez; `create_item` yalnızca yoksa ekler.
+        """
+        profile_entities = [
+            entity
+            for entity in entities
+            if entity.url
+            and str(entity.url).startswith(("http://", "https://"))
+            and entity.platform != Platform.WEB
+        ]
+        profile_ids = {entity.id for entity in profile_entities}
+        web_entities = [
+            entity
+            for entity in entities
+            if entity.url and entity.id not in profile_ids
+        ]
+        ordered = [*profile_entities, *web_entities]
+        written = 0
+        for entity in ordered[:120]:
+            attrs = entity.attributes or {}
+            url = str(entity.url or "").strip()
+            username = str(
+                attrs.get("username") or attrs.get("login") or entity.label.lstrip("@")
+            ).strip()
+            if entity.platform != Platform.WEB and username:
+                try:
+                    await create_item(
+                        db,
+                        case_id=scan.case_id,
+                        kind="url",
+                        label=f"{entity.platform.value}: @{username}"[:256],
+                        value=url,
+                        source="scan",
+                        status="candidate",
+                        confidence=0.55,
+                        attributes={
+                            "platform": entity.platform.value,
+                            "username": username,
+                            "source_entity_id": entity.id,
+                            "label": entity.label[:300],
+                        },
+                        provenance={
+                            "scan_id": scan.id,
+                            "entity_id": entity.id,
+                            "url": url,
+                        },
+                        created_by="scanner",
+                    )
+                    written += 1
+                except Exception:  # noqa: BLE001 - tek kayıt taramayı düşürmesin
+                    logger.debug("Tarama kaydı havuza eklenemedi", exc_info=True)
+            elif url:
+                try:
+                    await create_item(
+                        db,
+                        case_id=scan.case_id,
+                        kind="url",
+                        label=str(attrs.get("search_title") or entity.label or url)[:256],
+                        value=url,
+                        source="scan",
+                        status="candidate",
+                        confidence=0.3,
+                        attributes={
+                            "platform": entity.platform.value,
+                            "source_entity_id": entity.id,
+                            "search_query": attrs.get("search_query"),
+                        },
+                        provenance={"scan_id": scan.id, "entity_id": entity.id, "url": url},
+                        created_by="scanner",
+                    )
+                    written += 1
+                except Exception:  # noqa: BLE001
+                    logger.debug("Tarama URL'si havuza eklenemedi", exc_info=True)
+
+            for email in attrs.get("commit_emails") or []:
+                if not email:
+                    continue
+                try:
+                    await create_item(
+                        db,
+                        case_id=scan.case_id,
+                        kind="email",
+                        label=f"Tarama e-postası — {entity.label}"[:256],
+                        value=str(email),
+                        source="scan",
+                        status="candidate",
+                        confidence=0.5,
+                        attributes={"source_entity_id": entity.id},
+                        provenance={"scan_id": scan.id, "entity_id": entity.id},
+                        created_by="scanner",
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.debug("Tarama e-postası havuza eklenemedi", exc_info=True)
+            public_email = attrs.get("public_email") or attrs.get("email")
+            if public_email:
+                try:
+                    await create_item(
+                        db,
+                        case_id=scan.case_id,
+                        kind="email",
+                        label=f"Herkese açık e-posta — {entity.label}"[:256],
+                        value=str(public_email),
+                        source="scan",
+                        status="candidate",
+                        confidence=0.5,
+                        attributes={"source_entity_id": entity.id},
+                        provenance={"scan_id": scan.id, "entity_id": entity.id},
+                        created_by="scanner",
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.debug("Genel e-posta havuza eklenemedi", exc_info=True)
+            for key, kind in (("location", "location"), ("company", "organization")):
+                value = attrs.get(key)
+                if not value:
+                    continue
+                try:
+                    await create_item(
+                        db,
+                        case_id=scan.case_id,
+                        kind=kind,
+                        label=f"Tarama — {entity.label}"[:256],
+                        value=str(value),
+                        source="scan",
+                        status="candidate",
+                        confidence=0.4,
+                        attributes={"source_entity_id": entity.id},
+                        provenance={"scan_id": scan.id, "entity_id": entity.id},
+                        created_by="scanner",
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.debug("Tarama bağlamı havuza eklenemedi", exc_info=True)
+        await db.commit()
+        return written
 
     async def _write_findings(
         self,

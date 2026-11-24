@@ -34,6 +34,7 @@ from showis_connectors import (
     KeybaseConnector,
     KitsuConnector,
     LeetCodeConnector,
+    LinkFollowConnector,
     MastodonConnector,
     MediumConnector,
     NpmConnector,
@@ -53,11 +54,13 @@ from showis_connectors.websearch import (
     DuckDuckGoSearchProvider,
     GoogleCseSearchProvider,
     HybridSearchProvider,
+    JinaDuckDuckGoSearchProvider,
     SearchProvider,
     SerpApiSearchProvider,
     WebSearchConnector,
 )
 from showis_engine.browser import BrowserClient
+from showis_engine.http import HttpClient
 from showis_engine.policy import SSRFViolationError, guard_url
 from showis_llm import LLMClient
 from showis_llm.base_url import BaseUrlError, validate_base_url
@@ -100,13 +103,20 @@ def _pick_search_provider(settings: dict[str, Setting]) -> SearchProviderSanitiz
         if key and cx:
             active_providers.append(GoogleCseSearchProvider(api_key=key, cx=str(cx)))
 
-    # Anahtarsiz son care: DDG Lite
-    ddg = DuckDuckGoSearchProvider()
-    if active_providers:
-        active_providers.append(ddg)
-        return SearchProviderSanitizer(HybridSearchProvider(active_providers), "hybrid")
+    # Anahtarsiz son care: Jina Reader üzerinden DDG Lite, sonra doğrudan DDG.
+    # Doğrudan DDG bazı ağlarda bot/ISP engeline takılır; Jina HTML proxy'si
+    # aynı sonuç sayfasını okur.
+    active_providers.extend(
+        [
+            JinaDuckDuckGoSearchProvider(),
+            # Doğrudan DDG bazı ağlarda timeout'a düşer; hızlı başarısız ol.
+            DuckDuckGoSearchProvider(
+                http_client=HttpClient(timeout=8.0, enable_ssrf_guard=True)
+            ),
+        ]
+    )
     # SEC-08: saglayici hatalari sir/URL sizdirmadan yeniden uretilir.
-    return SearchProviderSanitizer(ddg, "duckduckgo")
+    return SearchProviderSanitizer(HybridSearchProvider(active_providers), "hybrid")
 
 
 def build_llm_client_from_settings(settings: dict[str, Setting]) -> LLMClient | None:
@@ -325,5 +335,7 @@ async def build_connectors(db: AsyncSession) -> list[Any]:
         SiteCheckConnector(),
         # Site-check + web arama connector'i (isim/soyisim bazli tarama)
         SiteCheckSearchConnector(search_provider=search_provider),
+        # Linktree/about.me/beacons gibi bağlantı toplayıcılarını izler.
+        LinkFollowConnector(),
     ]
     return connectors

@@ -1,5 +1,6 @@
 from .github import GitHubConnector
 from .hackthebox import HackTheBoxConnector
+from .linkfollow import LinkFollowConnector
 from .publicapi import (
     BitbucketConnector,
     BlueskyConnector,
@@ -35,6 +36,7 @@ __all__ = [
     "GitHubConnector",
     "GitLabConnector",
     "KeybaseConnector",
+    "LinkFollowConnector",
     "TryHackMeConnector",
     "HackTheBoxConnector",
     "SteamConnector",

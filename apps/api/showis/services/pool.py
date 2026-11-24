@@ -32,6 +32,7 @@ POOL_KINDS: frozenset[str] = frozenset(
         "location",
         "event",
         "note",
+        "bio",
         "identifier",
         "other",
     }
@@ -80,7 +81,10 @@ def normalize_value(kind: str, value: str) -> str:
         raise PoolValidationError("deger bos olamaz")
     if kind == "email":
         return _fit_index(raw.casefold())
-    if kind in {"domain", "url"}:
+    if kind == "url":
+        # URL parçası (#start-of-content) tekilleştirmeyi bölmesin.
+        return _fit_index(raw.casefold().split("#")[0].rstrip("/."))
+    if kind == "domain":
         return _fit_index(raw.casefold().rstrip("/."))
     if kind == "username":
         return _fit_index(raw.casefold().lstrip("@"))
@@ -427,7 +431,11 @@ async def search_items(
 
 
 async def context_items(
-    db: AsyncSession, *, case_id: str, limit: int = 80
+    db: AsyncSession,
+    *,
+    case_id: str,
+    limit: int = 80,
+    statuses: Sequence[str] = ("confirmed", "candidate"),
 ) -> list[PoolItem]:
     """Ajan/planlayıcı için en yüksek değerli havuz kayıtları."""
     rows = (
@@ -436,7 +444,7 @@ async def context_items(
                 select(PoolItem)
                 .where(
                     PoolItem.case_id == case_id,
-                    PoolItem.status.in_(("confirmed", "candidate")),
+                    PoolItem.status.in_(statuses),
                 )
                 .order_by(
                     func.coalesce(PoolItem.confidence, 0).desc(),

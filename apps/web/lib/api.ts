@@ -321,6 +321,17 @@ export interface ResearchMeta {
     preset: string;
   } | null;
   limits: { research: number; agent: number };
+  depth_profiles?: Record<
+    string,
+    {
+      label: string;
+      max_searches: number;
+      max_pages: number;
+      max_waves: number;
+      wall_seconds: number;
+      min_findings: number;
+    }
+  >;
 }
 
 export interface SupplyChainNode {
@@ -544,7 +555,13 @@ export const api = {
     req<{ items: ResearchSession[]; total: number }>(`/cases/${caseId}/research`),
   createResearch: (
     caseId: string,
-    body: { question: string; mode: string; provider_id?: string; model?: string }
+    body: {
+      question: string;
+      mode: string;
+      depth?: "quick" | "standard" | "deep";
+      provider_id?: string;
+      model?: string;
+    }
   ) =>
     req<ResearchSession>(`/cases/${caseId}/research`, {
       method: "POST",

@@ -700,7 +700,9 @@ async def test_o2_taramasi_planner_gorevleri_uretir(api: ApiHarness):
 
     assert (await api.scan_status(scan_id))["status"] == "completed"
     planner = _planner_params(await api.scan_task_rows(scan_id))
-    assert 0 < len(planner) <= 8, f"O2 planner gorev sayisi beklenen aralikta degil: {len(planner)}"
+    assert 0 < len(planner) <= 14, (
+        f"O2 planner gorev sayisi beklenen aralikta degil: {len(planner)}"
+    )
 
     for params in planner:
         query = params.get("query")

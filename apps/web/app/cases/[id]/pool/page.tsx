@@ -30,6 +30,7 @@ const KINDS = [
   "location",
   "event",
   "note",
+  "bio",
   "identifier",
   "other",
 ];
@@ -48,6 +49,7 @@ const KIND_TR: Record<string, string> = {
   location: "Yer",
   event: "Olay",
   note: "Not",
+  bio: "Biyografi",
   identifier: "Kimlik",
   other: "Diğer",
 };
@@ -595,12 +597,23 @@ export default function PoolPage() {
                           )}
                         </td>
                         <td className="max-w-[320px]">
-                          <span
-                            className="line-clamp-2 break-words text-ink-2"
-                            title={item.value}
-                          >
-                            {item.value}
-                          </span>
+                          {item.kind === "bio" ? (
+                            <details className="text-ink-2">
+                              <summary className="cursor-pointer text-[12px] font-medium underline">
+                                Biyografiyi aç
+                              </summary>
+                              <div className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-[12px] leading-relaxed">
+                                {item.value}
+                              </div>
+                            </details>
+                          ) : (
+                            <span
+                              className="line-clamp-2 break-words text-ink-2"
+                              title={item.value}
+                            >
+                              {item.value}
+                            </span>
+                          )}
                           {item.kind === "email" && (
                             <BreachDetails check={item.attributes?.breach_check} />
                           )}

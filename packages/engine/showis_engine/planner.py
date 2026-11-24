@@ -96,6 +96,13 @@ _PLATFORM_QUERIES: tuple[tuple[str, Platform, str, int], ...] = (
     ("site:chess.com", Platform.CHESS, "Chess.com üzerinde tam isim araması", 1),
     ("site:steamcommunity.com", Platform.STEAM, "Steam üzerinde tam isim araması", 1),
     ("site:gravatar.com", Platform.GRAVATAR, "Gravatar üzerinde tam isim araması", 1),
+    # --- Bağlantı toplayıcıları (bio link sayfaları) ---
+    ("site:linktr.ee", Platform.LINKTREE, "Linktree bağlantı sayfası araması", 1),
+    ("site:about.me", Platform.ABOUTME, "about.me profil araması", 2),
+    ("site:beacons.ai", Platform.BEACONS, "Beacons bağlantı sayfası araması", 2),
+    ("site:carrd.co", Platform.CARDD, "Carrd bağlantı sayfası araması", 2),
+    ("site:bio.link", Platform.WEB, "bio.link bağlantı sayfası araması", 2),
+    ("site:linkr.bio", Platform.WEB, "linkr.bio bağlantı sayfası araması", 2),
     # --- CTF / hacking platformlari ---
     ("site:tryhackme.com", Platform.TRYHACKME, "TryHackMe üzerinde tam isim araması", 2),
     ("site:hackthebox.com", Platform.HACKTHEBOX, "HackTheBox üzerinde tam isim araması", 2),
@@ -261,6 +268,55 @@ def _combined_name_queries(ad: str, soyad: str) -> list[SearchQuery]:
         )
         for pattern, rationale in patterns
     ]
+
+
+def _identity_join_queries(ad: str, soyad: str, nick: str) -> list[SearchQuery]:
+    """Seed kullanıcı adı ile ad/soyadı aynı sorguda eşleştirir.
+
+    Kullanıcı bir seed hesap verdiğinde isim ve kullanıcı adı kombinasyonları
+    en yüksek önceliği alır; tek başına nick araması linktree gibi toplayıcı
+    sayfaları kaçırabilir.
+    """
+    if not nick:
+        return []
+    fullname = f"{ad} {soyad}".strip()
+    queries: list[SearchQuery] = []
+    if fullname:
+        queries.extend(
+            [
+                SearchQuery(
+                    query=f'"{nick}" "{fullname}"',
+                    platform=Platform.WEB,
+                    rationale="Seed kullanıcı adı ve tam isim eşleştirmesi",
+                    priority=1,
+                ),
+                SearchQuery(
+                    query=f'"{fullname}" "{nick}"',
+                    platform=Platform.WEB,
+                    rationale="Tam isim ve seed kullanıcı adı eşleştirmesi",
+                    priority=1,
+                ),
+            ]
+        )
+    for term in (ad, soyad):
+        if term and len(term) > 2:
+            queries.append(
+                SearchQuery(
+                    query=f'"{nick}" "{term}"',
+                    platform=Platform.WEB,
+                    rationale="Seed kullanıcı adı ve isim parçası eşleştirmesi",
+                    priority=2,
+                )
+            )
+    queries.append(
+        SearchQuery(
+            query=f'"{nick}" linktree OR about.me OR beacons',
+            platform=Platform.WEB,
+            rationale="Seed hesabının bağlantı toplayıcı sayfaları",
+            priority=1,
+        )
+    )
+    return queries
 
 
 def _profile_queries(ad: str) -> list[SearchQuery]:
@@ -447,7 +503,9 @@ def build_template_fallback_queries(
         queries.extend(_variant_queries(variants))
         queries = queries[:_MAX_TEMPLATE_QUERIES]
         # Platform-bağımsız geniş sorgu tavan dışında: tablo tavanı doldursa
-        # bile handle modunun son çare kapsamı kaybolmaz.
+        # bile handle modunun son çare kapsamı kaybolmaz. Handle modunda isim
+        # alanları yok sayılır; yalnız seed kullanıcı adı kullanılır.
+        queries.extend(_identity_join_queries("", "", nick))
         queries.extend(_agnostic_nick_query(nick))
         queries.extend(_pool_queries(pool_items))
     else:
@@ -458,6 +516,7 @@ def build_template_fallback_queries(
         queries.extend(_variant_queries(variants))
         queries = queries[:_MAX_TEMPLATE_QUERIES]
         # İsim sorguları aynen korunur; nick ve havuz sorguları sona eklenir.
+        queries.extend(_identity_join_queries(ad, soyad, nick))
         queries.extend(_nickname_queries(nick))
         queries.extend(_pool_queries(pool_items))
 

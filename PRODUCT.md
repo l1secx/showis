@@ -74,11 +74,14 @@ uygun mu" arasındaki dengeyi ürünün içine gömüldüğü için benzer araç
   olaylar** ve AI önerileri vaka içi tek havuzda; tekilleştirme, arama,
   kaynak/durum filtresi ve onay akışı. Olay kayıtları tarih/yer/kurum bağlamıyla
   tarama sorgularını ve kanıt zincirini yönlendirir.
-- **AI araştırma ajanı:** Çoklu OpenAI uyumlu sağlayıcı profili (OpenCode Go,
-  OpenRouter, Groq, özel); model keşfi ve izinli model seçimi; vaka seçicisi;
-  havuz araması, web araması, sayfa okuma, HIBP kontrolü ve yazma araçlarıyla
-  adım adım araştırma; "araştır/öner" ve "tam ajan" modları; canlı aktivite
-  özeti, SSE akışı, kaynaklı nihai sentez ve takip sorusu.
+- **Derin AI araştırma ajanı:** Çoklu OpenAI uyumlu sağlayıcı profili; model
+  keşfi ve izinli model seçimi; hızlı/standart/derin bütçe profilleri; isim +
+  kullanıcı adı kombinasyonları, platform sorguları ve linktree/about.me/beacons
+  toplayıcıları; süpervizör dalgaları ve paralel alt ajanlar (sosyal eşleme,
+  kimlik doğrulama, ihlal, zaman çizelgesi); sayfa içi profil takibi; kapsama
+  doygunluğu veya bütçeye göre durma; havuz kanıtlarından yapılandırılmış
+  biyografi; "araştır/öner" ve "tam ajan" modları; canlı aktivite, SSE ve
+  kaynaklı nihai sentez.
 - **HIBP ihlal kontrolü:** E-posta havuz kayıtları için ihlal adı, tarihi, sızan
   veri sınıfları ve açıklaması; sonuç kanıt kaydına işlenir.
 - **Tedarik zinciri modülü:** Şirket, tedarikçi, ürün ve yönlü ilişkiler için ayrı

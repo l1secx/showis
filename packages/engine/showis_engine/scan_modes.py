@@ -64,7 +64,7 @@ MODE_PROFILES: dict[str, dict[str, int]] = {
 }
 
 #: Mod basina planner'in urettigi sorgularin kac tanesinin gercek arama gorevine donusecegi.
-PLANNER_CAP: dict[str, int] = {"O1": 0, "O2": 8, "O3": 20}
+PLANNER_CAP: dict[str, int] = {"O1": 0, "O2": 14, "O3": 32}
 
 #: Gercek bir O2 taramasindan olculen maliyetler (saniye).
 _COST = {

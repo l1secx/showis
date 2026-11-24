@@ -703,7 +703,7 @@ def test_planner_gorevleri_tahmine_gorev_ve_istek_olarak_eklenir(monkeypatch):
     assert planned["tasks"] - base["tasks"] == 8
     assert planned["requests"] - base["requests"] == 8
     # Tavan aşılamaz: O2'de 8'den fazlası sayılmaz.
-    assert estimate_scan(_smoke_target(), "O2", planner_tasks=99)["planner_tasks"] == 8
+    assert estimate_scan(_smoke_target(), "O2", planner_tasks=99)["planner_tasks"] == 14
 
 
 def test_planner_delta_maliyeti_olculen_paralellikle_uyumlu(monkeypatch):
