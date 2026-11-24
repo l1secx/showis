@@ -403,7 +403,7 @@ async def test_persist_emits_proposals_and_never_confirms(db_factory, client):
     assert "confirmed" not in statuses
 
 
-def test_alembic_single_head_is_0019():
+def test_alembic_single_head_is_latest():
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
@@ -411,7 +411,7 @@ def test_alembic_single_head_is_0019():
     cfg = Config(str(root / "alembic.ini"))
     cfg.set_main_option("script_location", str(root / "alembic"))
     heads = ScriptDirectory.from_config(cfg).get_heads()
-    assert heads == ["0019_research_awaiting_user"]
+    assert heads == ["0020_pool_relations_hypotheses"]
 
 
 @pytest.mark.asyncio

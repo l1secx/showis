@@ -17,6 +17,7 @@ from showis.api.v1.findings import router as findings_router
 from showis.api.v1.ops import public_router as ops_public_router
 from showis.api.v1.ops import router as ops_router
 from showis.api.v1.pool import router as pool_router
+from showis.api.v1.reasoning import router as reasoning_router
 from showis.api.v1.reports import router as reports_router
 from showis.api.v1.research import router as research_router
 from showis.api.v1.scans import router as scans_router
@@ -351,6 +352,9 @@ app.include_router(
 )
 app.include_router(
     breach_router, prefix="/api/v1", dependencies=[*auth_required, *write_required]
+)
+app.include_router(
+    reasoning_router, prefix="/api/v1", dependencies=[*auth_required, *write_required]
 )
 app.include_router(
     research_router, prefix="/api/v1", dependencies=[*auth_required, *write_required]

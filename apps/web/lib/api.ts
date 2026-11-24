@@ -323,6 +323,52 @@ export interface ResearchSession {
   messages?: ResearchMessage[];
 }
 
+export interface PivotInfo {
+  id: string;
+  label: string;
+  kinds: string[];
+  description: string;
+  network: boolean;
+}
+
+export interface PivotResult {
+  pivot: string;
+  items: { id: string; kind: string; value: string; status: string; created: boolean }[];
+  relations: { id: string; type: string }[];
+  notes: string[];
+}
+
+export interface PoolRelationRow {
+  id: string;
+  src_item_id: string;
+  dst_item_id: string;
+  type: string;
+  confidence: number;
+  evidence: { rule: string; source: string; weight: number; note: string }[];
+  status: "proposed" | "candidate" | "confirmed" | "rejected" | string;
+  source: string;
+}
+
+export interface HypothesisRow {
+  id: string;
+  statement: string;
+  confidence: number;
+  status: "proposed" | "confirmed" | "rejected" | string;
+  supporting: { rule: string; source: string; weight: number; note: string }[];
+  contradicting: { rule: string; source: string; weight: number; note: string }[];
+  next_checks: string[];
+  rationale: string;
+  item_ids: string[];
+  source: string;
+}
+
+export interface ReasoningGraph {
+  nodes: { id: string; kind: string; label: string; value: string; status: string }[];
+  edges: PoolRelationRow[];
+  clusters: { id: string; size: number; item_ids: string[]; reasons: string[] }[];
+  summary: string;
+}
+
 export interface ResearchProposalItem {
   item_id: string;
   kind: string;
@@ -572,6 +618,45 @@ export const api = {
   breachPasswordRange: (prefix: string) =>
     req<{ prefix: string; suffixes: { suffix: string; count: number }[] }>(
       `/breach/password-range/${prefix}`
+    ),
+
+  // --- Muhakeme: pivot, korelasyon, hipotez ---
+  listPivots: (caseId: string, itemId: string) =>
+    req<{ items: PivotInfo[] }>(`/cases/${caseId}/reasoning/items/${itemId}/pivots`),
+  runPivot: (caseId: string, itemId: string, pivotId: string) =>
+    req<PivotResult>(`/cases/${caseId}/reasoning/items/${itemId}/pivots/${pivotId}`, {
+      method: "POST",
+    }),
+  runCorrelation: (caseId: string) =>
+    req<{
+      relations_created: number;
+      relations_updated: number;
+      promoted: number;
+      contradictions: { kind: string; item_ids: string[]; message: string }[];
+    }>(`/cases/${caseId}/reasoning/correlate`, { method: "POST" }),
+  getReasoningGraph: (caseId: string) => req<ReasoningGraph>(`/cases/${caseId}/reasoning/graph`),
+  listHypotheses: (caseId: string) =>
+    req<{ items: HypothesisRow[]; total: number }>(`/cases/${caseId}/reasoning/hypotheses`),
+  generateHypotheses: (caseId: string) =>
+    req<{ items: HypothesisRow[]; total: number }>(
+      `/cases/${caseId}/reasoning/hypotheses/generate`,
+      { method: "POST" }
+    ),
+  patchHypothesis: (caseId: string, id: string, body: Record<string, any>) =>
+    req<HypothesisRow>(`/cases/${caseId}/reasoning/hypotheses/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  deleteHypothesis: (caseId: string, id: string) =>
+    req<null>(`/cases/${caseId}/reasoning/hypotheses/${id}`, { method: "DELETE" }),
+  patchRelation: (caseId: string, id: string, body: Record<string, any>) =>
+    req<PoolRelationRow>(`/cases/${caseId}/reasoning/relations/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  getReasoningTimeline: (caseId: string) =>
+    req<{ items: { item_id: string; date: string; place: string; label: string }[] }>(
+      `/cases/${caseId}/reasoning/timeline`
     ),
 
   // --- AI araştırma ---

@@ -14,7 +14,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { api, type PoolItem } from "../../../../lib/api";
+import { api, type PivotInfo, type PoolItem } from "../../../../lib/api";
 
 const KINDS = [
   "name",
@@ -170,6 +170,84 @@ function BreachDetails({ check }: { check: any }) {
         </p>
       )}
     </details>
+  );
+}
+
+// Pivot menüsü: seçili öğeden deterministik türetme (çıktılar `proposed` olarak havuza girer).
+function PivotMenu({
+  caseId,
+  item,
+  onDone,
+}: {
+  caseId: string;
+  item: PoolItem;
+  onDone: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pivots, setPivots] = useState<PivotInfo[] | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const toggle = async () => {
+    const next = !open;
+    setOpen(next);
+    if (next && pivots === null) {
+      try {
+        setPivots((await api.listPivots(caseId, item.id)).items);
+      } catch (err) {
+        setMessage(err instanceof Error ? err.message : "Pivotlar alınamadı");
+        setPivots([]);
+      }
+    }
+  };
+
+  const run = async (pivot: PivotInfo) => {
+    setBusy(pivot.id);
+    setMessage(null);
+    try {
+      const result = await api.runPivot(caseId, item.id, pivot.id);
+      setMessage(
+        `${result.items.length} öğe, ${result.relations.length} ilişki önerildi.` +
+          (result.notes.length ? ` ${result.notes.join(" ")}` : "")
+      );
+      onDone();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Pivot başarısız");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <span className="relative inline-block">
+      <button type="button" className="btn-quiet btn-sm" onClick={toggle} title="Pivot">
+        Pivot
+      </button>
+      {open && (
+        <span className="absolute right-0 z-10 mt-1 block w-64 rounded-[6px] border border-line bg-surface p-2 text-left text-[12px] shadow-lg">
+          {pivots === null ? (
+            <Loader2 size={12} className="animate-spin" aria-hidden />
+          ) : pivots.length === 0 ? (
+            <span className="text-ink-3">Bu tür için pivot yok.</span>
+          ) : (
+            pivots.map((pivot) => (
+              <button
+                key={pivot.id}
+                type="button"
+                disabled={busy !== null}
+                onClick={() => run(pivot)}
+                className="block w-full rounded px-2 py-1 text-left hover:bg-hover"
+                title={pivot.description}
+              >
+                {busy === pivot.id ? "Çalışıyor…" : pivot.label}
+                {pivot.network ? " ↗" : ""}
+              </button>
+            ))
+          )}
+          {message && <span className="mt-1 block text-ink-3">{message}</span>}
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -776,6 +854,7 @@ export default function PoolPage() {
                                 )}
                               </button>
                             )}
+                            <PivotMenu caseId={id} item={item} onDone={load} />
                             <button
                               type="button"
                               className="btn-quiet btn-sm"
@@ -858,6 +937,7 @@ export default function PoolPage() {
                           {breachBusy === item.id ? "Kontrol ediliyor" : "Leak kontrolü"}
                         </button>
                       )}
+                      <PivotMenu caseId={id} item={item} onDone={load} />
                       <button
                         type="button"
                         className="btn-quiet btn-sm"

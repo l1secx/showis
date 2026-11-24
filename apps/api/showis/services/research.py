@@ -30,6 +30,7 @@ from showis.db.models import (
     Case,
     Evidence,
     PoolItem,
+    PoolRelation,
     ResearchMessage,
     ResearchSession,
     Scan,
@@ -50,6 +51,7 @@ from showis.services.pool import (
     normalize_value,
     search_items,
 )
+from showis.services.reasoning.graph import graph_summary
 from showis.services.research_interactive import (
     ResearchControl,
     TokenBatcher,
@@ -3410,6 +3412,18 @@ async def _run_loop(
         ]
         quality_rows = _quality_pool_rows(final_pool_rows)
         pool_text = _format_pool_rows(quality_rows)
+        # Önem sıralı ilişki grafı özeti: onaylı/yüksek güvenli ilişkiler bağlamın başında.
+        try:
+            relations = list(
+                (await db.execute(select(PoolRelation).where(PoolRelation.case_id == case.id)))
+                .scalars()
+                .all()
+            )
+            graph_text = graph_summary(list(final_items), relations, limit=30)
+            if graph_text:
+                pool_text = f"İLİŞKİ GRAFI (önem sıralı)\n{graph_text}\n\n{pool_text}"
+        except Exception:  # noqa: BLE001 - graf özeti sentezi düşürmesin
+            logger.debug("Graf ozeti eklenemedi", exc_info=True)
         await _set_activity(db, session, stats, "Biyografi ve nihai sentez yazılıyor")
         bio_markdown, _bio_structured = await _synthesize_bio(
             runtime, pool_rows=quality_rows, pool_text=pool_text

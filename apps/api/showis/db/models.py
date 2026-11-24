@@ -199,6 +199,71 @@ class PoolItem(Base):
     )
 
 
+class PoolRelation(Base):
+    """Havuz öğeleri arası tipli ilişki (Maltego tarzı graf kenarı).
+
+    AI/kural çıktısı `proposed` veya `candidate` olur; `confirmed` yalnız kullanıcı
+    eylemiyle yazılır. `evidence` bağımsız kaynak/kural kanıtlarının listesidir.
+    """
+
+    __tablename__ = "pool_relations"
+    __table_args__ = (
+        UniqueConstraint(
+            "case_id", "src_item_id", "dst_item_id", "type", name="uq_pool_relations_edge"
+        ),
+        Index("ix_pool_relations_case_status", "case_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid_str)
+    case_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
+    )
+    src_item_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("pool_items.id", ondelete="CASCADE"), nullable=False
+    )
+    dst_item_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("pool_items.id", ondelete="CASCADE"), nullable=False
+    )
+    type: Mapped[str] = mapped_column(String(32), nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    evidence: Mapped[list[dict[str, Any]]] = mapped_column(JSON_TYPE, default=list)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="proposed")
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="rule")
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class Hypothesis(Base):
+    """Kanıt temelli hipotez. Skor kanıtlardan hesaplanır; LLM yalnız gerekçe yazar."""
+
+    __tablename__ = "hypotheses"
+    __table_args__ = (Index("ix_hypotheses_case_status", "case_id", "status"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid_str)
+    case_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
+    )
+    statement: Mapped[str] = mapped_column(Text, nullable=False)
+    #: Log-odds'tan türetilen olasılık (0..1); elle düzenlenmez.
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="proposed")
+    supporting: Mapped[list[dict[str, Any]]] = mapped_column(JSON_TYPE, default=list)
+    contradicting: Mapped[list[dict[str, Any]]] = mapped_column(JSON_TYPE, default=list)
+    next_checks: Mapped[list[str]] = mapped_column(JSON_TYPE, default=list)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: Hipotezin dayandığı havuz öğeleri (kümenin üyeleri).
+    item_ids: Mapped[list[str]] = mapped_column(JSON_TYPE, default=list)
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="rule")
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
 class ResearchSession(Base):
     """AI araştırma oturumu — soru, mod, sağlayıcı ve nihai sentez."""
 

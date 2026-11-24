@@ -37,6 +37,13 @@ raporlayan kişisel OSINT web uygulaması.
   düz metin parolası getirilmez. Tüm sağlayıcılar başarısızsa uç `502` döner.
   "Parolam sızmış mı?" aracı Pwned Passwords k-anonimliğini kullanır: SHA-1
   tarayıcıda hesaplanır, yalnız ilk 5 karakter gönderilir.
+- **Havuz muhakemesi:** `PoolRelation` ile tipli ilişki grafı (same_person, owns_account,
+  uses_email, linked_from, located_in, works_at, alias_of, contradicts), öğe başına
+  deterministik **pivotlar** (e-posta→kullanıcı adı/alan adı/Gravatar/sızıntı, kullanıcı
+  adı→aday profiller, ad→permütasyonlar, URL→sayfa oku + sha256 özet), Python **korelasyon
+  kuralları** (`services/reasoning/correlate.py`; ilişki ancak ≥2 bağımsız kanıtla `candidate`
+  olur), çelişki/zaman çizelgesi denetimi ve log-odds ile skorlanan **hipotezler** (LLM yalnız
+  gerekçe yazar, skor kanıttan gelir). UI: Vaka > Hipotezler sekmesi, havuzda "Pivot" menüsü.
 - **Araştırma Havuzu:** Vaka hedefi, ipuçları, seed'ler, notlar, yorumlar, tarama
   ve AI önerileri tek havuzda toplanır (`pool_items`); tekilleştirme, tür/kaynak/
   durum filtresi ve onay akışı vardır. **Olay** türü tarih/yer/kurum/kaynak URL'si

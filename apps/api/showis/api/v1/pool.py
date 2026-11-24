@@ -20,6 +20,7 @@ from showis.services.pool import (
     search_items,
     validate_kind,
 )
+from showis.services.reasoning.graph import delete_relations_for_item
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -275,6 +276,7 @@ async def delete_pool_item(
     await _require_case(db, case_id)
     item = await _require_item(db, case_id, item_id)
     kind = item.kind
+    await delete_relations_for_item(db, item.id)
     await db.delete(item)
     await db.commit()
     await record_request_audit(
