@@ -49,6 +49,13 @@ raporlayan kişisel OSINT web uygulaması.
   çalıştırır; sayfa içi profil linklerini izler, kapsama doyuncaya veya bütçe
   bitinceye kadar durmaz. Havuzdaki tüm kanıtlardan yapılandırılmış **biyografi**
   üretir; canlı aktivite, SSE akışı, kaynaklı nihai sentez ve takip sorusu vardır.
+  **İnteraktif mod:** çalışırken mesaj yönlendirme kuyruğuna girer (409 yok), "Durdur"
+  / "Devam et", ajanın `ask_user` ile seçenekli soru sorması (oturum `awaiting_user`),
+  satır içi Onayla/Reddet öneri kartları (`confirmed` yalnız kullanıcı tıklamasıyla),
+  araç zaman çizelgesi, token/düşünme özeti olayları ve markdown çıktı. Modeller native
+  araç çağrısı (OpenAI `tools` / Anthropic `tool_use`) kullanır; desteklemeyen model
+  eski JSON-şema yoluna düşer. Profilde `planner/reasoner/extractor/summarizer`
+  rolleri ayrı modellere atanabilir; `anthropic` preseti native `/v1/messages` kullanır.
 - **Tedarik Zinciri Modülü:** Kişi kimlik grafiğinden ayrı `supply_chain_nodes` /
   `supply_chain_edges` modeli; şirket, tedarikçi, ürün ve yönlü ilişkiler,
   Cytoscape grafiği ve AI önerisi onay akışı.

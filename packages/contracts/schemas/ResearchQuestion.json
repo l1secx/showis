@@ -1,0 +1,31 @@
+{
+  "description": "`research.question`: ajanın kullanıcıya sorusu (oturum awaiting_user).",
+  "properties": {
+    "session_id": {
+      "title": "Session Id",
+      "type": "string"
+    },
+    "question_id": {
+      "title": "Question Id",
+      "type": "string"
+    },
+    "question": {
+      "title": "Question",
+      "type": "string"
+    },
+    "options": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Options",
+      "type": "array"
+    }
+  },
+  "required": [
+    "session_id",
+    "question_id",
+    "question"
+  ],
+  "title": "ResearchQuestion",
+  "type": "object"
+}

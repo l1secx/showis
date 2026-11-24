@@ -301,8 +301,17 @@ export interface ResearchSession {
   question?: string;
   mode: "research" | "agent" | string;
   provider_id?: string | null;
-  status: "queued" | "running" | "completed" | "failed" | "cancelled" | string;
+  status:
+    | "queued"
+    | "running"
+    | "awaiting_user"
+    | "interrupted"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | string;
   error?: string | null;
+  pending_question?: { question_id: string; question: string; options: string[] } | null;
   activity?: string | null;
   stats?: Record<string, any>;
   final_answer?: string | null;
@@ -312,6 +321,16 @@ export interface ResearchSession {
   started_at?: string | null;
   finished_at?: string | null;
   messages?: ResearchMessage[];
+}
+
+export interface ResearchProposalItem {
+  item_id: string;
+  kind: string;
+  label: string;
+  value: string;
+  status: string;
+  confidence: number;
+  source_url?: string | null;
 }
 
 export interface ResearchMeta {
@@ -580,6 +599,26 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ question }),
     }),
+  steerResearch: (caseId: string, sessionId: string, text: string) =>
+    req<{ id: string; status: string; queued?: boolean; answered?: boolean }>(
+      `/cases/${caseId}/research/${sessionId}/messages`,
+      { method: "POST", body: JSON.stringify({ question: text }) }
+    ),
+  interruptResearch: (caseId: string, sessionId: string) =>
+    req<{ id: string; status: string }>(`/cases/${caseId}/research/${sessionId}/interrupt`, {
+      method: "POST",
+    }),
+  resumeResearch: (caseId: string, sessionId: string) =>
+    req<ResearchSession>(`/cases/${caseId}/research/${sessionId}/resume`, { method: "POST" }),
+  answerResearch: (caseId: string, sessionId: string, questionId: string, answer: string) =>
+    req<{ id: string; answered: boolean }>(`/cases/${caseId}/research/${sessionId}/answer`, {
+      method: "POST",
+      body: JSON.stringify({ question_id: questionId, answer }),
+    }),
+  listResearchProposals: (caseId: string, sessionId: string) =>
+    req<{ items: ResearchProposalItem[]; total: number }>(
+      `/cases/${caseId}/research/${sessionId}/proposals`
+    ),
   cancelResearch: (caseId: string, sessionId: string) =>
     req<{ id: string; status: string }>(`/cases/${caseId}/research/${sessionId}/cancel`, {
       method: "POST",

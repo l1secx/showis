@@ -63,6 +63,7 @@ def build_payload(
     temperature: float,
     max_tokens: int | None,
     stream: bool,
+    tool_choice: str | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": model,
@@ -73,7 +74,9 @@ def build_payload(
         payload["max_tokens"] = max_tokens
     if tools:
         payload["tools"] = build_tools(tools)
-        payload["tool_choice"] = "auto"
+        payload["tool_choice"] = (
+            {"type": "function", "function": {"name": tool_choice}} if tool_choice else "auto"
+        )
     if stream:
         payload["stream"] = True
         payload["stream_options"] = {"include_usage": True}

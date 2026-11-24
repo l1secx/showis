@@ -322,3 +322,43 @@ export interface ExtractionResult {
   emails?: string[];
   signals?: string[];
 }
+export interface ResearchToolEvent {
+  session_id: string;
+  agent?: number | null;
+  role?: string;
+  tool: string;
+  summary?: string;
+  ok?: boolean | null;
+  error?: string | null;
+}
+export interface ResearchToken {
+  session_id: string;
+  agent?: number | null;
+  text: string;
+}
+export interface ResearchThinking {
+  session_id: string;
+  agent?: number | null;
+  text: string;
+}
+export interface ResearchQuestion {
+  session_id: string;
+  question_id: string;
+  question: string;
+  options?: string[];
+}
+export interface ResearchProposal {
+  session_id: string;
+  item_id: string;
+  kind: string;
+  label: string;
+  value: string;
+  status: string;
+  confidence?: number;
+  source_url?: string | null;
+}
+export interface ResearchSteer {
+  session_id: string;
+  text: string;
+  queued?: boolean;
+}

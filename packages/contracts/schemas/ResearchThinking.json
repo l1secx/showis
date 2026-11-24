@@ -1,0 +1,31 @@
+{
+  "description": "`research.thinking_summary`: model düşünme özeti.",
+  "properties": {
+    "session_id": {
+      "title": "Session Id",
+      "type": "string"
+    },
+    "agent": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Agent"
+    },
+    "text": {
+      "title": "Text",
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id",
+    "text"
+  ],
+  "title": "ResearchThinking",
+  "type": "object"
+}

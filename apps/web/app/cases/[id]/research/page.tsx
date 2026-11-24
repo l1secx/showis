@@ -5,26 +5,35 @@ import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import {
   AlertTriangle,
+  Check,
   ChevronDown,
+  CircleHelp,
   ExternalLink,
   Loader2,
+  Pause,
   Play,
+  Send,
   Sparkles,
   Square,
   Trash2,
+  X,
 } from "lucide-react";
 import {
   api,
   type CaseListItem,
   type PoolItem,
   type ResearchMessage,
+  type ResearchProposalItem,
   type ResearchMeta,
   type ResearchSession,
 } from "../../../../lib/api";
+import { Markdown } from "../../../../components/Markdown";
 
 const STATUS_TR: Record<string, string> = {
   queued: "sırada",
   running: "çalışıyor",
+  awaiting_user: "yanıtınız bekleniyor",
+  interrupted: "durduruldu",
   completed: "tamamlandı",
   failed: "başarısız",
   cancelled: "iptal",
@@ -33,6 +42,8 @@ const STATUS_TR: Record<string, string> = {
 const STATUS_DOT: Record<string, string> = {
   queued: "bg-ink-4",
   running: "bg-accent",
+  awaiting_user: "bg-warn",
+  interrupted: "bg-ink-4",
   completed: "bg-ok",
   failed: "bg-danger",
   cancelled: "bg-ink-4",
@@ -41,6 +52,8 @@ const STATUS_DOT: Record<string, string> = {
 const STATUS_TEXT: Record<string, string> = {
   queued: "text-ink-3",
   running: "text-accent-ink",
+  awaiting_user: "text-warn",
+  interrupted: "text-ink-3",
   completed: "text-ok",
   failed: "text-danger",
   cancelled: "text-ink-3",
@@ -86,6 +99,40 @@ function ToolMessage({ message }: { message: ResearchMessage }) {
   );
 }
 
+interface LiveTool {
+  key: string;
+  agent: number | null;
+  role: string;
+  tool: string;
+  summary: string;
+  ok: boolean | null;
+  error?: string | null;
+}
+
+// Hızlı komutlar: analist yönlendirmesine çevrilen kısa Türkçe talimatlar.
+const QUICK_COMMANDS: { label: string; text: string }[] = [
+  {
+    label: "/pivot email",
+    text: "Bulunan e-posta adreslerinden pivot yap: aynı kullanıcı adı, gravatar ve herkese açık profilleri araştır.",
+  },
+  {
+    label: "/derinleştir",
+    text: "Şu ana kadar bulunan en güçlü ipuçlarını derinleştir; zayıf ve tekrarlayan sonuçlara zaman harcama.",
+  },
+  {
+    label: "/çelişkileri göster",
+    text: "Bulgular arasındaki çelişkileri (konum, kurum, tarih, kimlik) özellikle belirt ve doğrulamaya çalış.",
+  },
+];
+
+function parseEvent(raw: string): any {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
 function ResearchPageInner() {
   const { id } = useParams<{ id: string }>();
   const params = useSearchParams();
@@ -106,13 +153,21 @@ function ResearchPageInner() {
   const [depth, setDepth] = useState<"quick" | "standard" | "deep">("deep");
   const [bioItem, setBioItem] = useState<PoolItem | null>(null);
   const [followUp, setFollowUp] = useState("");
+  const [liveTools, setLiveTools] = useState<LiveTool[]>([]);
+  const [liveText, setLiveText] = useState<Record<string, string>>({});
+  const [thinking, setThinking] = useState("");
+  const [proposals, setProposals] = useState<ResearchProposalItem[]>([]);
+  const [answerText, setAnswerText] = useState("");
   const prefilled = useRef(false);
   const esRef = useRef<EventSource | null>(null);
 
   const activeStatus = session?.status;
-  const isRunning = activeStatus === "queued" || activeStatus === "running";
+  const isRunning =
+    activeStatus === "queued" || activeStatus === "running" || activeStatus === "awaiting_user";
+  const pendingQuestion = session?.pending_question || null;
   const anyRunning = sessions.some(
-    (item) => item.status === "queued" || item.status === "running"
+    (item) =>
+      item.status === "queued" || item.status === "running" || item.status === "awaiting_user"
   );
 
   const loadSessions = useCallback(async () => {
@@ -197,9 +252,60 @@ function ResearchPageInner() {
       "research.completed",
       "research.failed",
       "research.cancelled",
-    ].forEach(
-      (name) => es.addEventListener(name, refresh as EventListener)
-    );
+      "research.interrupted",
+      "research.awaiting_user",
+      "research.question",
+      "research.steer",
+    ].forEach((name) => es.addEventListener(name, refresh as EventListener));
+
+    es.addEventListener("research.tool_start", ((ev: MessageEvent) => {
+      const d = parseEvent(ev.data);
+      if (!d) return;
+      setLiveTools((current) =>
+        [
+          ...current,
+          {
+            key: `${d.agent}-${d.tool}-${current.length}`,
+            agent: d.agent ?? null,
+            role: d.role || "",
+            tool: d.tool,
+            summary: d.summary || "",
+            ok: null,
+          },
+        ].slice(-40)
+      );
+    }) as EventListener);
+    es.addEventListener("research.tool_end", ((ev: MessageEvent) => {
+      const d = parseEvent(ev.data);
+      if (!d) return;
+      setLiveTools((current) => {
+        const next = [...current];
+        for (let i = next.length - 1; i >= 0; i--) {
+          if (next[i].agent === (d.agent ?? null) && next[i].tool === d.tool && next[i].ok === null) {
+            next[i] = { ...next[i], ok: Boolean(d.ok), error: d.error };
+            break;
+          }
+        }
+        return next;
+      });
+    }) as EventListener);
+    es.addEventListener("research.token", ((ev: MessageEvent) => {
+      const d = parseEvent(ev.data);
+      if (!d?.text) return;
+      const key = String(d.agent ?? "main");
+      setLiveText((current) => ({ ...current, [key]: (current[key] || "").concat(d.text).slice(-1200) }));
+    }) as EventListener);
+    es.addEventListener("research.thinking_summary", ((ev: MessageEvent) => {
+      const d = parseEvent(ev.data);
+      if (d?.text) setThinking((current) => (current + " " + d.text).slice(-800));
+    }) as EventListener);
+    es.addEventListener("research.proposal", ((ev: MessageEvent) => {
+      const d = parseEvent(ev.data);
+      if (!d?.item_id) return;
+      setProposals((current) =>
+        current.some((item) => item.item_id === d.item_id) ? current : [d, ...current].slice(0, 60)
+      );
+    }) as EventListener);
     es.onerror = () => es.close();
     const poll = setInterval(refresh, 2500);
     return () => {
@@ -208,6 +314,26 @@ function ResearchPageInner() {
       if (esRef.current === es) esRef.current = null;
     };
   }, [id, selectedId, isRunning, loadSession, loadSessions]);
+
+  // Oturum değişince canlı durum sıfırlanır; öneri kartları sunucudan yüklenir.
+  useEffect(() => {
+    setLiveTools([]);
+    setLiveText({});
+    setThinking("");
+    setAnswerText("");
+    if (!selectedId) {
+      setProposals([]);
+      return;
+    }
+    let cancelled = false;
+    api
+      .listResearchProposals(id, selectedId)
+      .then((data) => !cancelled && setProposals(data.items))
+      .catch(() => !cancelled && setProposals([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [id, selectedId, session?.status === "completed"]);
 
   useEffect(() => {
     if (!session || session.status !== "completed") {
@@ -262,14 +388,78 @@ function ResearchPageInner() {
     setError(null);
     setNotice(null);
     try {
-      await api.addResearchMessage(id, session.id, followUp.trim());
+      if (isRunning) {
+        // Çalışırken gönderilen mesaj yönlendirme (veya bekleyen soruya yanıt) olur.
+        const res = await api.steerResearch(id, session.id, followUp.trim());
+        setNotice(
+          res.answered
+            ? "Yanıtınız ajana iletildi."
+            : "Yönlendirmeniz sıraya alındı; ajan bir sonraki adımda dikkate alacak."
+        );
+      } else {
+        await api.addResearchMessage(id, session.id, followUp.trim());
+      }
       setFollowUp("");
       await loadSession(session.id);
       await loadSessions();
     } catch (err: any) {
-      setError(err.message || "Takip sorusu gönderilemedi");
+      setError(err.message || "Mesaj gönderilemedi");
     } finally {
       setBusy(false);
+    }
+  };
+
+  const interrupt = async () => {
+    if (!session) return;
+    setBusy(true);
+    try {
+      await api.interruptResearch(id, session.id);
+      setNotice("Durdurma isteği gönderildi; ajan mevcut adımı bitirince duracak.");
+      await loadSession(session.id);
+    } catch (err: any) {
+      setError(err.message || "Araştırma durdurulamadı");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resume = async () => {
+    if (!session) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await api.resumeResearch(id, session.id);
+      setSession(next);
+      await loadSessions();
+    } catch (err: any) {
+      setError(err.message || "Araştırma sürdürülemedi");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const answerQuestion = async (text: string) => {
+    if (!session || !pendingQuestion || !text.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.answerResearch(id, session.id, pendingQuestion.question_id, text.trim());
+      setAnswerText("");
+      await loadSession(session.id);
+    } catch (err: any) {
+      setError(err.message || "Yanıt gönderilemedi");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Satır içi öneri kartı: onay yalnız kullanıcı tıklamasıyla `confirmed` olur.
+  const decideProposal = async (item: ResearchProposalItem, status: "confirmed" | "rejected") => {
+    try {
+      await api.updatePoolItem(id, item.item_id, { status });
+      setProposals((current) => current.filter((row) => row.item_id !== item.item_id));
+    } catch (err: any) {
+      setError(err.message || "Öneri güncellenemedi");
     }
   };
 
@@ -606,6 +796,28 @@ function ResearchPageInner() {
                   {isRunning && (
                     <button
                       type="button"
+                      onClick={interrupt}
+                      disabled={busy}
+                      className="btn-secondary btn-sm"
+                    >
+                      <Pause size={12} aria-hidden />
+                      Durdur
+                    </button>
+                  )}
+                  {activeStatus === "interrupted" && (
+                    <button
+                      type="button"
+                      onClick={resume}
+                      disabled={busy || anyRunning}
+                      className="btn-primary btn-sm"
+                    >
+                      <Play size={12} aria-hidden />
+                      Devam et
+                    </button>
+                  )}
+                  {isRunning && (
+                    <button
+                      type="button"
                       onClick={cancel}
                       disabled={busy}
                       className="btn-danger-quiet btn-sm"
@@ -643,6 +855,127 @@ function ResearchPageInner() {
                 </div>
               )}
 
+              {pendingQuestion && isRunning && (
+                <div className="border-t border-line bg-warn-soft/60 px-5 py-4">
+                  <p className="flex items-center gap-2 text-[12px] font-medium text-warn">
+                    <CircleHelp size={13} aria-hidden />
+                    Ajan size soruyor
+                  </p>
+                  <p className="mt-1 text-[13px] text-ink">{pendingQuestion.question}</p>
+                  {pendingQuestion.options.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {pendingQuestion.options.map((option) => (
+                        <button
+                          key={option}
+                          type="button"
+                          disabled={busy}
+                          onClick={() => answerQuestion(option)}
+                          className="btn-secondary btn-sm"
+                        >
+                          {option}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <div className="mt-2 flex gap-2">
+                    <input
+                      className="input"
+                      placeholder="Kendi yanıtınızı yazın"
+                      value={answerText}
+                      onChange={(e) => setAnswerText(e.target.value)}
+                      maxLength={2000}
+                    />
+                    <button
+                      type="button"
+                      disabled={busy || !answerText.trim()}
+                      onClick={() => answerQuestion(answerText)}
+                      className="btn-primary btn-sm shrink-0"
+                    >
+                      Yanıtla
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {isRunning && (liveTools.length > 0 || Object.keys(liveText).length > 0 || thinking) && (
+                <div className="space-y-2 border-t border-line px-5 py-3 text-[12px] text-ink-3">
+                  {thinking && (
+                    <p className="line-clamp-3 italic text-ink-3">Düşünce özeti: {thinking}</p>
+                  )}
+                  {Object.entries(liveText).map(([agent, text]) => (
+                    <p key={agent} className="whitespace-pre-wrap text-ink-2">
+                      <span className="numeric text-ink-3">
+                        {agent === "main" ? "ajan" : `alt ajan ${Number(agent) + 1}`}:{" "}
+                      </span>
+                      {text}
+                    </p>
+                  ))}
+                  {liveTools.length > 0 && (
+                    <ul className="space-y-0.5">
+                      {liveTools.slice(-8).map((tool) => (
+                        <li key={tool.key} className="flex items-center gap-2">
+                          {tool.ok === null ? (
+                            <Loader2 size={11} className="animate-spin" aria-hidden />
+                          ) : tool.ok ? (
+                            <Check size={11} className="text-ok" aria-hidden />
+                          ) : (
+                            <X size={11} className="text-danger" aria-hidden />
+                          )}
+                          <span className="numeric">{tool.tool}</span>
+                          <span className="truncate text-ink-2">{tool.summary}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+
+              {proposals.length > 0 && (
+                <div className="space-y-2 border-t border-line bg-sunken/40 px-5 py-3">
+                  <p className="text-[12px] font-medium text-ink-2">
+                    Onay bekleyen öneriler ({proposals.length})
+                  </p>
+                  <ul className="space-y-1.5">
+                    {proposals.slice(0, 12).map((item) => (
+                      <li
+                        key={item.item_id}
+                        className="flex flex-wrap items-center gap-2 rounded-[6px] border border-line bg-surface px-3 py-2 text-[12.5px]"
+                      >
+                        <span className="numeric rounded bg-sunken px-1.5 text-[11px] text-ink-3">
+                          {item.kind}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-ink" title={item.value}>
+                          {item.label || item.value}
+                        </span>
+                        <span className="numeric text-[11px] text-ink-3">
+                          {Math.round((item.confidence || 0) * 100)}%
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => decideProposal(item, "confirmed")}
+                          className="btn-secondary btn-sm"
+                        >
+                          Onayla
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => decideProposal(item, "rejected")}
+                          className="btn-danger-quiet btn-sm"
+                        >
+                          Reddet
+                        </button>
+                        <Link
+                          href={`/cases/${id}/pool?q=${encodeURIComponent(item.value.slice(0, 80))}`}
+                          className="text-[12px] text-accent-ink hover:underline"
+                        >
+                          Düzenle
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               {bioItem && (
                 <div className="border-t border-line bg-accent-soft/30 px-5 py-4">
                   <div className="flex flex-wrap items-center gap-2">
@@ -657,8 +990,8 @@ function ResearchPageInner() {
                       Havuzda aç
                     </Link>
                   </div>
-                  <div className="mt-2 max-h-[320px] overflow-auto whitespace-pre-wrap break-words text-[12.5px] leading-relaxed text-ink-2">
-                    {bioItem.value}
+                  <div className="mt-2 max-h-[320px] overflow-auto">
+                    <Markdown>{bioItem.value}</Markdown>
                   </div>
                 </div>
               )}
@@ -675,8 +1008,25 @@ function ResearchPageInner() {
                         key={message.id}
                         className="rounded-[6px] border-l-2 border-accent bg-accent-soft/50 px-3 py-2 text-[13px] leading-relaxed text-ink"
                       >
-                        <p className="text-[11px] font-medium text-accent-ink">Kullanıcı</p>
+                        <p className="text-[11px] font-medium text-accent-ink">
+                          {message.tool_name === "steer"
+                            ? "Yönlendirme"
+                            : message.tool_name === "answer"
+                              ? "Yanıt"
+                              : "Kullanıcı"}
+                        </p>
                         <p className="mt-1 whitespace-pre-wrap">{message.content}</p>
+                      </div>
+                    );
+                  }
+                  if (message.tool_name === "ask_user") {
+                    return (
+                      <div
+                        key={message.id}
+                        className="rounded-[6px] border border-warn-line bg-warn-soft/50 px-3 py-2 text-[12.5px] text-ink"
+                      >
+                        <p className="text-[11px] font-medium text-warn">Ajanın sorusu</p>
+                        <p className="mt-1">{message.content}</p>
                       </div>
                     );
                   }
@@ -696,8 +1046,8 @@ function ResearchPageInner() {
                             <Sparkles size={12} aria-hidden />
                             Nihai sentez
                           </div>
-                          <div className="mt-2 whitespace-pre-wrap text-[13px] leading-relaxed text-ink">
-                            {message.content}
+                          <div className="mt-2">
+                            <Markdown>{message.content}</Markdown>
                           </div>
                           {message.citations.length > 0 && (
                             <div className="mt-3 border-t border-line pt-2">
@@ -747,36 +1097,59 @@ function ResearchPageInner() {
                           </button>
                         </>
                       ) : (
-                        <p className="whitespace-pre-wrap">{message.content}</p>
+                        <Markdown>{message.content}</Markdown>
                       )}
                     </div>
                   );
                 })}
               </div>
 
-              {!isRunning && (
-                <form onSubmit={sendFollowUp} className="border-t border-line p-5">
-                  <label className="block">
-                    <span className="label">Takip sorusu</span>
-                    <div className="flex gap-2">
-                      <input
-                        className="input"
-                        placeholder="Bu sonuca göre şu kaynağı da doğrula..."
-                        value={followUp}
-                        onChange={(e) => setFollowUp(e.target.value)}
-                        maxLength={4000}
-                      />
-                      <button
-                        type="submit"
-                        disabled={busy || anyRunning || followUp.trim().length < 2 || !provider}
-                        className="btn-secondary btn-sm shrink-0"
-                      >
-                        Gönder
-                      </button>
-                    </div>
-                  </label>
-                </form>
-              )}
+              <form onSubmit={sendFollowUp} className="border-t border-line p-5">
+                <label className="block">
+                  <span className="label">
+                    {isRunning ? "Çalışırken yönlendir" : "Takip sorusu"}
+                  </span>
+                  <div className="flex gap-2">
+                    <input
+                      className="input"
+                      placeholder={
+                        isRunning
+                          ? "Örn: önce GitHub hesaplarına odaklan..."
+                          : "Bu sonuca göre şu kaynağı da doğrula..."
+                      }
+                      value={followUp}
+                      onChange={(e) => setFollowUp(e.target.value)}
+                      maxLength={4000}
+                    />
+                    <button
+                      type="submit"
+                      disabled={
+                        busy ||
+                        followUp.trim().length < 2 ||
+                        !provider ||
+                        (!isRunning && anyRunning)
+                      }
+                      className="btn-secondary btn-sm shrink-0"
+                    >
+                      <Send size={12} aria-hidden />
+                      Gönder
+                    </button>
+                  </div>
+                </label>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {QUICK_COMMANDS.map((command) => (
+                    <button
+                      key={command.label}
+                      type="button"
+                      onClick={() => setFollowUp(command.text)}
+                      className="numeric rounded-full border border-line px-2 py-0.5 text-[11.5px] text-ink-3 hover:bg-hover"
+                      title={command.text}
+                    >
+                      {command.label}
+                    </button>
+                  ))}
+                </div>
+              </form>
             </section>
           )}
         </div>

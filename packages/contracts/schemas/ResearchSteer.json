@@ -1,0 +1,24 @@
+{
+  "description": "`research.steer`: analistin çalışırken verdiği yönlendirme.",
+  "properties": {
+    "session_id": {
+      "title": "Session Id",
+      "type": "string"
+    },
+    "text": {
+      "title": "Text",
+      "type": "string"
+    },
+    "queued": {
+      "default": true,
+      "title": "Queued",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "session_id",
+    "text"
+  ],
+  "title": "ResearchSteer",
+  "type": "object"
+}

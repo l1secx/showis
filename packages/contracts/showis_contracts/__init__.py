@@ -18,6 +18,14 @@ from .findings import ConfidenceBreakdown, Finding
 from .llm import ExtractionResult, QueryPlan, SearchQuery, UsernameVariant, VariantSet
 from .observations import Evidence, Observation
 from .profiles import GithubProfile, HtbProfile, ThmProfile, WebProfile
+from .research import (
+    ResearchProposal,
+    ResearchQuestion,
+    ResearchSteer,
+    ResearchThinking,
+    ResearchToken,
+    ResearchToolEvent,
+)
 from .tasks import Budget, ScanContext, Seed, Target, TaskSpec
 
 __all__ = [
@@ -51,4 +59,10 @@ __all__ = [
     "UsernameVariant",
     "VariantSet",
     "ExtractionResult",
+    "ResearchToolEvent",
+    "ResearchToken",
+    "ResearchThinking",
+    "ResearchQuestion",
+    "ResearchProposal",
+    "ResearchSteer",
 ]

@@ -107,6 +107,7 @@ def build_payload(
     stream: bool,
     thinking_budget: int | None = None,
     cache: bool = True,
+    tool_choice: str | None = None,
 ) -> dict[str, Any]:
     system_blocks, converted = split_messages(messages, cache=cache)
     limit = max_tokens or DEFAULT_MAX_TOKENS
@@ -121,6 +122,9 @@ def build_payload(
         payload["max_tokens"] = max(limit, thinking_budget + 1024)
     else:
         payload["temperature"] = temperature
+        # Düşünme açıkken araç zorlaması desteklenmez; yalnız düşünmesiz çağrıda uygula.
+        if tools and tool_choice:
+            payload["tool_choice"] = {"type": "tool", "name": tool_choice}
     if stream:
         payload["stream"] = True
     return payload

@@ -564,8 +564,8 @@ Index(
     "uq_research_sessions_case_active",
     ResearchSession.case_id,
     unique=True,
-    postgresql_where=text("status IN ('queued', 'running')"),
-    sqlite_where=text("status IN ('queued', 'running')"),
+    postgresql_where=text("status IN ('queued', 'running', 'awaiting_user')"),
+    sqlite_where=text("status IN ('queued', 'running', 'awaiting_user')"),
 )
 Index("ix_research_sessions_case_created", ResearchSession.case_id, ResearchSession.created_at)
 

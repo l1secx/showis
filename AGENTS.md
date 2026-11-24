@@ -62,7 +62,7 @@ Kurulum: `make bootstrap` (yerel `showis-*` paketleri PyPI'da yok, editable kuru
 - Compose: `infra/docker-compose.yml`. `infra/.env` compose içindir; kök `.env` yerel
   `make dev` içindir. İkisini ayrı tut; LAN IP gibi ortak değerleri iki dosyada da güncelle.
 - API container entrypoint'i `alembic upgrade head` çalıştırır. Migration'lar
-  `apps/api/alembic/versions/` altında sıralıdır (son: `0017_legacy_llm_profile`);
+  `apps/api/alembic/versions/` altında sıralıdır (son: `0019_research_awaiting_user`);
   yeni migration'ı bu zincire `down_revision` ile bağla. Container'da elle alembic çalıştırma.
 - Kod değişince: `make docker-rebuild` veya hedefli
   `docker compose -f infra/docker-compose.yml build api worker web && ... up -d --no-build`.

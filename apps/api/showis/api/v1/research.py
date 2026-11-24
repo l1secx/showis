@@ -9,7 +9,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from showis.db.models import Case, ResearchMessage, ResearchSession, Setting
+from showis.db.models import Case, PoolItem, ResearchMessage, ResearchSession, Setting
 from showis.db.session import get_db
 from showis.services.ai_providers import active_provider, allowed_models, get_provider
 from showis.services.audit import record_request_audit
@@ -24,6 +24,7 @@ from showis.services.research import (
     run_research_session,
     session_to_dict,
 )
+from showis.services.research_interactive import emit, get_control
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,6 +32,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 router = APIRouter(prefix="/cases", tags=["research"])
 
 TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
+#: Çalışan görev (veya kullanıcıyı bekleyen) oturumlar; vaka başına yalnız biri olabilir.
+ACTIVE_STATUSES = ("queued", "running", "awaiting_user")
+#: SSE tek seferlik yanıt verilen durumlar (interrupted: devam ettirilebilir).
+STREAM_CLOSED_STATUSES = TERMINAL_STATUSES | {"interrupted"}
 
 
 class ResearchStart(BaseModel):
@@ -44,6 +49,11 @@ class ResearchStart(BaseModel):
 
 class ResearchFollowUp(BaseModel):
     question: str = Field(min_length=2, max_length=4000)
+
+
+class ResearchAnswer(BaseModel):
+    question_id: str = Field(min_length=1, max_length=64)
+    answer: str = Field(min_length=1, max_length=2000)
 
 
 async def _require_case(db: AsyncSession, case_id: str) -> Case:
@@ -75,7 +85,7 @@ async def _active_session(db: AsyncSession, case_id: str) -> ResearchSession | N
         await db.execute(
             select(ResearchSession).where(
                 ResearchSession.case_id == case_id,
-                ResearchSession.status.in_(("queued", "running")),
+                ResearchSession.status.in_(ACTIVE_STATUSES),
             )
         )
     ).scalars().first()
@@ -318,8 +328,8 @@ async def add_research_message(
     db: AsyncSession = Depends(get_db),
 ):
     session = await _require_session(db, case_id, session_id)
-    if session.status in {"queued", "running"}:
-        raise HTTPException(status_code=409, detail="Araştırma oturumu çalışıyor")
+    if session.status in ACTIVE_STATUSES:
+        return await _steer_running_session(db, request, session, data.question)
     if await _active_session(db, case_id) is not None:
         raise HTTPException(
             status_code=409, detail="Bu vakada çalışan başka bir araştırma oturumu var"
@@ -355,6 +365,173 @@ async def add_research_message(
     return session_to_dict(session)
 
 
+async def _steer_running_session(
+    db: AsyncSession, request: Request, session: ResearchSession, text: str
+) -> dict[str, Any]:
+    """Çalışan oturuma mesaj: bekleyen soruya yanıt ya da yönlendirme kuyruğu (409 yok)."""
+    control = get_control(session.id)
+    if control is not None and control.pending is not None:
+        # Ajan soru sormuş ve bekliyor: sohbetten gelen metin yanıt sayılır.
+        if control.answer(control.pending.id, text):
+            return {"id": session.id, "status": "running", "queued": False, "answered": True}
+    queued = control.push_steer(text) if control is not None else False
+    db.add(
+        ResearchMessage(
+            session_id=session.id,
+            role="user",
+            tool_name="steer",
+            content=text,
+            tool_args={"queued": queued},
+        )
+    )
+    await db.commit()
+    await emit(
+        session.id,
+        "steer",
+        {"session_id": session.id, "text": text[:600], "queued": queued},
+    )
+    await record_request_audit(
+        db=db,
+        request=request,
+        action="research.session.steer",
+        case_id=session.case_id,
+        target=f"ResearchSession: {session.id}",
+        details={"text_length": len(text), "queued": queued},
+    )
+    return {"id": session.id, "status": session.status, "queued": True, "live": queued}
+
+
+@router.post("/{case_id}/research/{session_id}/interrupt")
+async def interrupt_research(
+    case_id: str,
+    session_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Çalışan araştırmayı bir sonraki adım sınırında durdurur; `resume` ile sürer."""
+    session = await _require_session(db, case_id, session_id)
+    if session.status not in ACTIVE_STATUSES:
+        raise HTTPException(status_code=409, detail="Oturum çalışmıyor")
+    control = get_control(session.id)
+    if control is not None:
+        control.request_interrupt()
+        status_text = "interrupting"
+    else:
+        # Süreç yeniden başlamış/çalışan görev yok: durumu doğrudan kapat.
+        session.status = "interrupted"
+        await db.commit()
+        status_text = "interrupted"
+    await record_request_audit(
+        db=db,
+        request=request,
+        action="research.session.interrupt",
+        case_id=case_id,
+        target=f"ResearchSession: {session.id}",
+        details={"live": control is not None},
+    )
+    return {"id": session.id, "status": status_text}
+
+
+@router.post("/{case_id}/research/{session_id}/resume", status_code=202)
+async def resume_research(
+    case_id: str,
+    session_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    session = await _require_session(db, case_id, session_id)
+    if session.status != "interrupted":
+        raise HTTPException(status_code=409, detail="Yalnız durdurulmuş oturum sürdürülebilir")
+    if await _active_session(db, case_id) is not None:
+        raise HTTPException(
+            status_code=409, detail="Bu vakada çalışan başka bir araştırma oturumu var"
+        )
+    session.status = "queued"
+    session.error = None
+    session.finished_at = None
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409, detail="Bu vakada çalışan başka bir araştırma oturumu var"
+        ) from None
+    await db.refresh(session)
+    await record_request_audit(
+        db=db,
+        request=request,
+        action="research.session.resume",
+        case_id=case_id,
+        target=f"ResearchSession: {session.id}",
+        details={},
+    )
+    background_tasks.add_task(run_research_session, session.id)
+    return session_to_dict(session)
+
+
+@router.post("/{case_id}/research/{session_id}/answer")
+async def answer_research_question(
+    case_id: str,
+    session_id: str,
+    data: ResearchAnswer,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Ajanın `ask_user` sorusunu yanıtlar; oturum kaldığı yerden sürer."""
+    session = await _require_session(db, case_id, session_id)
+    control = get_control(session.id)
+    if control is None or not control.answer(data.question_id, data.answer):
+        raise HTTPException(status_code=409, detail="Bekleyen soru yok")
+    await record_request_audit(
+        db=db,
+        request=request,
+        action="research.session.answer",
+        case_id=case_id,
+        target=f"ResearchSession: {session.id}",
+        details={"answer_length": len(data.answer)},
+    )
+    return {"id": session.id, "status": "running", "answered": True}
+
+
+@router.get("/{case_id}/research/{session_id}/proposals")
+async def research_proposals(
+    case_id: str, session_id: str, db: AsyncSession = Depends(get_db)
+):
+    """Bu oturumun onay bekleyen havuz önerileri (satır içi onay kartları)."""
+    await _require_session(db, case_id, session_id)
+    rows = (
+        (
+            await db.execute(
+                select(PoolItem)
+                .where(
+                    PoolItem.case_id == case_id,
+                    PoolItem.source == "ai",
+                    PoolItem.status.in_(("proposed", "candidate")),
+                )
+                .order_by(PoolItem.created_at.desc())
+                .limit(300)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    items = [
+        {
+            "item_id": row.id,
+            "kind": row.kind,
+            "label": row.label,
+            "value": str(row.value or "")[:600],
+            "status": row.status,
+            "confidence": float(row.confidence or 0.0),
+            "source_url": (row.provenance or {}).get("url"),
+        }
+        for row in rows
+        if (row.provenance or {}).get("session_id") == session_id
+    ]
+    return {"items": items, "total": len(items)}
+
+
 @router.post("/{case_id}/research/{session_id}/cancel")
 async def cancel_research(
     case_id: str,
@@ -385,7 +562,7 @@ async def delete_research_session(
     db: AsyncSession = Depends(get_db),
 ):
     session = await _require_session(db, case_id, session_id)
-    if session.status in {"queued", "running"}:
+    if session.status in ACTIVE_STATUSES:
         raise HTTPException(status_code=409, detail="Çalışan oturum silinemez")
     await db.delete(session)
     await db.commit()
@@ -411,7 +588,7 @@ async def research_events(
         "Connection": "keep-alive",
     }
 
-    if session.status in TERMINAL_STATUSES:
+    if session.status in STREAM_CLOSED_STATUSES:
         event = (
             "research.completed"
             if session.status == "completed"

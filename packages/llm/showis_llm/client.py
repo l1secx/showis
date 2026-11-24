@@ -80,6 +80,8 @@ class LLMClient:
         self.session_id = session_id
         self.role = role
         self.thinking_budget = thinking_budget
+        #: Sağlayıcı araç çağrısını reddederse True; çağıran JSON-şema yoluna düşer.
+        self.native_tools_disabled = False
         self.api_style = detect_api_style(self.base_url)
         self.user_agent = user_agent
         # T-333: env > argüman > varsayılan (8 sn / 1 deneme)
@@ -137,6 +139,7 @@ class LLMClient:
         temperature: float,
         max_tokens: int | None,
         stream: bool,
+        tool_choice: str | None = None,
     ) -> dict[str, Any]:
         if self.api_style == "anthropic":
             return anthropic_adapter.build_payload(
@@ -147,6 +150,7 @@ class LLMClient:
                 max_tokens=max_tokens,
                 stream=stream,
                 thinking_budget=self.thinking_budget,
+                tool_choice=tool_choice,
             )
         return openai_compat.build_payload(
             model=self.model,
@@ -155,6 +159,7 @@ class LLMClient:
             temperature=temperature,
             max_tokens=max_tokens,
             stream=stream,
+            tool_choice=tool_choice,
         )
 
     def _parse(self, data: dict[str, Any]) -> LLMResult:
@@ -168,11 +173,12 @@ class LLMClient:
         tools: list[ToolSpec] | None = None,
         temperature: float = 0.0,
         max_tokens: int | None = None,
+        tool_choice: str | None = None,
     ) -> LLMResult:
         """Native araç çağrısı (OpenAI `tools` / Anthropic `tool_use`)."""
         self._check_policy()
         payload = self._build_payload(
-            self._prepare_messages(messages), tools, temperature, max_tokens, False
+            self._prepare_messages(messages), tools, temperature, max_tokens, False, tool_choice
         )
         data = await self._post_json(payload)
         result = self._parse(data)
