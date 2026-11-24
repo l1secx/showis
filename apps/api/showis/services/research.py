@@ -22,13 +22,12 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Iterable, Sequence
 
 from pydantic import BaseModel, Field
 from showis.db.models import (
     Case,
-    Evidence,
     PoolItem,
     PoolRelation,
     ResearchMessage,
@@ -49,9 +48,9 @@ from showis.services.pool import (
     context_items,
     create_item,
     normalize_value,
-    search_items,
 )
 from showis.services.reasoning.graph import graph_summary
+from showis.services.reasoning.pivots import PIVOTS, PivotError, run_pivot
 from showis.services.research_interactive import (
     ResearchControl,
     TokenBatcher,
@@ -568,144 +567,6 @@ def _tool_result_json(payload: Any) -> str:
     return text
 
 
-async def _tool_search_pool(
-    db: AsyncSession, *, case_id: str, tool_input: dict[str, Any]
-) -> dict[str, Any]:
-    query = " ".join(str(tool_input.get("query") or "").split())[:200]
-    kinds = tool_input.get("kinds")
-    kind_list = [str(k) for k in kinds] if isinstance(kinds, list) else None
-    items, total = await search_items(
-        db,
-        case_id=case_id,
-        q=query or None,
-        kinds=kind_list,
-        statuses=("confirmed", "candidate", "proposed"),
-        limit=30,
-    )
-    return {
-        "query": query,
-        "total": total,
-        "items": [
-            {
-                "id": item.id,
-                "kind": item.kind,
-                "label": item.label,
-                "value": item.value,
-                "attributes": item.attributes or {},
-                "status": item.status,
-                "source": item.source,
-                "confidence": item.confidence,
-            }
-            for item in items
-        ],
-    }
-
-
-async def _tool_web_search(
-    db: AsyncSession, *, tool_input: dict[str, Any], stats: dict[str, Any]
-) -> dict[str, Any]:
-    profile = depth_profile(stats)
-    if stats.get("web_searches", 0) >= profile.max_searches:
-        raise ToolError(f"web arama sınırı aşıldı ({profile.max_searches})")
-    query = " ".join(str(tool_input.get("query") or "").split())[:300]
-    if not query:
-        raise ToolError("query zorunlu")
-    try:
-        guard_query(query)
-    except PolicyViolationError as exc:
-        raise ToolError("sorgu politika tarafından engellendi") from exc
-    stats["web_searches"] = stats.get("web_searches", 0) + 1
-    provider = await build_search_provider(db)
-    hits = await asyncio.wait_for(provider.search(query, limit=10), timeout=15.0)
-    return {
-        "query": query,
-        "results": [
-            {
-                "title": hit.title,
-                "url": hit.url,
-                "snippet": hit.snippet[:500],
-                "provider": hit.provider,
-            }
-            for hit in hits[:10]
-        ],
-    }
-
-
-async def _tool_web_search_many(
-    db: AsyncSession, *, tool_input: dict[str, Any], stats: dict[str, Any]
-) -> dict[str, Any]:
-    raw = tool_input.get("queries")
-    queries = [str(item).strip() for item in raw] if isinstance(raw, list) else []
-    queries = [item for item in queries if item][:8]
-    if not queries:
-        raise ToolError("queries listesi zorunlu")
-    results: list[dict[str, Any]] = []
-    for query in queries:
-        try:
-            result = await _tool_web_search(db, tool_input={"query": query}, stats=stats)
-            results.append(result)
-        except ToolError as exc:
-            results.append({"query": query, "error": str(exc)[:300]})
-    return {"queries": queries, "results": results}
-
-
-async def _tool_fetch_page(
-    db: AsyncSession,
-    *,
-    case: Case,
-    tool_input: dict[str, Any],
-    stats: dict[str, Any],
-    session_id: str,
-) -> dict[str, Any]:
-    profile = depth_profile(stats)
-    if stats.get("pages", 0) >= profile.max_pages:
-        raise ToolError(f"sayfa okuma sınırı aşıldı ({profile.max_pages})")
-    raw_url = str(tool_input.get("url") or "").strip()
-    if not raw_url:
-        raise ToolError("url zorunlu")
-    try:
-        url = await asyncio.to_thread(guard_url, raw_url)
-    except (SSRFViolationError, PolicyViolationError) as exc:
-        raise ToolError("URL politika tarafından engellendi") from exc
-    stats["pages"] = stats.get("pages", 0) + 1
-    result = await _fetch_public_page(url)
-
-    digest = result.digest or hashlib.sha256(result.raw).hexdigest()
-    evidence = Evidence(
-        case_id=case.id,
-        source_url=url,
-        kind="research_page",
-        content_hash=digest,
-        http_status=result.status_code,
-        user_agent="showis-research",
-        expires_at=case.created_at + timedelta(days=case.retention_days),
-    )
-    db.add(evidence)
-    await db.flush()
-    stats["evidence_ids"] = list(stats.get("evidence_ids", [])) + [evidence.id]
-    return {
-        "url": url,
-        "title": result.title or url,
-        "description": result.description,
-        "text": result.text,
-        "links": result.links[:40],
-        "profiles": [
-            {
-                "platform": item.platform.value,
-                "username": item.identifier,
-                "url": item.url,
-                "aggregator": item.aggregator,
-            }
-            for item in result.profiles[:30]
-        ],
-        "emails": result.emails,
-        "phones": result.phones,
-        "truncated": len(result.text) >= MAX_PAGE_TEXT,
-        "evidence_id": evidence.id,
-        "session_id": session_id,
-    }
-
-
 async def _fetch_public_page(
     url: str, *, timeout: float = 15.0, respect_robots: bool = True
 ) -> FetchResult:
@@ -866,6 +727,9 @@ async def _tool_add_pool_item(
         raise ToolError(str(exc)) from exc
     stats["writes"] = stats.get("writes", 0) + 1
     await db.commit()
+    if created:
+        source_url = str(provenance.get("url") or "") or None
+        await emit_proposal(session.id, item, source_url)
     return {
         "id": item.id,
         "status": item.status,
@@ -1826,6 +1690,21 @@ class SubagentContext:
     control: ResearchControl | None = None
     steering: list[str] = field(default_factory=list)
     steer_cursor: int = 0
+    mode: str = "research"
+    #: Yazma niyetleri: alt ajanlar DB'siz çalışır; ana döngü tek oturumda uygular.
+    write_queue: list[dict[str, Any]] = field(default_factory=list)
+
+
+#: Alt ajanın kuyruğa alabildiği yazma araçları (uygulama ana döngüde yapılır).
+WRITE_TOOLS = (
+    "add_pool_item",
+    "add_supply_chain_node",
+    "add_supply_chain_edge",
+    "start_scan",
+    "run_pivot",
+)
+MAX_QUEUED_WRITES_PER_AGENT = 12
+MAX_AGENT_PIVOTS = 12
 
 
 def _steering_block(notes: Sequence[str]) -> str:
@@ -1843,7 +1722,9 @@ def _subagent_system_prompt(ctx: SubagentContext, *, native: bool = False) -> st
         "Araçları doğrudan çağır. Yeterli kanıt toplayınca `submit_report` aracıyla "
         "nihai raporu ver. Gerçekten belirsiz ve kritik bir ayrım için (ör. aynı "
         "isimli birden çok kişi) `ask_user` ile analiste kısa bir soru sor; "
-        "gereksiz soru sorma."
+        "gereksiz soru sorma. Kaynaklı bulguları `add_pool_item`, tedarik zinciri "
+        "bulgularını `add_supply_chain_node/edge` ile, bir kayıttan türetme için "
+        "`run_pivot` ile öner (yazmalar analist onayına düşer; asla onaylı yazılmaz)."
         if native
         else """ÇIKTI SÖZLEŞMESİ — yalnızca geçerli JSON:
 Araç çağrısı:
@@ -1976,10 +1857,141 @@ async def _subagent_tool_raw(
             "emails": result.emails[:8],
             "phones": result.phones[:5],
         }
+    if tool in WRITE_TOOLS:
+        return _queue_write(ctx, tool, tool_input)
     return {"error": f"bilinmeyen araç: {tool}"}
 
 
-def _subagent_tool_specs() -> list[dict[str, Any]]:
+def _queue_write(ctx: SubagentContext, tool: str, tool_input: dict[str, Any]) -> dict[str, Any]:
+    """Yazma niyetini doğrular ve kuyruğa alır; DB'ye dokunmaz."""
+    if len(ctx.write_queue) >= MAX_QUEUED_WRITES_PER_AGENT:
+        return {"error": "yazma kuyruğu doldu"}
+    if tool == "start_scan" and ctx.mode != "agent":
+        return {"error": "tarama başlatma yalnız tam ajan modunda kullanılabilir"}
+    data = dict(tool_input)
+    if tool == "add_pool_item":
+        kind = str(data.get("kind") or "").strip().lower()
+        if kind not in POOL_KINDS:
+            return {"error": f"geçersiz kind; izinli: {', '.join(sorted(POOL_KINDS))}"}
+        if not " ".join(str(data.get("value") or "").split()):
+            return {"error": "value zorunlu"}
+        source_url = str(data.get("source_url") or "").strip()
+        provenance = {"method": "subagent_tool", "agent": ctx.role}
+        if source_url.startswith(("http://", "https://")):
+            provenance["url"] = source_url
+        data["provenance"] = provenance
+    elif tool == "add_supply_chain_node":
+        if not str(data.get("name") or "").strip():
+            return {"error": "name zorunlu"}
+    elif tool == "add_supply_chain_edge":
+        if not (data.get("source_id") or data.get("source")) or not (
+            data.get("target_id") or data.get("target")
+        ):
+            return {"error": "kaynak ve hedef düğüm zorunlu"}
+    elif tool == "run_pivot":
+        if not str(data.get("item_id") or "").strip() or not str(data.get("pivot") or "").strip():
+            return {"error": "item_id ve pivot zorunlu"}
+    ctx.write_queue.append({"tool": tool, "input": data, "agent": ctx.index, "role": ctx.role})
+    return {
+        "queued": True,
+        "note": "Yazma kuyruğa alındı; dalga bitince uygulanır ve analist onayına düşer.",
+    }
+
+
+def _write_tool_specs(mode: str) -> list[dict[str, Any]]:
+    """Yazma araçları: çıktı yalnız onay bekleyen öneridir (confirmed yazılmaz)."""
+    text = {"type": "string"}
+    number = {"type": "number", "minimum": 0, "maximum": 1}
+    obj = {"type": "object"}
+    specs: list[dict[str, Any]] = [
+        {
+            "name": "add_pool_item",
+            "description": (
+                "Doğrulanmış bir bulguyu havuza ÖNERİ olarak ekler (analist onaylar). "
+                "Yalnız kaynağı olan bulguları ekle."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": sorted(POOL_KINDS)},
+                    "label": text,
+                    "value": text,
+                    "confidence": number,
+                    "source_url": text,
+                    "attributes": obj,
+                },
+                "required": ["kind", "value"],
+            },
+        },
+        {
+            "name": "add_supply_chain_node",
+            "description": "Tedarik zinciri grafına öneri düğümü (kurum/kişi) ekler.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "kind": text,
+                    "name": text,
+                    "country": text,
+                    "website": text,
+                    "confidence": number,
+                    "identifiers": obj,
+                    "attributes": obj,
+                },
+                "required": ["name"],
+            },
+        },
+        {
+            "name": "add_supply_chain_edge",
+            "description": (
+                "İki düğüm arasında öneri ilişkisi ekler (id veya ad ile). "
+                "Düğümler aynı dalgada kuyruğa alındıysa sırayla uygulanır."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "source_id": text,
+                    "source": text,
+                    "target_id": text,
+                    "target": text,
+                    "relation": text,
+                    "label": text,
+                    "confidence": number,
+                    "evidence": obj,
+                },
+            },
+        },
+        {
+            "name": "run_pivot",
+            "description": (
+                "Havuz kaydı üzerinde deterministik pivot çalıştırır (ör. "
+                "email_username, email_domain, username_profiles, url_fetch). "
+                "Sonuçlar öneri olarak havuza düşer."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "item_id": text,
+                    "pivot": {"type": "string", "enum": [p.id for p in PIVOTS]},
+                },
+                "required": ["item_id", "pivot"],
+            },
+        },
+    ]
+    if mode == "agent":
+        specs.append(
+            {
+                "name": "start_scan",
+                "description": "Vaka hedefi için kontrollü bir tarama başlatır (en çok bir).",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"mode": {"type": "string", "enum": ["O1", "O2", "O3"]}},
+                },
+            }
+        )
+    return specs
+
+
+def _subagent_tool_specs(mode: str = "research") -> list[dict[str, Any]]:
     """Alt ajan araçları (native tool şeması). `submit_report` rapor teslimidir."""
     text = {"type": "string"}
     return [
@@ -2013,6 +2025,7 @@ def _subagent_tool_specs() -> list[dict[str, Any]]:
                 "required": ["query"],
             },
         },
+        *_write_tool_specs(mode),
         {
             "name": "ask_user",
             "description": (
@@ -2079,7 +2092,7 @@ def _control_interrupted(ctx: SubagentContext) -> bool:
 
 async def _subagent_llm_turn(ctx: SubagentContext, messages: list[dict[str, Any]]) -> Any:
     """Tek native tur: akış varsa token/düşünme olayları yayınlanır."""
-    tools = _subagent_tool_specs()
+    tools = _subagent_tool_specs(ctx.mode)
     client: Any = ctx.client
     if callable(getattr(client, "stream", None)) and ctx.session_id:
         tokens = TokenBatcher(ctx.session_id, ctx.index, "token")
@@ -2599,6 +2612,116 @@ def _subagent_finding_to_draft(item: SubagentFinding) -> FindingDraft | None:
     )
 
 
+async def _apply_write_intents(
+    runtime: ResearchRuntime, intents: Sequence[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Alt ajan yazma niyetlerini ana döngüde uygular (yalnız proposed/candidate)."""
+    outcomes: list[dict[str, Any]] = []
+    common: dict[str, Any] = {
+        "db": runtime.db,
+        "session": runtime.session,
+        "stats": runtime.stats,
+    }
+    actor = f"ai:{runtime.session.created_by or 'agent'}"
+    for intent in intents:
+        tool = str(intent["tool"])
+        tool_input = intent["input"]
+        error: str | None = None
+        result: dict[str, Any] = {}
+        try:
+            if tool == "add_pool_item":
+                result = await _tool_add_pool_item(
+                    case_id=runtime.case.id, tool_input=tool_input, **common
+                )
+            elif tool == "add_supply_chain_node":
+                result = await _tool_add_node(
+                    case_id=runtime.case.id, tool_input=tool_input, **common
+                )
+            elif tool == "add_supply_chain_edge":
+                result = await _tool_add_edge(
+                    case_id=runtime.case.id, tool_input=tool_input, **common
+                )
+            elif tool == "start_scan":
+                result = await _tool_start_scan(case=runtime.case, tool_input=tool_input, **common)
+            elif tool == "run_pivot":
+                result = await _apply_pivot(runtime, tool_input, actor)
+            else:
+                error = f"bilinmeyen yazma aracı: {tool}"
+        except ToolError as exc:
+            error = str(exc)[:200]
+        except Exception as exc:  # noqa: BLE001 - tek yazma tüm dalgayı düşürmesin
+            await runtime.db.rollback()
+            error = f"yazma hatası ({type(exc).__name__})"
+        outcomes.append({"tool": tool, "ok": error is None, "error": error, "result": result})
+        if error:
+            runtime.errors.append(f"{tool}: {error}")
+        await emit(
+            runtime.session.id,
+            "tool_end",
+            {
+                "session_id": runtime.session.id,
+                "agent": intent.get("agent"),
+                "role": intent.get("role", ""),
+                "tool": f"{tool}:uygula",
+                "summary": str(
+                    tool_input.get("value")
+                    or tool_input.get("name")
+                    or tool_input.get("pivot")
+                    or tool_input.get("target")
+                    or ""
+                )[:200],
+                "ok": error is None,
+                "error": error,
+            },
+        )
+    return outcomes
+
+
+async def _apply_pivot(
+    runtime: ResearchRuntime, tool_input: dict[str, Any], actor: str
+) -> dict[str, Any]:
+    if int(runtime.stats.get("pivots", 0)) >= MAX_AGENT_PIVOTS:
+        raise ToolError(f"pivot sınırı aşıldı ({MAX_AGENT_PIVOTS})")
+    if int(runtime.stats.get("writes", 0)) >= runtime.depth.max_writes:
+        raise ToolError(f"yazma sınırı aşıldı ({runtime.depth.max_writes})")
+    item = (
+        await runtime.db.execute(
+            select(PoolItem).where(
+                PoolItem.case_id == runtime.case.id,
+                PoolItem.id == str(tool_input.get("item_id") or ""),
+            )
+        )
+    ).scalar_one_or_none()
+    if item is None:
+        raise ToolError("havuz kaydı bulunamadı")
+    status = "candidate" if runtime.session.mode == "agent" else "proposed"
+    try:
+        outcome = await run_pivot(
+            runtime.db,
+            case=runtime.case,
+            item=item,
+            pivot_id=str(tool_input.get("pivot") or ""),
+            actor=actor,
+            status=status,
+        )
+    except PivotError as exc:
+        raise ToolError(str(exc)) from exc
+    runtime.stats["pivots"] = int(runtime.stats.get("pivots", 0)) + 1
+    created_ids = [row["id"] for row in outcome.items if row.get("created")]
+    runtime.stats["writes"] = int(runtime.stats.get("writes", 0)) + len(created_ids)
+    if created_ids:
+        rows = (
+            await runtime.db.execute(select(PoolItem).where(PoolItem.id.in_(created_ids)))
+        ).scalars()
+        for row in rows:
+            await emit_proposal(runtime.session.id, row)
+    return {
+        "pivot": outcome.pivot,
+        "created": len(created_ids),
+        "relations": len(outcome.relations),
+    }
+
+
 async def _run_subagent_wave(
     runtime: ResearchRuntime,
     specs: Sequence[SubagentSpec],
@@ -2628,6 +2751,7 @@ async def _run_subagent_wave(
 
     pool_snapshot = [
         {
+            "id": item.get("id"),
             "kind": item.get("kind"),
             "label": item.get("label"),
             "value": str(item.get("value") or "")[:800],
@@ -2660,6 +2784,7 @@ async def _run_subagent_wave(
             control=runtime.control,
             steering=list(runtime.steering_notes),
             steer_cursor=runtime.steer_cursor,
+            mode=runtime.session.mode,
         )
         for index, spec in enumerate(specs)
     ]
@@ -2710,6 +2835,10 @@ async def _run_subagent_wave(
                     )
                 )[:40]
         summaries.append({**counts, "status": "completed"})
+    # Kuyruğa alınan yazmalar: tek DB oturumunda, ajan sırasıyla uygulanır.
+    intents = [intent for ctx in contexts for intent in ctx.write_queue]
+    if intents:
+        await _apply_write_intents(runtime, intents)
     runtime.stats["subagents"] = int(runtime.stats.get("subagents", 0)) + len(specs)
     runtime.stats["agents"] = [
         *runtime.stats.get("agents", []),
@@ -3182,6 +3311,7 @@ async def _run_loop(
 
     pool_rows = [
         {
+            "id": item.id,
             "kind": item.kind,
             "label": item.label,
             "value": item.value,

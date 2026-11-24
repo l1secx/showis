@@ -142,8 +142,16 @@ class PivotResult:
 
 
 class _Ctx:
-    def __init__(self, db: AsyncSession, case: Case, item: PoolItem, actor: str):
+    def __init__(
+        self,
+        db: AsyncSession,
+        case: Case,
+        item: PoolItem,
+        actor: str,
+        status: str = "proposed",
+    ):
         self.db, self.case, self.item, self.actor = db, case, item, actor
+        self.status = status
         self.result = PivotResult(pivot="")
 
     async def add_item(
@@ -165,7 +173,7 @@ class _Ctx:
             label=label,
             value=value,
             source="scan",
-            status="proposed",
+            status=self.status,
             confidence=confidence,
             attributes=attributes,
             provenance={"pivot": self.result.pivot, "from_item": self.item.id, "reason": reason},
@@ -403,8 +411,17 @@ _HANDLERS: dict[str, Callable[[_Ctx], Awaitable[None]]] = {
 
 
 async def run_pivot(
-    db: AsyncSession, *, case: Case, item: PoolItem, pivot_id: str, actor: str = "pivot"
+    db: AsyncSession,
+    *,
+    case: Case,
+    item: PoolItem,
+    pivot_id: str,
+    actor: str = "pivot",
+    status: str = "proposed",
 ) -> PivotResult:
+    """Pivotu çalıştırır; yeni kayıtlar yalnız `proposed`/`candidate` olabilir."""
+    if status not in ("proposed", "candidate"):
+        raise PivotError("pivot çıktısı yalnız proposed/candidate yazılabilir")
     pivot = _PIVOT_BY_ID.get(pivot_id)
     if pivot is None:
         raise PivotError(f"bilinmeyen pivot: {pivot_id}")
@@ -412,7 +429,7 @@ async def run_pivot(
         raise PivotError(f"{pivot_id} pivotu {item.kind} öğesine uygulanamaz")
     if item.status == "rejected":
         raise PivotError("reddedilmiş öğe üzerinde pivot çalıştırılamaz")
-    ctx = _Ctx(db, case, item, actor)
+    ctx = _Ctx(db, case, item, actor, status)
     ctx.result.pivot = pivot.id
     await _HANDLERS[pivot.id](ctx)
     await db.commit()
