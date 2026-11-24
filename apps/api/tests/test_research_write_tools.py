@@ -125,10 +125,14 @@ async def test_apply_intents_writes_only_proposed_or_candidate(db_factory, clien
         runtime, case_id, session_id = await _runtime(db, client, db_factory, mode)
         queue = research_broadcaster.subscribe(session_id)
         existing = (
-            await db.execute(
-                select(PoolItem).where(PoolItem.case_id == case_id, PoolItem.kind == "email")
+            (
+                await db.execute(
+                    select(PoolItem).where(PoolItem.case_id == case_id, PoolItem.kind == "email")
+                )
             )
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
         intents = [
             {
                 "tool": "add_pool_item",

@@ -63,6 +63,7 @@ from showis.services.research_interactive import (
     register_control,
     release_control,
     research_broadcaster,
+    structured_with_stream,
 )
 from showis.services.research_playbook import (
     IdentityProfile,
@@ -2920,12 +2921,15 @@ organizations[], timeline[], interests[], risk_notes[], confidence.
     draft: BioDraft | None = None
     try:
         result = await asyncio.wait_for(
-            runtime.reasoner_client.complete(
-                messages=[
+            structured_with_stream(
+                runtime.reasoner_client,
+                [
                     {"role": "system", "content": "OSINT biyografi yazarı."},
                     {"role": "user", "content": prompt},
                 ],
-                schema=BioDraft,
+                BioDraft,
+                session_id=runtime.session.id,
+                stream_field="summary",
                 temperature=0.3,
                 max_tokens=3000,
             ),
@@ -3090,12 +3094,15 @@ JSON: {{"answer":"Markdown rapor","citations":[{{"label":"...","url":"https://..
     report: ResearchReport | None = None
     try:
         result = await asyncio.wait_for(
-            runtime.reasoner_client.complete(
-                messages=[
+            structured_with_stream(
+                runtime.reasoner_client,
+                [
                     {"role": "system", "content": "OSINT rapor yazarı."},
                     {"role": "user", "content": prompt},
                 ],
-                schema=ResearchReport,
+                ResearchReport,
+                session_id=runtime.session.id,
+                stream_field="answer",
                 temperature=0.2,
                 max_tokens=4000,
             ),
