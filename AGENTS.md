@@ -89,6 +89,17 @@ Kurulum: `make bootstrap` (yerel `showis-*` paketleri PyPI'da yok, editable kuru
   getirilmez/saklanmaz. Anahtarı repoya yazma.
 - Kullanıcıya görünen metinler ve yorumlar Türkçe; kod kimlikleri/API alanları İngilizce.
 
+## Git / uzak depo
+
+- Varsayılan uzak depo `l1secx/showis` (`git remote` adı `l1secx`). Tüm değişiklikler oraya
+  gider; `origin` (`l1secc/showis`) yalnız kullanıcı açıkça isterse kullanılır.
+- `gh` iki hesapla açık (`l1secc` aktif, `l1secx` ikinci). `l1secx` özel repo olduğu için
+  `l1secc` ile görünmez. Hesabı değiştirmeden: `gh auth token --user l1secx` ile token al ve
+  tek komutluk `git -c http.extraheader="Authorization: Basic <base64(x-access-token:TOKEN)>"
+  push l1secx <dal>` kullan. Token'ı repoya, remote URL'sine veya sohbete yazma.
+- Yeni remote yoksa: `git remote add l1secx https://github.com/l1secx/showis`.
+- Push (özellikle `main`) kullanıcı istediğinde yapılır; commit'ler yerelde kalır.
+
 ## Bu ağa özgü not
 
 - Doğrudan DuckDuckGo (`lite.duckduckgo.com`) bu ağda timeout verir. Arama zinciri Jina Reader
