@@ -548,6 +548,10 @@ export const api = {
       `/cases/${caseId}/pool/${itemId}/breach-check`,
       { method: "POST" }
     ),
+  breachPasswordRange: (prefix: string) =>
+    req<{ prefix: string; suffixes: { suffix: string; count: number }[] }>(
+      `/breach/password-range/${prefix}`
+    ),
 
   // --- AI araştırma ---
   getResearchMeta: (caseId: string) => req<ResearchMeta>(`/cases/${caseId}/research/meta`),

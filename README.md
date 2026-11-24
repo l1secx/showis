@@ -30,9 +30,13 @@ raporlayan kişisel OSINT web uygulaması.
   modelleri seçer. Tarama ve AI araştırmasında bu modeller arasından seçim yapılır.
   Anahtarlar Fernet ile şifrelenir, base_url değişince geçersiz kılınır;
   `SHOWIS_LLM_BASE_URL_ALLOWLIST` host allowlist'i ve veri redaksiyonu korunur.
-- **HIBP veri ihlali kontrolü:** Havuzdaki e-posta kayıtları Have I Been Pwned
-  üzerinden kontrol edilir; ihlal adı, tarihi, sızan veri sınıfları ve açıklaması
-  kayda işlenir. Anahtar Ayarlar > HIBP veya `HIBP_API_KEY` ile verilir.
+- **Anahtarsız sızıntı kontrolü:** Havuzdaki e-posta kayıtları XposedOrNot (ihlaller)
+  ve Hudson Rock (infostealer özeti) ile kontrol edilir; HIBP anahtarı (Ayarlar >
+  HIBP veya `HIBP_API_KEY`) isteğe bağlı ek kaynaktır. Ihlal adı, tarih, veri
+  sınıfları, "parola sızmış mı" ve sağlayıcı bilgisi kayda işlenir; üçüncü kişilerin
+  düz metin parolası getirilmez. Tüm sağlayıcılar başarısızsa uç `502` döner.
+  "Parolam sızmış mı?" aracı Pwned Passwords k-anonimliğini kullanır: SHA-1
+  tarayıcıda hesaplanır, yalnız ilk 5 karakter gönderilir.
 - **Araştırma Havuzu:** Vaka hedefi, ipuçları, seed'ler, notlar, yorumlar, tarama
   ve AI önerileri tek havuzda toplanır (`pool_items`); tekilleştirme, tür/kaynak/
   durum filtresi ve onay akışı vardır. **Olay** türü tarih/yer/kurum/kaynak URL'si
@@ -204,12 +208,12 @@ Arayüz gecikmesi için alınan önlemler:
 1. **Ayarlar** → `LLM` sekmesinden bir veya daha fazla AI sağlayıcı profili ekle
    (OpenCode Go, OpenAI, özel uç nokta). Anahtarı gir, **Modelleri getir** ile
    erişilebilir modelleri listele, izinli modelleri seç, birini aktifleştir.
-2. **Ayarlar → HIBP** → Have I Been Pwned API anahtarını gir. Anahtar yoksa
-   e-posta ihlal kontrolü çalışmaz.
+2. (İsteğe bağlı) **Ayarlar → HIBP** → HIBP API anahtarı; yoksa e-posta ihlal
+   kontrolü anahtarsız zincirle çalışır.
 3. **Yeni Vaka** → amaç + hukuki dayanak + hedef + ipuçları + seed'ler. Girdiğiniz
    tüm alanlar vaka araştırma havuzuna otomatik eklenir.
 4. **Havuz** → kayıtları ara/filtrele, AI önerilerini onayla/reddet, e-postaları
-   HIBP'de kontrol et, tek kayıtla AI araştırması başlat.
+   sızıntı zincirinde kontrol et, tek kayıtla AI araştırması başlat.
 5. **AI Araştırma** → üstteki vaka seçicisiyle vaka değiştir; "Araştır ve öner"
    veya "Tam ajan" modunu ve modeli seç, soruyu yaz. Ajanın o an ne yaptığı canlı
    özet olarak görünür; kaynaklı nihai sentez sunulur. Takip sorusu sorulabilir.
@@ -238,7 +242,7 @@ apps/api/showis/services/research.py      derin ajan dalgaları + araçlar + SSE
 apps/api/showis/services/research_playbook.py  kimlik/sorgu/link/biyografi çıkarımı
 apps/api/showis/services/supply_chain.py  tedarik zinciri modeli/grafiği
 apps/api/showis/services/ai_providers.py  çoklu LLM profili + model keşfi
-apps/api/showis/services/hibp.py          Have I Been Pwned ihlal kontrolü
+apps/api/showis/services/breach/       Sızıntı sağlayıcı zinciri (XposedOrNot, Hudson Rock, HIBP)
 packages/settings    Fernet şifreli BYOK
 infra/       docker-compose, Dockerfile'lar, caddy, script'ler
 ```

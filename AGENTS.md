@@ -84,7 +84,9 @@ Kurulum: `make bootstrap` (yerel `showis-*` paketleri PyPI'da yok, editable kuru
 - AI'ın havuza yazdığı kayıtlar `proposed` (araştırma) veya `candidate` (tam ajan) olur;
   kullanıcı onayı olmadan `confirmed` yazılmaz. Bu kuralı bozan değişiklik yapma.
 - AI sağlayıcı sırları Fernet ile şifrelenir; base_url allowlist ve redaksiyon korunur.
-- E-posta ihlal kontrolü HIBP anahtarı yoksa `503`/atlanır; anahtarı repoya yazma.
+- E-posta ihlal kontrolü anahtarsız zincirle çalışır (XposedOrNot + Hudson Rock; HIBP anahtarı
+  isteğe bağlı ek kaynak); hepsi başarısızsa `502`. Üçüncü kişilerin düz metin parolası
+  getirilmez/saklanmaz. Anahtarı repoya yazma.
 - Kullanıcıya görünen metinler ve yorumlar Türkçe; kod kimlikleri/API alanları İngilizce.
 
 ## Bu ağa özgü not

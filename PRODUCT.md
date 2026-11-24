@@ -82,8 +82,9 @@ uygun mu" arasındaki dengeyi ürünün içine gömüldüğü için benzer araç
   doygunluğu veya bütçeye göre durma; havuz kanıtlarından yapılandırılmış
   biyografi; "araştır/öner" ve "tam ajan" modları; canlı aktivite, SSE ve
   kaynaklı nihai sentez.
-- **HIBP ihlal kontrolü:** E-posta havuz kayıtları için ihlal adı, tarihi, sızan
-  veri sınıfları ve açıklaması; sonuç kanıt kaydına işlenir.
+- **Sızıntı kontrolü:** E-posta havuz kayıtları için anahtarsız sağlayıcı zinciri
+  (XposedOrNot, Hudson Rock; HIBP anahtarı varsa ek): ihlal adı, tarihi, veri
+  sınıfları, parola sızmış mı, infostealer özeti; sonuç kanıt kaydına işlenir.
 - **Tedarik zinciri modülü:** Şirket, tedarikçi, ürün ve yönlü ilişkiler için ayrı
   düğüm/kenar modeli; Cytoscape grafiği ve AI önerisi onay akışı.
 - Authenticity: hesap yaşı, aktivite, boş bio, varsayılan avatar ve cross-link tutarlılığı

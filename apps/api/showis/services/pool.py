@@ -482,7 +482,7 @@ def format_context(items: Sequence[PoolItem], limit: int = 60) -> str:
                     count = int(check.get("count") or 0)
                 except (TypeError, ValueError):
                     count = 0
-                extra = f" (HIBP: {count} ihlal)" if count else " (HIBP: ihlal yok)"
+                extra = f" (sızıntı: {count} ihlal)" if count else " (sızıntı: ihlal yok)"
         lines.append(
             f"- [{item.kind}] {item.label}: {value}{extra} (kaynak={item.source})"
         )

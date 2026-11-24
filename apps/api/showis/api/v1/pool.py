@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from showis.db.models import Case, PoolItem
 from showis.db.session import get_db
 from showis.services.audit import record_request_audit
-from showis.services.hibp import HIBPError, HIBPKeyMissing, check_email
+from showis.services.breach import BreachError, check_email
 from showis.services.pool import (
     POOL_KINDS,
     POOL_SOURCES,
@@ -190,7 +190,7 @@ async def breach_check(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """E-posta havuz kaydını HIBP'de kontrol eder; sonucu kayda işler."""
+    """E-posta havuz kaydını sızıntı sağlayıcı zincirinde kontrol eder; sonucu kayda işler."""
     await _require_case(db, case_id)
     item = await _require_item(db, case_id, item_id)
     if item.kind != "email":
@@ -199,9 +199,7 @@ async def breach_check(
         )
     try:
         result = await check_email(db, item.value)
-    except HIBPKeyMissing as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except HIBPError as exc:
+    except BreachError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     attributes = dict(item.attributes or {})
     attributes["breach_check"] = result
@@ -217,7 +215,7 @@ async def breach_check(
         details={
             "breached": result.get("breached"),
             "breach_count": result.get("count"),
-            "source": "hibp",
+            "source": result.get("source"),
         },
     )
     return {"item_id": item.id, "breach": result}

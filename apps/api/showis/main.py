@@ -11,6 +11,7 @@ from sqlalchemy.exc import DataError, DBAPIError
 import showis.db.session as db_session_module
 from showis.api.v1.ai_providers import router as ai_providers_router
 from showis.api.v1.auth import router as auth_router
+from showis.api.v1.breach import router as breach_router
 from showis.api.v1.cases import router as cases_router
 from showis.api.v1.findings import router as findings_router
 from showis.api.v1.ops import public_router as ops_public_router
@@ -347,6 +348,9 @@ app.include_router(
 )
 app.include_router(
     pool_router, prefix="/api/v1", dependencies=[*auth_required, *write_required]
+)
+app.include_router(
+    breach_router, prefix="/api/v1", dependencies=[*auth_required, *write_required]
 )
 app.include_router(
     research_router, prefix="/api/v1", dependencies=[*auth_required, *write_required]

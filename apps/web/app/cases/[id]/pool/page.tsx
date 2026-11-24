@@ -98,18 +98,49 @@ function BreachDetails({ check }: { check: any }) {
   if (!check || typeof check !== "object") return null;
   const breached = Boolean(check.breached);
   const breaches: any[] = Array.isArray(check.breaches) ? check.breaches : [];
+  const providers: string[] = Array.isArray(check.providers) ? check.providers : [];
+  const providerErrors: Record<string, string> =
+    check.provider_errors && typeof check.provider_errors === "object" ? check.provider_errors : {};
+  const stealers: any[] = Array.isArray(check.infostealer?.stealers) ? check.infostealer.stealers : [];
+  const stealerCount = Number(check.infostealer?.count || 0);
   return (
     <details className="mt-1.5 rounded-[4px] border border-line bg-sunken/60 px-2 py-1.5 text-[11.5px]">
       <summary className="flex cursor-pointer list-none items-center gap-1.5 marker:content-none">
         <ShieldAlert size={11} aria-hidden className={breached ? "text-danger" : "text-ok"} />
         <span className={breached ? "font-medium text-danger" : "font-medium text-ok"}>
-          {breached ? `${check.count || breaches.length} veri ihlali` : "HIBP: ihlal bulunamadı"}
+          {breached
+            ? `${check.count || breaches.length} veri ihlali${stealerCount > 0 ? ` · ${stealerCount} infostealer kaydı` : ""}`
+            : "Sızıntı: ihlal bulunamadı"}
         </span>
         <span className="truncate text-ink-3">
           {check.checked_at ? new Date(check.checked_at).toLocaleString("tr-TR") : ""}
         </span>
       </summary>
-      {breached ? (
+      {check.password_exposed && (
+        <p className="mt-1.5 font-medium text-danger">
+          Parola sızmış: evet (bu e-postayla ilişkili bir ihlalde parolalar yer alıyor).
+        </p>
+      )}
+      {stealerCount > 0 && (
+        <div className="mt-1.5 rounded-[4px] border border-line px-2 py-1">
+          <p className="font-medium text-danger">
+            Infostealer: {stealerCount} kayıt (yalnız özet; parola/oturum verisi gösterilmez)
+          </p>
+          <ul className="mt-1 space-y-0.5 text-ink-3">
+            {stealers.map((stealer, index) => (
+              <li key={index}>
+                {stealer.date_compromised
+                  ? new Date(stealer.date_compromised).toLocaleDateString("tr-TR")
+                  : "tarih yok"}
+                {stealer.stealer_family ? ` · ${stealer.stealer_family}` : ""}
+                {stealer.operating_system ? ` · ${stealer.operating_system}` : ""}
+                {` · ${stealer.user_services || 0} kullanıcı / ${stealer.corporate_services || 0} kurumsal servis`}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {breached && breaches.length > 0 ? (
         <ul className="mt-1.5 space-y-2">
           {breaches.map((breach, index) => (
             <li key={`${breach.name || index}`} className="border-t border-line pt-1.5 first:border-t-0 first:pt-0">
@@ -128,9 +159,91 @@ function BreachDetails({ check }: { check: any }) {
         </ul>
       ) : (
         <p className="mt-1.5 text-ink-3">
-          Bu e-posta bilinen HIBP ihlallerinde görünmüyor. Yine de yeni ihlaller oluşabilir.
+          Bu e-posta sorgulanan sağlayıcılarda görünmüyor. Yine de yeni ihlaller oluşabilir.
         </p>
       )}
+      {(providers.length > 0 || Object.keys(providerErrors).length > 0) && (
+        <p className="mt-1.5 text-[11px] text-ink-3">
+          Kaynaklar: {providers.join(", ") || "-"}
+          {Object.keys(providerErrors).length > 0 &&
+            ` · ulaşılamayan: ${Object.keys(providerErrors).join(", ")}`}
+        </p>
+      )}
+    </details>
+  );
+}
+
+async function sha1Hex(text: string): Promise<string> {
+  const data = new TextEncoder().encode(text);
+  const digest = await crypto.subtle.digest("SHA-1", data);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")
+    .toUpperCase();
+}
+
+// Pwned Passwords k-anonimlik: SHA-1 tarayıcıda hesaplanır, sunucuya yalnız ilk 5 karakter gider.
+function PasswordCheck() {
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = async () => {
+    if (!password) return;
+    setBusy(true);
+    setResult(null);
+    setError(null);
+    try {
+      const hash = await sha1Hex(password);
+      const range = await api.breachPasswordRange(hash.slice(0, 5));
+      const match = range.suffixes.find((row) => row.suffix === hash.slice(5));
+      setResult(
+        match
+          ? `Bu parola ${match.count.toLocaleString("tr-TR")} kez sızıntılarda görülmüş. Kullanmayın.`
+          : "Bu parola bilinen sızıntılarda görünmüyor."
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Kontrol başarısız");
+    } finally {
+      setPassword("");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <details className="group border-t border-line">
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-5 py-3 text-[13px] font-medium text-ink marker:content-none">
+        <ShieldAlert size={14} aria-hidden />
+        Parolam sızmış mı?
+      </summary>
+      <div className="px-5 pb-4 text-[12.5px] text-ink-3">
+        <p>
+          Parola tarayıcınızda SHA-1 ile özetlenir; sunucuya ve Pwned Passwords&apos;e yalnız
+          özetin ilk 5 karakteri gider. Parola kaydedilmez.
+        </p>
+        <div className="mt-2 flex gap-2">
+          <input
+            type="password"
+            autoComplete="off"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            onKeyDown={(event) => event.key === "Enter" && run()}
+            placeholder="Kontrol edilecek parola"
+            className="input flex-1"
+          />
+          <button
+            type="button"
+            onClick={run}
+            disabled={busy || !password}
+            className="btn-secondary btn-sm"
+          >
+            {busy ? <Loader2 size={12} className="animate-spin" aria-hidden /> : "Kontrol et"}
+          </button>
+        </div>
+        {result && <p className="mt-2 font-medium text-ink">{result}</p>}
+        {error && <p className="mt-2 text-danger">{error}</p>}
+      </div>
     </details>
   );
 }
@@ -438,6 +551,8 @@ export default function PoolPage() {
             E-postaları kontrol et
           </button>
         </div>
+
+        <PasswordCheck />
 
         <details className="group border-t border-line">
           <summary className="flex cursor-pointer list-none items-center gap-2 px-5 py-3 text-[13px] font-medium text-ink marker:content-none">

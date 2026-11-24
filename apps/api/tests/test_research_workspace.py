@@ -179,7 +179,7 @@ async def test_pool_event_keeps_timeline_attributes(db_factory, client):
 
 
 @pytest.mark.asyncio
-async def test_pool_hibp_breach_check(db_factory, client, monkeypatch):
+async def test_pool_breach_check_chain(db_factory, client, monkeypatch):
     monkeypatch.setenv("HIBP_API_KEY", "hibp-test-key")
     case_id = await _seed_case(db_factory)
     created = await client.post(
@@ -203,12 +203,15 @@ async def test_pool_hibp_breach_check(db_factory, client, monkeypatch):
                         "DataClasses": ["Email addresses", "Passwords"],
                         "Description": "<p>Acme <a href='#'>veri sızıntısı</a></p>",
                         "IsVerified": True,
-                        "IsSensitive": False,
-                        "IsSpamList": False,
-                        "IsMalware": False,
                     }
                 ],
             )
+        )
+        mock.get(url__regex=r"https://api\.xposedornot\.com/v1/breach-analytics.*").mock(
+            return_value=httpx.Response(404)
+        )
+        mock.get(url__regex=r"https://cavalier\.hudsonrock\.com/.*").mock(
+            return_value=httpx.Response(200, json={"stealers": []})
         )
         response = await client.post(
             f"/api/v1/cases/{case_id}/pool/{item_id}/breach-check"
@@ -220,6 +223,8 @@ async def test_pool_hibp_breach_check(db_factory, client, monkeypatch):
     assert breach["count"] == 1
     assert breach["breaches"][0]["title"] == "Acme Leak"
     assert "Passwords" in breach["data_classes"]
+    assert breach["password_exposed"] is True
+    assert "haveibeenpwned" in breach["providers"]
     assert "<p>" not in breach["breaches"][0]["description"]
 
     listed = await client.get(f"/api/v1/cases/{case_id}/pool?kind=email")

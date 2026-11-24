@@ -924,9 +924,9 @@ export default function SettingsPage() {
                 <div className="p-5">
                   <h2 className="section-heading">Have I Been Pwned</h2>
                   <p className="mt-1.5 text-[12.5px] leading-relaxed text-ink-3">
-                    Havuzdaki e-posta adreslerini HIBP ihlal veritabanında kontrol
-                    eder; ihlal adı, tarihi ve sızan veri sınıflarını kayda işler.
-                    HIBP v3 API anahtarı gerekir.
+                    E-posta sızıntı kontrolü anahtarsız çalışır (XposedOrNot ve
+                    Hudson Rock). HIBP v3 anahtarı isteğe bağlıdır; girilirse
+                    ek kaynak olarak sorgulanır ve sonuçlar birleştirilir.
                   </p>
 
                   {masked("hibp") && (

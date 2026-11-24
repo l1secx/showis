@@ -40,8 +40,8 @@ from showis.db.models import (
 from showis.db.session import task_session
 from showis.services.ai_providers import AIProviderValidationError
 from showis.services.audit import record_audit
+from showis.services.breach import BreachError, check_email
 from showis.services.connectors_factory import build_llm_client, build_search_provider
-from showis.services.hibp import HIBPError, HIBPKeyMissing, check_email
 from showis.services.orchestrator import ScanEventBroadcaster
 from showis.services.pool import (
     POOL_KINDS,
@@ -320,8 +320,9 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
     },
     "check_breach": {
         "description": (
-            "E-posta adresini Have I Been Pwned'de kontrol eder; ihlal adı, "
-            "tarihi ve sızan veri sınıflarını döner."
+            "E-posta adresini ücretsiz sızıntı sağlayıcılarında (XposedOrNot, "
+            "Hudson Rock; anahtar varsa HIBP) kontrol eder; ihlal adı, tarihi, "
+            "sızan veri sınıfları ve infostealer özetini döner. Parola gösterilmez."
         ),
         "input": {"email": "ornek@example.com"},
     },
@@ -746,9 +747,7 @@ async def _tool_check_breach(
     stats["breach_checks"] = stats.get("breach_checks", 0) + 1
     try:
         result = await check_email(db, email)
-    except HIBPKeyMissing as exc:
-        raise ToolError(str(exc)) from exc
-    except HIBPError as exc:
+    except BreachError as exc:
         raise ToolError(str(exc)) from exc
 
     normalized = normalize_value("email", email)
@@ -766,14 +765,14 @@ async def _tool_check_breach(
             db,
             case_id=case_id,
             kind="email",
-            label="E-posta (HIBP)",
+            label="E-posta",
             value=email,
             source="ai",
             status="candidate" if session.mode == "agent" else "proposed",
             attributes={"breach_check": result},
             provenance={
                 "session_id": session.id,
-                "source": "haveibeenpwned",
+                "source": str(result.get("source") or "breach"),
             },
             created_by=f"ai:{session.created_by or 'agent'}",
         )
@@ -2510,7 +2509,7 @@ async def _run_subagent_wave(
 
 
 async def _run_breach_checks(runtime: ResearchRuntime) -> int:
-    """Havuzdaki e-postaları HIBP ile zenginleştirir; anahtar yoksa sessiz geçer."""
+    """Havuzdaki e-postaları sızıntı sağlayıcı zinciriyle (anahtarsız) zenginleştirir."""
     if runtime.stats.get("breach_checks", 0) >= runtime.depth.max_breaches:
         return 0
     rows = (
