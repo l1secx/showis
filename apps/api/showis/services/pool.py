@@ -12,6 +12,7 @@ import re
 from typing import Any, Iterable, Sequence
 
 from showis.db.models import Case, CaseComment, PoolItem, Seed, Target
+from showis.services.phone import parse_phone, phone_attributes
 from showis_engine.variants import normalize_turkish
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -149,6 +150,11 @@ async def create_item(
     normalized_kind = validate_kind(kind)
     clean_value = _clean_value(value)
     normalized = normalize_value(normalized_kind, clean_value)
+    if normalized_kind == "phone":
+        phone = parse_phone(clean_value)
+        if phone is not None:
+            # Korelasyon (same_phone) normalize numarayı bu öznitelikten okur.
+            attributes = {**(attributes or {}), **phone_attributes(phone)}
     if normalized_kind == "event" and attributes:
         context = " ".join(
             str(attributes.get(key) or "").strip()

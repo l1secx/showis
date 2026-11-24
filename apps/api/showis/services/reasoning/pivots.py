@@ -8,6 +8,7 @@ SSRF/robots politikalı bileşenleri kullanır, giriş duvarı/CAPTCHA aşılmaz
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import re
 from dataclasses import dataclass, field
@@ -15,7 +16,9 @@ from typing import Any, Awaitable, Callable
 from urllib.parse import quote
 
 from showis.db.models import Case, PoolItem
+from showis.services.phone import PhoneInfo, parse_phone, phone_attributes, search_variants
 from showis.services.pool import create_item
+from showis.services.reasoning.avatars import hash_item_avatar
 from showis.services.reasoning.graph import upsert_relation
 from showis_engine.variants import generate_variants
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -52,6 +55,7 @@ PROFILE_TEMPLATES: tuple[tuple[str, str], ...] = (
 )
 _HANDLE_OK = re.compile(r"^[a-z0-9][a-z0-9._-]{2,38}$")
 MAX_PIVOT_ITEMS = 12
+PHONE_QUERY_LIMIT = 2
 
 
 @dataclass(frozen=True)
@@ -104,6 +108,26 @@ PIVOTS: tuple[Pivot, ...] = (
         "Kullanıcı adı permütasyonları",
         ("name", "person"),
         "Addan olası kullanıcı adı varyantları.",
+    ),
+    Pivot(
+        "avatar_hash",
+        "Avatar özeti",
+        ("url", "username"),
+        "avatar_url görselini indirip SHA-256/dHash çıkarır; aynı avatar kuralı kullanır.",
+        True,
+    ),
+    Pivot(
+        "phone_normalize",
+        "Telefonu normalleştir",
+        ("phone",),
+        "E.164 biçimi ve arama kodundan ülke çıkarımı (ağ kullanmaz).",
+    ),
+    Pivot(
+        "phone_search",
+        "Telefon web araması",
+        ("phone",),
+        "Numarayı herkese açık web aramasında arar; sonuçlar öneri olarak eklenir.",
+        True,
     ),
     Pivot("domain_site", "Site adresi", ("domain",), "Alan adının ana sayfa adresi."),
     Pivot(
@@ -253,12 +277,18 @@ async def _email_domain(ctx: _Ctx) -> None:
 async def _email_gravatar(ctx: _Ctx) -> None:
     digest = hashlib.md5(ctx.item.value.strip().lower().encode("utf-8")).hexdigest()  # noqa: S324 - Gravatar protokolü
     url = f"https://gravatar.com/{digest}"
+    avatar = f"https://gravatar.com/avatar/{digest}?s=256&d=404"
     node = await ctx.add_item(
         "url",
         url,
         "Gravatar profili (aday)",
         confidence=0.2,
-        attributes={"platform": "gravatar", "profile_url": url, "unverified": True},
+        attributes={
+            "platform": "gravatar",
+            "profile_url": url,
+            "avatar_url": avatar,
+            "unverified": True,
+        },
         reason="Gravatar e-posta özeti",
     )
     if node is not None:
@@ -324,6 +354,74 @@ async def _name_usernames(ctx: _Ctx) -> None:
         )
         if user is not None:
             await ctx.relate(ctx.item, user, "owns_account", 0.3, "ad permütasyonu (zayıf)")
+
+
+async def _avatar_hash(ctx: _Ctx) -> None:
+    if not (ctx.item.attributes or {}).get("avatar_url"):
+        ctx.result.notes.append("Öğede avatar_url yok.")
+        return
+    if await hash_item_avatar(ctx.item):
+        ctx.result.notes.append("Avatar özeti çıkarıldı (SHA-256 + dHash).")
+    else:
+        ctx.result.notes.append("Avatar indirilemedi veya görsel geçersiz.")
+
+
+def _phone_info(ctx: _Ctx) -> PhoneInfo | None:
+    info = parse_phone(ctx.item.value)
+    if info is None:
+        ctx.result.notes.append("Telefon geçerli bir numara biçiminde değil.")
+    return info
+
+
+async def _phone_normalize(ctx: _Ctx) -> None:
+    info = _phone_info(ctx)
+    if info is None:
+        return
+    ctx.item.attributes = {**(ctx.item.attributes or {}), **phone_attributes(info)}
+    where = f"{info.country_name} ({info.country})" if info.country else "bilinmiyor"
+    ctx.result.notes.append(
+        f"E.164: {info.e164}; arama kodundan ülke: {where}. "
+        "Bu, numaranın sahibinin bulunduğu yeri kanıtlamaz."
+    )
+
+
+async def _phone_search(ctx: _Ctx) -> None:
+    from showis.services.connectors_factory import build_search_provider
+
+    info = _phone_info(ctx)
+    if info is None:
+        return
+    ctx.item.attributes = {**(ctx.item.attributes or {}), **phone_attributes(info)}
+    try:
+        provider = await build_search_provider(ctx.db)
+    except Exception as exc:  # noqa: BLE001 - sağlayıcı yoksa pivot başarısız sayılmaz
+        ctx.result.notes.append(f"Arama sağlayıcısı kullanılamıyor ({type(exc).__name__}).")
+        return
+    seen: set[str] = set()
+    for variant in search_variants(info)[:PHONE_QUERY_LIMIT]:
+        try:
+            hits = await asyncio.wait_for(provider.search(f'"{variant}"', limit=8), timeout=15.0)
+        except Exception as exc:  # noqa: BLE001
+            ctx.result.notes.append(f"Arama hatası: {type(exc).__name__}")
+            continue
+        for hit in hits:
+            url = str(hit.url or "").strip()
+            if not url.startswith(("http://", "https://")) or url in seen:
+                continue
+            seen.add(url)
+            node = await ctx.add_item(
+                "url",
+                url,
+                (hit.title or url)[:120],
+                confidence=0.3,
+                attributes={"source_url": url, "snippet": (hit.snippet or "")[:300]},
+                reason=f"telefon araması: {variant}",
+            )
+            if node is not None:
+                await ctx.relate(ctx.item, node, "linked_from", 1.0, "numara sayfada aranıyor")
+    ctx.result.notes.append(
+        "Sonuçlar numarayı içerdiği doğrulanmamış aramalardır; sayfa okunarak teyit edilmeli."
+    )
 
 
 async def _domain_site(ctx: _Ctx) -> None:
@@ -418,6 +516,9 @@ _HANDLERS: dict[str, Callable[[_Ctx], Awaitable[None]]] = {
     "email_breach": _email_breach,
     "username_profiles": _username_profiles,
     "name_usernames": _name_usernames,
+    "avatar_hash": _avatar_hash,
+    "phone_normalize": _phone_normalize,
+    "phone_search": _phone_search,
     "domain_site": _domain_site,
     "url_fetch": _url_fetch,
 }

@@ -12,6 +12,7 @@ from showis.db.models import Case, Hypothesis, PoolItem, PoolRelation
 from showis.db.session import get_db
 from showis.services.audit import record_request_audit
 from showis.services.connectors_factory import build_llm_client
+from showis.services.reasoning.avatars import hash_pool_avatars
 from showis.services.reasoning.correlate import (
     build_timeline,
     find_contradictions,
@@ -260,6 +261,22 @@ async def correlate(case_id: str, request: Request, db: AsyncSession = Depends(g
         target=f"Case: {case_id}",
         details={k: v for k, v in result.items() if k != "contradictions"}
         | {"contradictions": len(result["contradictions"])},
+    )
+    return result
+
+
+@router.post("/{case_id}/reasoning/avatars/hash")
+async def hash_avatars(case_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """Havuz öğelerinin `avatar_url` görsellerini özetler (dHash korelasyonu için)."""
+    await _require_case(db, case_id)
+    result = await hash_pool_avatars(db, case_id)
+    await record_request_audit(
+        db=db,
+        request=request,
+        action="reasoning.avatars",
+        case_id=case_id,
+        target=f"Case: {case_id}",
+        details=result,
     )
     return result
 

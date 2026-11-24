@@ -28,11 +28,15 @@ from showis.services.reasoning.graph import (
 )
 from showis.services.reasoning.scoring import score
 from showis.services.research_playbook import is_aggregator_url
+from showis_engine.links import _GENERIC_AVATAR_DHASHES as GENERIC_AVATAR_DHASHES
+from showis_engine.links import hamming_distance
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
+#: Algısal dHash eşleşmesi için en büyük Hamming mesafesi (identity_edges ile aynı).
+AVATAR_MAX_DISTANCE = 6
 MIN_HANDLE_LEN = 4
 MAX_GROUP = 8
 #: Aday (candidate) olmak için gereken bağımsız kanıt sayısı.
@@ -166,29 +170,35 @@ def rule_shared_aggregator(items: Sequence[PoolItem]) -> list[Match]:
 
 
 def rule_same_avatar(items: Sequence[PoolItem]) -> list[Match]:
-    """Aynı avatar dHash'i → aynı kişi (güçlü kanıt)."""
-    groups: dict[str, list[PoolItem]] = defaultdict(list)
-    for item in _live(items):
-        digest = _attr(item, "avatar_dhash")
-        if digest:
-            groups[digest].append(item)
-    matches: list[Match] = []
-    for digest, members in groups.items():
-        if len(members) < 2 or len(members) > MAX_GROUP:
-            continue
-        for left, right in itertools.combinations(sorted(members, key=lambda m: m.id), 2):
-            matches.append(
-                Match(
-                    left.id,
-                    right.id,
-                    "same_person",
-                    3.0,
-                    "same_avatar",
-                    digest,
-                    "aynı avatar özeti",
-                )
-            )
-    return matches
+    """Aynı/çok yakın avatar dHash'i (Hamming ≤ 6) → aynı kişi (güçlü kanıt)."""
+    hashed = [
+        (item, _attr(item, "avatar_dhash"))
+        for item in sorted(_live(items), key=lambda i: i.id)
+        if _attr(item, "avatar_dhash") and _attr(item, "avatar_dhash") not in GENERIC_AVATAR_DHASHES
+    ]
+    close = [
+        (left, right, hamming_distance(left_hash, right_hash), left_hash, right_hash)
+        for (left, left_hash), (right, right_hash) in itertools.combinations(hashed, 2)
+        if hamming_distance(left_hash, right_hash) <= AVATAR_MAX_DISTANCE
+    ]
+    # Çok sayıda öğe aynı görseli paylaşıyorsa (varsayılan avatar) eşleşme kanıt değildir.
+    degree: dict[str, int] = defaultdict(int)
+    for left, right, *_ in close:
+        degree[left.id] += 1
+        degree[right.id] += 1
+    return [
+        Match(
+            left.id,
+            right.id,
+            "same_person",
+            3.0,
+            "same_avatar",
+            "|".join(sorted((left_hash, right_hash))),
+            "aynı avatar özeti" if distance == 0 else f"benzer avatar (Hamming {distance})",
+        )
+        for left, right, distance, left_hash, right_hash in close
+        if degree[left.id] < MAX_GROUP and degree[right.id] < MAX_GROUP
+    ]
 
 
 def rule_profile_owner(items: Sequence[PoolItem]) -> list[Match]:
