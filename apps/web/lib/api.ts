@@ -350,6 +350,17 @@ export interface PoolRelationRow {
   source: string;
 }
 
+export interface WatchAlertRow {
+  id: string;
+  case_id: string;
+  kind: "breach" | "account" | string;
+  item_id: string | null;
+  title: string;
+  detail: Record<string, any>;
+  created_at: string | null;
+  seen_at: string | null;
+}
+
 export interface EvidenceSnapshotRow {
   id: string;
   case_id: string;
@@ -655,6 +666,16 @@ export const api = {
       contradictions: { kind: string; item_ids: string[]; message: string }[];
     }>(`/cases/${caseId}/reasoning/correlate`, { method: "POST" }),
   getReasoningGraph: (caseId: string) => req<ReasoningGraph>(`/cases/${caseId}/reasoning/graph`),
+  listWatchAlerts: (caseId: string, unseen = false) =>
+    req<{ items: WatchAlertRow[]; total: number }>(
+      `/cases/${caseId}/watch/alerts${unseen ? "?unseen=true" : ""}`
+    ),
+  markWatchAlertSeen: (caseId: string, alertId: string) =>
+    req<WatchAlertRow>(`/cases/${caseId}/watch/alerts/${alertId}/seen`, { method: "POST" }),
+  runWatch: (caseId: string) =>
+    req<{ breach: number; account: number; total: number }>(`/cases/${caseId}/watch/run`, {
+      method: "POST",
+    }),
   listSnapshots: (caseId: string, q?: string) =>
     req<{ items: EvidenceSnapshotRow[]; total: number }>(
       `/cases/${caseId}/evidence/snapshots${q ? `?q=${encodeURIComponent(q)}` : ""}`

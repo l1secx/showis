@@ -78,6 +78,10 @@ celery_app.conf.update(
             "task": "showis.monitor.run",
             "schedule": 300.0,
         },
+        "watch-cases": {
+            "task": "showis.watch.run",
+            "schedule": 6 * 3600.0,
+        },
     },
 )
 
@@ -139,6 +143,18 @@ def monitor_run_task() -> dict:
     for scan_id in scan_ids:
         _enqueue_scan(scan_id)
     return {"created": len(scan_ids), "scan_ids": scan_ids}
+
+
+@celery_app.task(name="showis.watch.run")
+def watch_run_task() -> dict:
+    """İzleme açık vakalarda yeni sızıntı/hesap bulgularını uyarıya çevirir."""
+    from showis.services.watch import run_due_watches
+
+    async def _run() -> dict:
+        async with task_session() as session:
+            return await run_due_watches(session)
+
+    return asyncio.run(_run())
 
 
 @celery_app.task(

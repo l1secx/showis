@@ -24,6 +24,7 @@ from showis.api.v1.scans import router as scans_router
 from showis.api.v1.settings import router as settings_router
 from showis.api.v1.snapshots import router as snapshots_router
 from showis.api.v1.supply_chain import router as supply_chain_router
+from showis.api.v1.watch import router as watch_router
 from showis.core.logging import install_redaction_filter
 from showis.core.security import (
     require_admin_access,
@@ -362,6 +363,9 @@ app.include_router(
 )
 app.include_router(
     snapshots_router, prefix="/api/v1", dependencies=[*auth_required, *write_required]
+)
+app.include_router(
+    watch_router, prefix="/api/v1", dependencies=[*auth_required, *write_required]
 )
 app.include_router(
     supply_chain_router, prefix="/api/v1", dependencies=[*auth_required, *write_required]
