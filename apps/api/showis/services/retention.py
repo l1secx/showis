@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from showis.db.models import AuditLog, Case, Evidence, Observation, Scan
+from showis.db.models import AuditLog, Case, Evidence, EvidenceSnapshot, Observation, Scan
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -62,6 +62,14 @@ async def purge_expired_evidence(db: AsyncSession) -> int:
     if count:
         logger.info("Retention: %d expired evidence kaydi silindi.", count)
     return count
+
+
+async def purge_expired_snapshots(db: AsyncSession) -> int:
+    """Saklama süresi dolan kanıt arşivi (sayfa metni) kayıtlarını siler."""
+    now = datetime.now(timezone.utc)
+    res = await db.execute(delete(EvidenceSnapshot).where(EvidenceSnapshot.expires_at < now))
+    await db.commit()
+    return int(getattr(res, "rowcount", 0) or 0)
 
 
 async def purge_old_observations(db: AsyncSession) -> int:
@@ -109,10 +117,12 @@ async def purge_old_audit_logs(db: AsyncSession) -> int:
 async def run_retention_purge(db: AsyncSession) -> dict[str, Any]:
     """Tum retention politikalarini tek seferde calistirir."""
     evidence_deleted = await purge_expired_evidence(db)
+    snapshots_deleted = await purge_expired_snapshots(db)
     observations_deleted = await purge_old_observations(db)
     audit_deleted = await purge_old_audit_logs(db)
     return {
         "evidence_deleted": evidence_deleted,
+        "snapshots_deleted": snapshots_deleted,
         "observations_deleted": observations_deleted,
         "audit_deleted": audit_deleted,
         "ran_at": datetime.now(timezone.utc).isoformat(),

@@ -351,11 +351,24 @@ async def _url_fetch(ctx: _Ctx) -> None:
     except ToolError as exc:
         ctx.result.notes.append(str(exc)[:200])
         return
+    from showis.services.evidence_archive import save_snapshot
+
+    archived = await save_snapshot(
+        ctx.db,
+        case=ctx.case,
+        url=page.url,
+        title=page.title,
+        text=page.text,
+        sha256=page.digest,
+        http_status=page.status_code,
+        source="pivot",
+    )
     attributes = dict(ctx.item.attributes or {})
     attributes["snapshot"] = {
         "sha256": page.digest,
         "title": page.title[:200],
         "text": page.text[:4000],
+        "snapshot_id": archived.id,
     }
     ctx.item.attributes = attributes
     for profile in page.profiles[:8]:

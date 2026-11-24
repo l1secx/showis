@@ -43,6 +43,7 @@ from showis.services.ai_providers import AIProviderValidationError
 from showis.services.audit import record_audit
 from showis.services.breach import BreachError, check_email
 from showis.services.connectors_factory import build_llm_client, build_search_provider
+from showis.services.evidence_archive import save_snapshot, snapshot_ids_for_urls
 from showis.services.pool import (
     POOL_KINDS,
     PoolValidationError,
@@ -560,6 +561,7 @@ def _safe_citation(raw: AgentCitation) -> dict[str, Any] | None:
         "url": url or None,
         "pool_item_id": pool_item_id,
         "node_id": node_id,
+        "snapshot_id": None,
     }
 
 
@@ -1148,6 +1150,7 @@ class ResearchRuntime:
         self.steering_notes: list[str] = []
         self.steer_cursor = 0
         self.current_wave = 1
+        self.snapshot_ids: dict[str, str] = {}
 
     def absorb_steering(self) -> list[str]:
         """Bekleyen analist yönlendirmelerini alır ve not listesine ekler."""
@@ -1435,8 +1438,33 @@ class ResearchRuntime:
             self.errors.append(f"sayfa hatası: {type(exc).__name__}")
             return None
         self.add_source(url, title=result.title, kind="page")
+        await self.archive_page(result, source="research")
         self.process_page(result, reason=reason)
         return result
+
+    async def archive_page(self, result: FetchResult, *, source: str) -> str | None:
+        """Okunan sayfanın metnini kanıt arşivine yazar; hata araştırmayı düşürmez."""
+        try:
+            async with self.db.begin_nested():
+                row = await save_snapshot(
+                    self.db,
+                    case=self.case,
+                    url=result.url,
+                    title=result.title,
+                    text=result.text,
+                    sha256=result.digest,
+                    http_status=result.status_code,
+                    session_id=self.session.id,
+                    source=source,
+                )
+        except Exception as exc:  # noqa: BLE001 - arşiv hatası bulguyu engellemez
+            self.errors.append(f"arşiv: {type(exc).__name__}")
+            return None
+        self.stats["snapshots"] = len(self.snapshot_ids) + (
+            0 if result.url in self.snapshot_ids else 1
+        )
+        self.snapshot_ids[result.url] = row.id
+        return row.id
 
     def process_page(self, result: FetchResult, *, reason: str = "sayfa") -> None:
         for profile in result.profiles[:30]:
@@ -1700,6 +1728,8 @@ class SubagentContext:
     mode: str = "research"
     #: Yazma niyetleri: alt ajanlar DB'siz çalışır; ana döngü tek oturumda uygular.
     write_queue: list[dict[str, Any]] = field(default_factory=list)
+    #: Alt ajanın okuduğu sayfalar: ana döngü kanıt arşivine yazar.
+    fetched_pages: list[FetchResult] = field(default_factory=list)
 
 
 #: Alt ajanın kuyruğa alabildiği yazma araçları (uygulama ana döngüde yapılır).
@@ -1711,6 +1741,8 @@ WRITE_TOOLS = (
     "run_pivot",
 )
 MAX_QUEUED_WRITES_PER_AGENT = 12
+MAX_SUBAGENT_PAGES = 20
+MAX_CITATION_ARCHIVE = 8
 MAX_AGENT_PIVOTS = 12
 
 
@@ -1847,6 +1879,8 @@ async def _subagent_tool_raw(
             return {"error": str(exc)[:300], "url": url}
         except Exception as exc:  # noqa: BLE001
             return {"error": f"sayfa hatası ({type(exc).__name__})", "url": url}
+        if len(ctx.fetched_pages) < MAX_SUBAGENT_PAGES:
+            ctx.fetched_pages.append(result)
         return {
             "url": url,
             "title": result.title,
@@ -2843,6 +2877,10 @@ async def _run_subagent_wave(
                 )[:40]
         summaries.append({**counts, "status": "completed"})
     # Kuyruğa alınan yazmalar: tek DB oturumunda, ajan sırasıyla uygulanır.
+    for ctx in contexts:
+        for page in ctx.fetched_pages:
+            runtime.add_source(page.url, title=page.title, kind="page")
+            await runtime.archive_page(page, source="subagent")
     intents = [intent for ctx in contexts for intent in ctx.write_queue]
     if intents:
         await _apply_write_intents(runtime, intents)
@@ -3010,6 +3048,36 @@ organizations[], timeline[], interests[], risk_notes[], confidence.
     return markdown, structured
 
 
+async def _archive_citations(
+    runtime: ResearchRuntime, citations: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Atıfları kanıt arşivine bağlar; okunmamış alıntılı sayfaları (en çok 8) arşivler."""
+    urls = list(dict.fromkeys(str(c["url"]) for c in citations if c.get("url")))
+    if not urls:
+        return citations
+    known = await snapshot_ids_for_urls(runtime.db, runtime.case.id, urls)
+    known.update(runtime.snapshot_ids)
+    if not runtime.stats.get("offline"):
+        archived = 0
+        for url in urls:
+            if url in known or archived >= MAX_CITATION_ARCHIVE:
+                continue
+            try:
+                page = await _fetch_public_page(url)
+            except Exception:  # noqa: BLE001 - erişilemeyen atıf arşive girmez
+                continue
+            snapshot_id = await runtime.archive_page(page, source="citation")
+            if snapshot_id:
+                known[url] = snapshot_id
+                archived += 1
+    await runtime.db.commit()
+    for citation in citations:
+        cited = citation.get("url")
+        if cited and cited in known:
+            citation["snapshot_id"] = known[cited]
+    return citations
+
+
 def _fallback_report(
     runtime: ResearchRuntime,
     *,
@@ -3153,7 +3221,8 @@ JSON: {{"answer":"Markdown rapor","citations":[{{"label":"...","url":"https://..
             + "\n\n---\n\n## Biyografi\n\n"
             + bio_markdown
         )[:MAX_FINAL_CHARS]
-    return answer, final_citations[:40]
+    final_citations = await _archive_citations(runtime, final_citations[:40])
+    return answer, final_citations
 
 
 def _update_activity(

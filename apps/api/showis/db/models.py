@@ -540,6 +540,39 @@ class Evidence(Base):
     case: Mapped["Case"] = relationship("Case", back_populates="evidence")
 
 
+class EvidenceSnapshot(Base):
+    """Okunan herkese açık sayfanın arşivlenmiş metin kopyası (kanıt zinciri).
+
+    `sha256` ham içerik özetidir; `text_sha256` saklanan (kırpılmış) metnin özetidir.
+    Aynı (vaka, url, sha256) tekrar yazılmaz.
+    """
+
+    __tablename__ = "evidence_snapshots"
+    __table_args__ = (
+        UniqueConstraint("case_id", "url", "sha256", name="uq_evidence_snapshots_content"),
+        Index("ix_evidence_snapshots_case_fetched", "case_id", "fetched_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid_str)
+    case_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
+    )
+    session_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("research_sessions.id", ondelete="SET NULL"), nullable=True
+    )
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    text_sha256: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    text_truncated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: research | subagent | pivot | citation
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="research")
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class Entity(Base):
     __tablename__ = "entities"
 

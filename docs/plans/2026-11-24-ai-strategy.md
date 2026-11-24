@@ -95,5 +95,19 @@ Hedef: (1) en güçlü modellere native erişim, (2) gerçek interaktif AI modu,
 - Migration zinciri: `alembic upgrade head` SQLite testte; `0018`, `0019` `down_revision` doğru.
 - Canlı: `bash scripts/e2e_acceptance.sh --strict` + UI'da bir vakada: seed → ajan soru soruyor → kullanıcı cevaplıyor → çalışırken yönlendirme → öneri kartı onayı → hipotez panosu → breach raporu (anahtarsız).
 
+## Faz 6 — Kalan işler (Faz 1–4 push'landı: 9f369e5, 503b31b, bfd57b8, 3680f1b)
+Sonnet 5.5 (medium effort) arka plan ajanına verilecek; sıra:
+1. **Ajan yazma araçları:** `add_pool_item`, `add_supply_chain_node/edge`, `start_scan` ve yeni `run_pivot(item_id, pivot)` native tool döngüsüne bağlanır. Alt ajanlar DB'siz paralel çalıştığı için yazmalar kuyruğa alınıp ana döngüde tek DB oturumunda uygulanır. Yazımlar yalnız `proposed`/`candidate`; `services/reasoning/pivots.py` yeniden kullanılır.
+2. **Kalıcı kontrol durumu:** steer kuyruğu, `ask_user` sorusu/cevabı ve interrupt bayrağı DB'ye taşınır (migration `0021_research_control_state`, `down_revision="0020_pool_relations_hypotheses"`). API yeniden başlayınca `awaiting_user` oturumu soruyu korur, cevapla devam eder.
+3. **Nihai rapor/biyografi akışı:** `_synthesize_report`/`_synthesize_bio` `stream()` ile `token` olayı yayar; şema doğrulaması sonunda yapılır, akış yoksa eski yol.
+4. **Kanıt arşivi:** `EvidenceSnapshot(case_id, url, sha256, text, fetched_at)`; `fetch_page` ve alıntılanan her sayfa kaydedilir, atıflar snapshot'a bağlanır, UI'da "Kanıt" görünümü.
+5. **Korelasyon kuralları YAML:** `RULES` → `services/reasoning/rules.yaml` + yükleyici/doğrulayıcı; Python kuralları varsayılan olarak korunur.
+6. **Faz 5:** telefon pivotu (E.164 normalize, ülke çıkarımı, herkese açık aramalar), avatar dHash'in havuz geneline yayılması, kayıtlı izleme (yeni sızıntı/hesap → bildirim; Celery beat varsa onunla), PDF/HTML raporda hipotez + kanıt zinciri + çelişki bölümü.
+7. **Ortama bağlı test:** `test_rapor_silme_basarisizsa_audit_yazilir` root'ta `chmod` ile hata üretemiyor; testi atlamadan silme çağrısını monkeypatch ile hata fırlatacak şekilde düzelt, böylece `make gate` yeşile döner.
+
+**Durum (limit kesintisi sonrası):** 7, 1, 2, 3 tamam ve push'landı (f3ed8f1, 05da362, fdfb970, 51ad6ff). 4 (kanıt arşivi) yarıda, commit'lenmemiş: `0022_evidence_snapshots.py`, `services/evidence_archive.py`, models/research/pivots/retention değişiklikleri. Devam: aynı Sonnet 5.5 ajanı SendMessage ile kaldığı yerden sürdürür → 4'ü bitir + test + commit, sonra 5 ve 6.
+
+Kurallar: AGENTS.md, ağ mock'lu testler, `make schemas`, her yeşil dilimde commit + push, PR yok. Canlı doğrulama (Docker, gerçek API'ler) kullanıcının makinesinde yapılacak; ajan yapamaz.
+
 ## Uygulama sırası
 Faz 1 → Faz 4 (bağımsız, hızlı kazanım) → Faz 2 → Faz 3 → Faz 5. Her faz ayrı commit seti, `claude/showis-ai-model-strategy-8ozojg` dalına.
