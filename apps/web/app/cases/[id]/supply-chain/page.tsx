@@ -1,9 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { RefObject } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import cytoscape from "cytoscape";
 import { Check, ChevronDown, Loader2, Plus, Sparkles, Trash2, X } from "lucide-react";
 import {
   api,
@@ -11,7 +11,12 @@ import {
   type SupplyChainGraph,
   type SupplyChainNode,
 } from "../../../../lib/api";
-import { useTheme, type Theme } from "../../../components/use-theme";
+import {
+  GraphCanvas,
+  nodeKindColor,
+  type GraphCanvasHandle,
+  type GraphData,
+} from "../../../../lib/graph-engine";
 
 const NODE_KIND_TR: Record<string, string> = {
   company: "Şirket",
@@ -56,26 +61,6 @@ const STATUS_DOT: Record<string, string> = {
   rejected: "bg-danger",
 };
 
-const KIND_COLOR: Record<string, string> = {
-  company: "#1B3A5B",
-  supplier: "#2A5B3F",
-  product: "#855F14",
-  person: "#7e22ce",
-  location: "#0369a1",
-  domain: "#93342A",
-  other: "#616A76",
-};
-
-const KIND_COLOR_DARK: Record<string, string> = {
-  company: "#84AAD1",
-  supplier: "#6FBF8E",
-  product: "#D9A441",
-  person: "#c084fc",
-  location: "#38bdf8",
-  domain: "#E28C80",
-  other: "#8D96A2",
-};
-
 function Status({ value }: { value: string }) {
   return (
     <span className={`status ${STATUS_TONE[value] || "text-ink-3"}`}>
@@ -88,131 +73,53 @@ function Status({ value }: { value: string }) {
   );
 }
 
+/** Öneri durumundaki kayıt kesikli, reddedilen soluk çizilir. */
+function statusPaint(status: string): { dashed?: boolean; faded?: boolean } {
+  if (status === "rejected") return { faded: true };
+  if (status === "proposed" || status === "candidate") return { dashed: true };
+  return {};
+}
+
 function SupplyGraph({
   data,
   selectedId,
   onSelect,
+  canvasRef,
 }: {
   data: SupplyChainGraph;
   selectedId: string | null;
   onSelect: (id: string | null) => void;
+  canvasRef: RefObject<GraphCanvasHandle | null>;
 }) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const cyRef = useRef<cytoscape.Core | null>(null);
-  const theme = useTheme() as Theme;
-
-  useEffect(() => {
-    if (!containerRef.current) return;
-    const palette = theme === "dark" ? KIND_COLOR_DARK : KIND_COLOR;
-    const textColor = theme === "dark" ? "#EDEFF2" : "#15181D";
-    const halo = theme === "dark" ? "#22262C" : "#FFFFFF";
-    const elements = [
-      ...data.nodes.map((node) => ({
-        data: {
-          id: node.id,
-          label: node.name,
-          kind: node.kind,
-          status: node.status,
-        },
+  const graph = useMemo<GraphData>(
+    () => ({
+      nodes: data.nodes.map((node) => ({
+        id: node.id,
+        label: node.name,
+        kind: node.kind,
+        weight: 18,
+        color: nodeKindColor(node.kind),
+        ...statusPaint(node.status),
+        meta: { status: node.status },
       })),
-      ...data.edges.map((edge) => ({
-        data: {
-          id: edge.id,
-          source: edge.source_id,
-          target: edge.target_id,
-          label: RELATION_TR[edge.relation] || edge.relation,
-          status: edge.status,
-        },
+      edges: data.edges.map((edge) => ({
+        id: edge.id,
+        source: edge.source_id,
+        target: edge.target_id,
+        type: RELATION_TR[edge.relation] || edge.relation,
+        weight: 4,
+        directed: true,
+        ...statusPaint(edge.status),
+        meta: { status: edge.status },
       })),
-    ];
-    const cy = cytoscape({
-      container: containerRef.current,
-      elements,
-      layout: { name: "cose", animate: false, padding: 36, nodeRepulsion: 9000 },
-      style: [
-        {
-          selector: "node",
-          style: {
-            label: "data(label)",
-            "font-size": 9,
-            color: textColor,
-            "text-outline-color": halo,
-            "text-outline-width": 3,
-            "text-valign": "bottom",
-            "text-margin-y": 4,
-            "text-wrap": "wrap",
-            "text-max-width": "120px",
-            width: 30,
-            height: 30,
-            "border-width": 2,
-            "background-opacity": 0.8,
-            "background-color": (ele: cytoscape.NodeSingular) =>
-              palette[String(ele.data("kind"))] || palette.other,
-            "border-color": (ele: cytoscape.NodeSingular) =>
-              palette[String(ele.data("kind"))] || palette.other,
-          },
-        },
-        {
-          selector: "node[status = 'proposed']",
-          style: { "border-style": "dashed", "border-width": 3 },
-        },
-        {
-          selector: "node:selected",
-          style: { "border-width": 4, "border-color": textColor },
-        },
-        {
-          selector: "edge",
-          style: {
-            width: 1.4,
-            "line-color": theme === "dark" ? "#4E5660" : "#B4BBC4",
-            "target-arrow-color": theme === "dark" ? "#4E5660" : "#B4BBC4",
-            "target-arrow-shape": "triangle",
-            "arrow-scale": 0.7,
-            "curve-style": "bezier",
-            label: "data(label)",
-            "font-size": 8,
-            color: theme === "dark" ? "#8D96A2" : "#616A76",
-            "text-outline-color": halo,
-            "text-outline-width": 3,
-            "text-rotation": "autorotate",
-          },
-        },
-        {
-          selector: "edge[status = 'proposed']",
-          style: { "line-style": "dashed" },
-        },
-      ],
-    });
-    cy.on("tap", "node", (event) => onSelect(event.target.id()));
-    cy.on("tap", (event) => {
-      if (event.target === cy) onSelect(null);
-    });
-    cyRef.current = cy;
-    return () => {
-      cy.destroy();
-      cyRef.current = null;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, theme]);
-
-  useEffect(() => {
-    const cy = cyRef.current;
-    if (!cy || !selectedId) return;
-    const node = cy.getElementById(selectedId);
-    if (node.length) {
-      cy.elements().unselect();
-      node.select();
-      cy.animate({ center: { eles: node }, zoom: 1.2, duration: 220 });
-    }
-  }, [selectedId]);
+    }),
+    [data]
+  );
 
   return (
-    <div
-      ref={containerRef}
-      className="h-[380px] w-full"
-      role="img"
-      aria-label="Tedarik zinciri grafiği"
-    />
+    <div className="h-[380px] w-full" role="img" aria-label="Tedarik zinciri grafiği">
+      <GraphCanvas ref={canvasRef} className="h-full w-full" data={graph} selectedId={selectedId} onSelect={onSelect} />
+    </div>
   );
 }
 
@@ -223,6 +130,7 @@ export default function SupplyChainPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const canvasRef = useRef<GraphCanvasHandle>(null);
 
   const [nodeKind, setNodeKind] = useState("company");
   const [nodeName, setNodeName] = useState("");
@@ -256,6 +164,12 @@ export default function SupplyChainPage() {
     () => nodes.find((node) => node.id === selectedId) || null,
     [nodes, selectedId]
   );
+
+  /** Seçilen düğüme kamerayı odaklar; grafikte tıklama bu yolu kullanır. */
+  const selectNode = useCallback((next: string | null) => {
+    setSelectedId(next);
+    if (next) canvasRef.current?.focus(next, 1.15);
+  }, []);
 
   const addNode = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -381,17 +295,21 @@ export default function SupplyChainPage() {
                   {nodes.length} düğüm · {edges.length} ilişki
                 </p>
               </div>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-ink-3">
+                <span>Türler:</span>
                 {Object.entries(NODE_KIND_TR).map(([kind, label]) => (
-                  <span key={kind} className="inline-flex items-center gap-1.5 text-[11.5px] text-ink-3">
+                  <span key={kind} className="inline-flex items-center gap-1.5">
                     <span
-                      className="h-2 w-2 rounded-[1px]"
-                      style={{ backgroundColor: KIND_COLOR[kind] }}
+                      className="h-2 w-2 shrink-0 rounded-full"
+                      style={{ backgroundColor: nodeKindColor(kind) }}
                       aria-hidden
                     />
                     {label}
                   </span>
                 ))}
+                <span className="text-ink-3">
+                  · kesikli: onay bekliyor · soluk: reddedildi
+                </span>
               </div>
             </div>
             <div className="border-t border-line">
@@ -409,7 +327,12 @@ export default function SupplyChainPage() {
                   </p>
                 </div>
               ) : (
-                <SupplyGraph data={data!} selectedId={selectedId} onSelect={setSelectedId} />
+                <SupplyGraph
+                  data={data!}
+                  selectedId={selectedId}
+                  onSelect={selectNode}
+                  canvasRef={canvasRef}
+                />
               )}
             </div>
             {selectedNode && (

@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import cytoscape from "cytoscape";
 import {
   AlertTriangle,
   Download,
@@ -17,186 +16,80 @@ import {
   X,
 } from "lucide-react";
 import { api, type GraphData } from "../../../lib/api";
+import {
+  GraphCanvas,
+  GraphContextMenu,
+  type GraphCanvasHandle,
+  type GraphContextTarget,
+  type GraphEdgeHover,
+  type GraphLayoutName,
+  buildContextMenu,
+  collapseGraphData,
+  hubIdOfProxy,
+  neighborIds,
+  type ContextMenuAction,
+  type HubGroup,
+} from "../../../lib/graph-engine";
 import { platformMeta } from "./platform-meta";
-import { readTheme, useTheme, type Theme } from "../../components/use-theme";
 import { edgeTypeLabel } from "./vocabulary";
 
 /* ------------------------------------------------------------------ */
 /* Sabitler                                                            */
 /* ------------------------------------------------------------------ */
 
-/** `#rrggbb` → `rgba(...)`. Açık zeminde marka rengini dolgu yerine kenar olarak kullanırız. */
-function tint(hex: string, alpha: number): string {
-  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
-  if (!m) return hex;
-  const n = parseInt(m[1], 16);
-  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
-}
-
-/** Platform marka rengi — açık temada koyu ton, koyu temada açık ton. */
-function platformColor(platform: string, theme: Theme): string {
-  const meta = platformMeta(platform);
-  return theme === "dark" ? meta.accent : meta.color;
+/** Düğüm konturu platform vurgu rengidir; siyah zeminde okunur ton. */
+function platformColor(platform: string): string {
+  return platformMeta(platform).accent;
 }
 
 /** Küme kimliğinden deterministik renk — aynı küme her açılışta aynı renk. */
-const CLUSTER_PALETTE: Record<Theme, string[]> = {
-  light: ["#2563eb", "#0f766e", "#b45309", "#7e22ce", "#be123c", "#4d7c0f", "#0369a1", "#a21caf"],
-  dark: ["#60a5fa", "#2dd4bf", "#fbbf24", "#c084fc", "#fb7185", "#a3e635", "#38bdf8", "#e879f9"],
-};
+const CLUSTER_PALETTE = [
+  "#60a5fa",
+  "#2dd4bf",
+  "#fbbf24",
+  "#c084fc",
+  "#fb7185",
+  "#a3e635",
+  "#38bdf8",
+  "#e879f9",
+];
 
-function clusterColor(clusterId: string | null, theme: Theme): string | null {
+function clusterColor(clusterId: string | null): string | null {
   if (!clusterId) return null;
   let hash = 0;
   for (let index = 0; index < clusterId.length; index += 1) {
     hash = (hash * 31 + clusterId.charCodeAt(index)) >>> 0;
   }
-  const palette = CLUSTER_PALETTE[theme];
-  return palette[hash % palette.length];
+  return CLUSTER_PALETTE[hash % CLUSTER_PALETTE.length];
 }
 
-/**
- * Cytoscape stil sayfası — temaya göre üretilir.
- *
- * Düğümlerde marka rengi kenar olarak kullanılır, dolgu markanın düşük
- * opaklıklı tonudur; böylece açık zeminde ağır lekeler oluşmaz.
- */
-function buildStyle(
-  theme: Theme,
-  colorMode: "platform" | "cluster" = "platform"
-): cytoscape.StylesheetStyle[] {
-  const dark = theme === "dark";
-  const textColor = dark ? "#edeff2" : "#15181d";
-  const halo = dark ? "#22262c" : "#ffffff";
-  const edgeText = dark ? "#8d96a2" : "#6e7784";
-  const selectColor = dark ? "#84aad1" : "#1b3a5b";
-  const nodeColor = (ele: cytoscape.NodeSingular) => {
-    if (colorMode === "cluster") {
-      return String(ele.data("cluster_color") || platformColor(String(ele.data("platform")), theme));
-    }
-    return platformColor(String(ele.data("platform")), theme);
-  };
-
-  return [
-    {
-      selector: "node",
-      style: {
-        "background-color": (ele: cytoscape.NodeSingular) =>
-          tint(nodeColor(ele), dark ? 0.2 : 0.16),
-        "border-width": 2,
-        "border-color": nodeColor,
-        width: "mapData(score, 0, 1, 20, 44)",
-        height: "mapData(score, 0, 1, 20, 44)",
-        label: "data(label)",
-        color: textColor,
-        "font-size": 9,
-        "min-zoomed-font-size": 7,
-        "text-valign": "bottom",
-        "text-margin-y": 4,
-        "text-wrap": "wrap",
-        "text-max-width": "120px",
-        "text-outline-color": halo,
-        "text-outline-width": 3,
-      },
-    },
-    {
-      selector: "node:selected",
-      style: {
-        "border-width": 4,
-        "border-color": selectColor,
-        "background-opacity": 1,
-      },
-    },
-    {
-      selector: "edge",
-      style: {
-        width: "mapData(confidence, 0, 1, 0.6, 3.5)",
-        "line-color": (ele: cytoscape.EdgeSingular) =>
-          EDGE_TYPE_COLORS[theme][String(ele.data("type"))] ?? edgeText,
-        "target-arrow-color": (ele: cytoscape.EdgeSingular) =>
-          EDGE_TYPE_COLORS[theme][String(ele.data("type"))] ?? edgeText,
-        "target-arrow-shape": "triangle",
-        "arrow-scale": 0.7,
-        "curve-style": "bezier",
-        opacity: (ele: cytoscape.EdgeSingular) =>
-          0.4 + Math.min(1, Number(ele.data("confidence") ?? 0)) * 0.5,
-        label: "",
-        "font-size": 7,
-        color: edgeText,
-        "text-outline-color": halo,
-        "text-outline-width": 3,
-      },
-    },
-    {
-      selector: "edge.labelled",
-      style: {
-        label: "data(label)",
-        "text-rotation": "autorotate",
-      },
-    },
-    {
-      selector: ".path-node",
-      style: {
-        "border-width": 5,
-        "border-color": dark ? "#f0b429" : "#b26a00",
-        "background-opacity": 0.9,
-      },
-    },
-    {
-      selector: ".path-edge",
-      style: {
-        "line-color": dark ? "#f0b429" : "#b26a00",
-        "target-arrow-color": dark ? "#f0b429" : "#b26a00",
-        width: 4,
-        opacity: 1,
-        "z-index": 10,
-      },
-    },
-  ];
-}
-
-/** Dışa aktarılan görselin arka planı — ekrandaki yüzeyin rengi. */
-const EXPORT_BG: Record<Theme, string> = {
-  light: "#ffffff",
-  dark: "#22262c",
+/** Kenar tipi renkleri — siyah zeminde okunur açık tonlar. */
+const EDGE_TYPE_COLORS: Record<string, string> = {
+  same_person: "#6fbf8e",
+  cross_link: "#84aad1",
+  has_account: "#8d96a2",
+  mentions: "#d9a441",
+  owned_domain: "#b79ce0",
 };
 
-/**
- * Kenar tipleri. Renkleri temaya göre değişir: koyu zeminde koyu renkler
- * kaybolduğu için açık tonları kullanılır.
- */
-const EDGE_TYPE_COLORS: Record<Theme, Record<string, string>> = {
-  light: {
-    same_person: "#2a5b3f",
-    cross_link: "#1b3a5b",
-    has_account: "#6e7784",
-    mentions: "#8a5a14",
-    owned_domain: "#5b3e7a",
-  },
-  dark: {
-    same_person: "#6fbf8e",
-    cross_link: "#84aad1",
-    has_account: "#8d96a2",
-    mentions: "#d9a441",
-    owned_domain: "#b79ce0",
-  },
-};
+const EDGE_TYPE_FALLBACK = "#8d96a2";
+const MUTED_DOT = "#4e5660";
 
 const EDGE_TYPE_LABEL = edgeTypeLabel;
 
-const LAYOUTS: { value: LayoutName; label: string; hint: string }[] = [
-  { value: "cose", label: "Force", hint: "Kuvvet tabanlı (cose) yerleşim" },
-  { value: "concentric", label: "Hubs", hint: "Bağlantı sayısı yüksek düğümler merkezde" },
-  { value: "breadthfirst", label: "Hiyerarşi", hint: "Kenar yönüne göre katmanlı yerleşim" },
+const LAYOUTS: { value: GraphLayoutName; label: string; hint: string }[] = [
+  { value: "force", label: "Force", hint: "Kuvvet tabanlı yerleşim" },
+  { value: "radial", label: "Hubs", hint: "Bağlantı sayısı yüksek düğümler merkezde" },
+  { value: "hierarchical", label: "Hiyerarşi", hint: "BFS derinliğine göre katmanlı yerleşim" },
   { value: "circle", label: "Circle", hint: "Dairesel yerleşim" },
   { value: "grid", label: "Grid", hint: "Izgara yerleşim" },
 ];
 
+const LAYOUT_VALUES = new Set<string>(LAYOUTS.map((layout) => layout.value));
+
 /* ------------------------------------------------------------------ */
 /* Tipler                                                              */
 /* ------------------------------------------------------------------ */
-
-type LayoutName = "cose" | "concentric" | "breadthfirst" | "circle" | "grid";
 
 interface GNode {
   id: string;
@@ -238,14 +131,17 @@ interface GraphPrefs {
   clusterId: string | null;
   platforms: string[];
   edgeTypes: string[];
-  layout: LayoutName;
+  layout: GraphLayoutName;
   colorMode: "platform" | "cluster";
+  collapseHubs: boolean;
 }
 
 interface HoverEdge {
+  id: string;
   x: number;
   y: number;
-  edge: GEdge;
+  /** Tıklanarak sabitlendiyse fare çıkışında kaybolmaz. */
+  pinned: boolean;
 }
 
 const DEFAULT_PREFS: GraphPrefs = {
@@ -255,24 +151,21 @@ const DEFAULT_PREFS: GraphPrefs = {
   clusterId: null,
   platforms: [],
   edgeTypes: [],
-  layout: "cose",
+  layout: "force",
   colorMode: "platform",
+  collapseHubs: true,
 };
 
 const prefsKey = (caseId: string) => `showis:graph:${caseId}`;
 
 function readPrefs(caseId: string): GraphPrefs | null {
   if (typeof window === "undefined") return null;
-  const raw = window.sessionStorage.getItem(prefsKey(caseId));
+  const raw = window.localStorage.getItem(prefsKey(caseId));
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as Partial<GraphPrefs>;
-    const layout: LayoutName =
-      parsed.layout === "circle" ||
-      parsed.layout === "grid" ||
-      parsed.layout === "cose" ||
-      parsed.layout === "concentric" ||
-      parsed.layout === "breadthfirst"
+    const layout: GraphLayoutName =
+      typeof parsed.layout === "string" && LAYOUT_VALUES.has(parsed.layout)
         ? parsed.layout
         : DEFAULT_PREFS.layout;
     const min = Number(parsed.minConfidence);
@@ -290,6 +183,7 @@ function readPrefs(caseId: string): GraphPrefs | null {
       edgeTypes: Array.isArray(parsed.edgeTypes) ? parsed.edgeTypes.map(String) : [],
       layout,
       colorMode: parsed.colorMode === "cluster" ? "cluster" : "platform",
+      collapseHubs: parsed.collapseHubs !== false,
     };
   } catch {
     return null;
@@ -298,7 +192,7 @@ function readPrefs(caseId: string): GraphPrefs | null {
 
 function writePrefs(caseId: string, prefs: GraphPrefs) {
   if (typeof window === "undefined") return;
-  window.sessionStorage.setItem(prefsKey(caseId), JSON.stringify(prefs));
+  window.localStorage.setItem(prefsKey(caseId), JSON.stringify(prefs));
 }
 
 /** Yalnız http(s) URL'lerini tıklanabilir yap (javascript:/data: XSS koruması). */
@@ -382,9 +276,8 @@ function xmlEscape(value: string): string {
 /* ------------------------------------------------------------------ */
 
 export default function CaseGraph({ caseId }: { caseId: string }) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const cyRef = useRef<cytoscape.Core | null>(null);
-  const lastLayoutRef = useRef<LayoutName | null>(null);
+  const canvasRef = useRef<GraphCanvasHandle>(null);
+  const canvasBoxRef = useRef<HTMLDivElement>(null);
   const prefsReadyRef = useRef(false);
   const panelRef = useRef<HTMLElement>(null);
 
@@ -395,39 +288,34 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
   const [loading, setLoading] = useState(true);
   const [prefs, setPrefs] = useState<GraphPrefs>(DEFAULT_PREFS);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [contextMenu, setContextMenu] = useState<GraphContextTarget | null>(null);
+  /** Kullanıcı genişletse de daraltmayı elle açtığı hub'lar. */
+  const [expandedHubs, setExpandedHubs] = useState<string[]>([]);
+  /** "Komşuları genişlet" ve "Gizle" için geçici görünürlük kapsamı. */
+  const [scope, setScope] = useState<{
+    expand: string[];
+    hide: string[];
+    only: string[] | null;
+  }>({
+    expand: [],
+    hide: [],
+    only: null,
+  });
   const [hover, setHover] = useState<HoverEdge | null>(null);
-  const [stats, setStats] = useState({ visibleNodes: 0, visibleEdges: 0, layoutMs: 0 });
+  const [layoutMs, setLayoutMs] = useState(0);
   const [nodeQuery, setNodeQuery] = useState("");
   const [pathFrom, setPathFrom] = useState("");
   const [pathTo, setPathTo] = useState("");
   const [pathNodeIds, setPathNodeIds] = useState<string[]>([]);
   const [pathEdgeIds, setPathEdgeIds] = useState<string[]>([]);
   const [pathError, setPathError] = useState<string | null>(null);
+  /** Seçim sonrası kısa geri bildirim; canlı bölge ile duyurulur. */
+  const [graphNotice, setGraphNotice] = useState("");
   /** Dışa aktarma hatası — boşsa hata yok. */
   const [exportError, setExportError] = useState<{ message: string; detail?: string } | null>(
     null
   );
-  const theme = useTheme();
-
-  /** Kenar rengi — tema ve tipe göre. */
-  const edgeColor = (type: string) =>
-    EDGE_TYPE_COLORS[theme][type] ?? (theme === "dark" ? "#8d96a2" : "#6e7784");
-
-  /** Filtrelenmiş öğelerin noktası — tema ile sönümlenir. */
-  const mutedDot = theme === "dark" ? "#4e5660" : "#c8ced6";
-
-  /* --- tema değişince grafiği yeniden boyamak (yerleşim korunur) --- */
-  useEffect(() => {
-    const cy = cyRef.current;
-    if (!cy) return;
-    cy.batch(() => {
-      cy.nodes().forEach((node) => {
-        const clusterId = String(node.data("cluster_id") || "") || null;
-        node.data("cluster_color", clusterColor(clusterId, theme) ?? "");
-      });
-    });
-    cy.style(buildStyle(theme, prefs.colorMode));
-  }, [theme, prefs.colorMode]);
 
   /* --- tercihleri yükle (yalnız istemci); URL'deki küme önceliklidir --- */
   useEffect(() => {
@@ -520,15 +408,45 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
 
   const visibleNodeIds = useMemo(() => {
     const platformSet = new Set(prefs.platforms);
-    return new Set(
-      nodes
-        .filter((node) => platformSet.size === 0 || platformSet.has(node.platform))
-        .filter((node) => node.score >= prefs.minScore)
-        .filter((node) => !prefs.clusterId || node.clusterId === prefs.clusterId)
-        .filter((node) => !prefs.connectedOnly || connectedNodeIds.has(node.id))
-        .map((node) => node.id)
-    );
-  }, [nodes, prefs.platforms, prefs.minScore, prefs.clusterId, prefs.connectedOnly, connectedNodeIds]);
+    const base = nodes
+      .filter((node) => platformSet.size === 0 || platformSet.has(node.platform))
+      .filter((node) => node.score >= prefs.minScore)
+      .filter((node) => !prefs.clusterId || node.clusterId === prefs.clusterId)
+      .filter((node) => !prefs.connectedOnly || connectedNodeIds.has(node.id))
+      .map((node) => node.id);
+    let result = new Set(base);
+
+    // "Komşuları genişlet": filtrenin dışında kalan komşular geri gelir.
+    if (scope.expand.length > 0) {
+      const adjacency = new Map<string, string[]>();
+      for (const edge of edges) {
+        if (!adjacency.has(edge.source)) adjacency.set(edge.source, []);
+        if (!adjacency.has(edge.target)) adjacency.set(edge.target, []);
+        adjacency.get(edge.source)!.push(edge.target);
+        adjacency.get(edge.target)!.push(edge.source);
+      }
+      for (const id of scope.expand) {
+        result.add(id);
+        for (const neighbor of adjacency.get(id) ?? []) result.add(neighbor);
+      }
+    }
+
+    // "Yalnız komşuları göster": filtreleri aşan açık kapsam.
+    if (scope.only) {
+      result = new Set(scope.only);
+    }
+    for (const id of scope.hide) result.delete(id);
+    return result;
+  }, [
+    nodes,
+    prefs.platforms,
+    prefs.minScore,
+    prefs.clusterId,
+    prefs.connectedOnly,
+    connectedNodeIds,
+    edges,
+    scope,
+  ]);
 
   const visibleEdges = useMemo(() => {
     const typeSet = new Set(prefs.edgeTypes);
@@ -540,6 +458,8 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
         visibleNodeIds.has(e.target)
     );
   }, [edges, prefs.edgeTypes, prefs.minConfidence, visibleNodeIds]);
+
+  const visibleEdgeIds = useMemo(() => new Set(visibleEdges.map((e) => e.id)), [visibleEdges]);
 
   const platformCounts = useMemo(() => {
     const map = new Map<string, number>();
@@ -553,188 +473,151 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
     return [...map.entries()].sort((a, b) => b[1] - a[1]);
   }, [edges]);
 
-  /* --- cytoscape örneği --- */
-  const runLayout = useCallback((name: LayoutName) => {
-    const cy = cyRef.current;
-    if (!cy) return;
-    const total = cy.nodes().length;
-    const options =
-      name === "cose"
-        ? {
-            name: "cose",
-            animate: total <= 150,
-            animationDuration: 400,
-            randomize: true,
-            fit: true,
-            padding: 40,
-            nodeRepulsion: total > 300 ? 5000 : 9000,
-            idealEdgeLength: total > 300 ? 60 : 90,
-            numIter: total > 300 ? 250 : 1000,
-          }
-        : name === "concentric"
-          ? {
-              name: "concentric",
-              animate: false,
-              fit: true,
-              padding: 48,
-              minNodeSpacing: 28,
-              concentric: (node: cytoscape.NodeSingular) => node.degree(),
-              levelWidth: () => [2],
-            }
-          : name === "breadthfirst"
-            ? {
-                name: "breadthfirst",
-                directed: true,
-                animate: false,
-                fit: true,
-                padding: 48,
-                spacingFactor: 1.25,
-              }
-            : {
-                name,
-                animate: false,
-                fit: true,
-                padding: 40,
-                ...(name === "grid" ? { avoidOverlap: true, condense: true } : {}),
-              };
-    const startedAt = performance.now();
-    cy.one("layoutstop", () => {
-      setStats((s) => ({ ...s, layoutMs: Math.round(performance.now() - startedAt) }));
-    });
-    cy.layout(options as cytoscape.LayoutOptions).run();
+  /* --- motor verisi ve renkleri --- */
+  const baseNodes = useMemo(
+    () =>
+      nodes.map((node) => ({
+        id: node.id,
+        label: node.label,
+        kind: node.type,
+        // Cytoscape'teki 20-44 px çapa denk gelir.
+        weight: 4 + Math.min(1, Math.max(0, node.score)) * 40,
+        cluster: node.clusterId,
+      })),
+    [nodes]
+  );
+
+  const baseEdges = useMemo(
+    () =>
+      edges.map((edge) => ({
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        type: edge.type,
+        directed: true,
+        // 0.6-3.5 px kenar kalınlığı.
+        weight: 0.5 + Math.min(1, Math.max(0, edge.confidence)) * 7,
+      })),
+    [edges]
+  );
+
+  /**
+   * Hub daraltma tüm grafik üzerinde hesaplanır; görünürlük filtresi "+N"
+   * çiplerine eşlenir. Böylece filtre değişimi kamerayı ve yerleşimi bozmaz.
+   */
+  const collapsed = useMemo(() => {
+    if (!prefs.collapseHubs) {
+      return {
+        data: { nodes: baseNodes, edges: baseEdges },
+        groups: new Map<string, HubGroup>(),
+      };
+    }
+    return collapseGraphData(
+      { nodes: baseNodes, edges: baseEdges },
+      { expandedHubIds: new Set(expandedHubs) }
+    );
+  }, [baseNodes, baseEdges, prefs.collapseHubs, expandedHubs]);
+
+  const graphData = collapsed.data;
+  const hubGroups = collapsed.groups;
+
+  /**
+   * Filtre görünürlüğü daraltılmış kimliklere eşlenir: bir "+N" çipi, hub'ı
+   * veya en az bir gizli yaprağı görünürse çizilir.
+   */
+  const canvasNodeIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const node of graphData.nodes) {
+      if (visibleNodeIds.has(node.id)) {
+        ids.add(node.id);
+        continue;
+      }
+      const group = hubGroups.get(node.id);
+      if (!group) continue;
+      if (
+        visibleNodeIds.has(group.hubId) ||
+        group.leafIds.some((id) => visibleNodeIds.has(id))
+      ) {
+        ids.add(node.id);
+      }
+    }
+    return ids;
+  }, [graphData, hubGroups, visibleNodeIds]);
+
+  const canvasEdgeIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const edge of graphData.edges) {
+      if (canvasNodeIds.has(edge.source) && canvasNodeIds.has(edge.target)) {
+        ids.add(edge.id);
+      }
+    }
+    return ids;
+  }, [graphData, canvasNodeIds]);
+
+  const nodeColors = useMemo(() => {
+    const colors: Record<string, string> = {};
+    for (const node of nodes) {
+      colors[node.id] =
+        (prefs.colorMode === "cluster" ? clusterColor(node.clusterId) : null) ??
+        platformColor(node.platform);
+    }
+    // "+N" çipi hub'ın rengini taşır; türü kendi kimliğinde kalır.
+    for (const group of hubGroups.values()) {
+      if (colors[group.hubId]) colors[group.proxyId] = colors[group.hubId];
+    }
+    return colors;
+  }, [nodes, prefs.colorMode, hubGroups]);
+
+  /* --- etkileşim --- */
+  const handleSelect = useCallback((id: string | null) => {
+    setSelectedId(id);
+    setHover(null);
   }, []);
 
-  useEffect(() => {
-    if (!nodes.length || !containerRef.current) return;
-
-    const elements: cytoscape.ElementDefinition[] = [
-      ...nodes.map((n) => ({
-        data: {
-          id: n.id,
-          label: n.label,
-          platform: n.platform,
-          type: n.type,
-          score: n.score,
-          cluster_id: n.clusterId ?? "",
-          cluster_size: n.clusterSize,
-          cluster_confidence: n.clusterConfidence,
-          cluster_color: clusterColor(n.clusterId, readTheme()) ?? "",
-        },
-      })),
-      ...edges.map((e) => ({
-        data: {
-          id: e.id,
-          source: e.source,
-          target: e.target,
-          type: e.type,
-          confidence: e.confidence,
-          label: `${EDGE_TYPE_LABEL(e.type)} ${Math.round(e.confidence * 100)}%`,
-        },
-      })),
-    ];
-
-    const dense = nodes.length > 300;
-    const cy = cytoscape({
-      container: containerRef.current,
-      elements,
-      // `wheelSensitivity` bilinçli olarak ayarlanmaz: kütüphane, özel değerin
-      // standart farelerde doğal olmayan (ani) yakınlaştırma yaptığını uyarır.
-      minZoom: 0.08,
-      maxZoom: 3,
-      motionBlur: false,
-      textureOnViewport: false,
-      hideEdgesOnViewport: dense,
-      pixelRatio: dense ? 1 : "auto",
-      style: buildStyle(readTheme(), prefs.colorMode),
-      layout: { name: "preset" },
-    });
-
-    cyRef.current = cy;
-    lastLayoutRef.current = prefs.layout;
-    runLayout(prefs.layout);
-
-    cy.on("tap", "node", (evt) => setSelectedId(evt.target.id()));
-    cy.on("tap", (evt) => {
-      if (evt.target === cy) setSelectedId(null);
-    });
-    cy.on("mouseover", "edge", (evt) => {
-      const edge = evt.target as cytoscape.EdgeSingular;
-      edge.addClass("labelled");
-      const position = (evt as unknown as { renderedPosition?: { x: number; y: number } })
-        .renderedPosition;
-      const found = edges.find((e) => e.id === edge.id());
-      if (!found || !position) return;
-      setHover({ x: position.x, y: position.y, edge: found });
-    });
-    cy.on("mouseout", "edge", (evt) => {
-      (evt.target as cytoscape.EdgeSingular).removeClass("labelled");
+  const handleSelectionChange = useCallback(
+    (ids: string[], primary: string | null) => {
       setHover(null);
+      // "+N" düğümü tıklanınca hub açılır; seçim hub'ın kendisine geçer.
+      const proxyId = ids.find((id) => hubIdOfProxy(id) !== null);
+      if (proxyId) {
+        const hubId = hubIdOfProxy(proxyId) as string;
+        setExpandedHubs((previous) =>
+          previous.includes(hubId) ? previous : [...previous, hubId]
+        );
+        setGraphNotice(`Hub açıldı: ${proxyId} → ${hubId}`);
+        setSelectedIds([hubId]);
+        setSelectedId(hubId);
+        canvasRef.current?.setSelection([hubId], hubId);
+        canvasRef.current?.focus(hubId);
+        return;
+      }
+      setSelectedIds(ids);
+      setSelectedId(primary);
+    },
+    []
+  );
+
+  const handleContextMenu = useCallback((target: GraphContextTarget) => {
+    setContextMenu(target);
+    setHover(null);
+  }, []);
+
+  const handleEdgeHover = useCallback((event: GraphEdgeHover) => {
+    setHover((previous) => {
+      if (previous?.pinned) return previous;
+      if (!event.id) return null;
+      return { id: event.id, x: event.x, y: event.y, pinned: false };
     });
-    cy.on("grab", () => setHover(null));
+  }, []);
 
-    return () => {
-      cy.destroy();
-      cyRef.current = null;
-      lastLayoutRef.current = null;
-    };
-    // `edges` yalnızca veri değişiminde eleman üretmek için kullanılıyor.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes, edges, runLayout]);
+  const handleEdgeClick = useCallback((event: GraphEdgeHover) => {
+    if (!event.id) return;
+    setHover({ id: event.id, x: event.x, y: event.y, pinned: true });
+  }, []);
 
-  /* --- layout değişimi --- */
-  useEffect(() => {
-    if (!cyRef.current) return;
-    if (lastLayoutRef.current === prefs.layout) return;
-    lastLayoutRef.current = prefs.layout;
-    runLayout(prefs.layout);
-  }, [prefs.layout, runLayout]);
-
-  /* --- filtreleri uygula --- */
-  useEffect(() => {
-    const cy = cyRef.current;
-    if (!cy) return;
-    const platformSet = new Set(prefs.platforms);
-    const typeSet = new Set(prefs.edgeTypes);
-    const keepNodes = new Set<string>();
-    let keptEdges = 0;
-
-    cy.batch(() => {
-      cy.nodes().forEach((n) => {
-        const ok =
-          (platformSet.size === 0 || platformSet.has(String(n.data("platform")))) &&
-          Number(n.data("score") ?? 0) >= prefs.minScore &&
-          (!prefs.clusterId || String(n.data("cluster_id")) === prefs.clusterId) &&
-          (!prefs.connectedOnly || n.connectedEdges().nonempty());
-        n.style("display", ok ? "element" : "none");
-        if (ok) keepNodes.add(n.id());
-      });
-      cy.edges().forEach((e) => {
-        const type = String(e.data("type"));
-        const confidence = Number(e.data("confidence") ?? 0);
-        const ok =
-          (typeSet.size === 0 || typeSet.has(type)) &&
-          confidence >= prefs.minConfidence &&
-          keepNodes.has(String(e.data("source"))) &&
-          keepNodes.has(String(e.data("target")));
-        e.style("display", ok ? "element" : "none");
-        if (ok) keptEdges += 1;
-      });
-    });
-
-    // Kenar etiketleri dinlenme anında görünür: dinlenme hâlinde düğüm
-    // yazılarıyla çakışıyor ve grafiğin okunmasını zorlaştırıyordu.
-    cy.edges().removeClass("labelled");
-    setStats((s) => ({ ...s, visibleNodes: keepNodes.size, visibleEdges: keptEdges }));
-  }, [
-    prefs.minConfidence,
-    prefs.minScore,
-    prefs.connectedOnly,
-    prefs.clusterId,
-    prefs.platforms,
-    prefs.edgeTypes,
-    nodes,
-    edges,
-  ]);
+  const handleLayout = useCallback((info: { ms: number }) => {
+    setLayoutMs(info.ms);
+  }, []);
 
   /* --- filtre değişince eski yol vurgusu anlamsızlaşır --- */
   useEffect(() => {
@@ -750,42 +633,31 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
     prefs.edgeTypes,
   ]);
 
-  /* --- yol vurgusunu cytoscape'e yansıt --- */
+  /* --- Esc: bağlam menüsü, seçim ve paneli sırayla kapat --- */
   useEffect(() => {
-    const cy = cyRef.current;
-    if (!cy) return;
-    cy.nodes().removeClass("path-node");
-    cy.edges().removeClass("path-edge");
-    pathNodeIds.forEach((id) => cy.$id(id).addClass("path-node"));
-    pathEdgeIds.forEach((id) => cy.$id(id).addClass("path-edge"));
-  }, [pathNodeIds, pathEdgeIds, nodes, edges]);
-
-  /* --- seçimi cytoscape'e yansıt --- */
-  useEffect(() => {
-    const cy = cyRef.current;
-    if (!cy) return;
-    cy.nodes().unselect();
-    cy.edges().removeClass("labelled");
-    if (selectedId) {
-      const node = cy.$id(selectedId);
-      if (node.nonempty()) {
-        node.select();
-        // Seçili kaydın bağlantılarının güven değerleri etiketlenir.
-        node.connectedEdges().addClass("labelled");
-      }
-    }
-  }, [selectedId, nodes]);
-
-  /* --- Esc ile paneli kapat, odağı panele ver --- */
-  useEffect(() => {
-    if (!selectedId) return;
-    panelRef.current?.focus();
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setSelectedId(null);
+      if (event.key !== "Escape") return;
+      if (contextMenu) {
+        setContextMenu(null);
+        return;
+      }
+      if (selectedIds.length > 0) {
+        canvasRef.current?.setSelection([], null);
+        setSelectedIds([]);
+        setSelectedId(null);
+        return;
+      }
+      setSelectedId(null);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selectedId]);
+  }, [contextMenu, selectedIds.length]);
+
+  /* --- panel yalnız tek seçimde odaklanır --- */
+  useEffect(() => {
+    if (!selectedId || selectedIds.length > 1) return;
+    panelRef.current?.focus();
+  }, [selectedId, selectedIds.length]);
 
   /* --- türetilmiş seçim verisi --- */
   const selectedNode = useMemo(
@@ -801,14 +673,17 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
     [clusters, selectedNode]
   );
 
-  const visibleEdgeIds = useMemo(() => new Set(visibleEdges.map((e) => e.id)), [visibleEdges]);
-
   const visibleNodes = useMemo(
     () =>
       nodes
-        .filter((node) => visibleNodeIds.has(node.id))
+        .filter((node) => canvasNodeIds.has(node.id))
         .sort((a, b) => b.score - a.score || a.label.localeCompare(b.label)),
-    [nodes, visibleNodeIds]
+    [nodes, canvasNodeIds]
+  );
+
+  const hoverEdge = useMemo(
+    () => (hover ? edges.find((edge) => edge.id === hover.id) ?? null : null),
+    [edges, hover]
   );
 
   const linkedEdges = useMemo(() => {
@@ -840,38 +715,43 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
   /* --- dışa aktarma --- */
   const exportBase = `showis-graph-${caseId.slice(0, 8)}`;
 
-  /**
-   * Dışa aktarım hatası — sessizce yutulmaz. Görsel, JSON ve GEXF üretimi
-   * tarayıcıda çalışır; başarısızlıkta kullanıcıya söylenmelidir.
-   */
-  const runExport = (kind: "PNG" | "JSON" | "GEXF", fn: () => void) => {
+  const exportFailed = (kind: string, detail?: string) => {
+    setExportError({
+      message: `${kind} dışa aktarımı başarısız oldu. Tarayıcıyı ve ağ bağlantısını kontrol edip yeniden deneyin.`,
+      detail,
+    });
+  };
+
+  const runExport = (kind: string, fn: () => void | Promise<void>) => {
     setExportError(null);
     try {
-      fn();
-    } catch (e: any) {
-      setExportError({
-        message: `${kind} dışa aktarımı başarısız oldu. Tarayıcıyı ve ağ bağlantısını kontrol edip yeniden deneyin.`,
-        detail: e?.message,
-      });
+      void Promise.resolve(fn()).catch((e: unknown) =>
+        exportFailed(kind, e instanceof Error ? e.message : undefined)
+      );
+    } catch (e: unknown) {
+      exportFailed(kind, e instanceof Error ? e.message : undefined);
     }
   };
 
   const exportPng = () => {
-    const cy = cyRef.current;
-    if (!cy) return;
-    const dense = nodes.length > 300;
-    // Arka plan, ekrandaki yüzeyle aynı olmalı — eski koyu temanın siyahı değil.
-    const uri = cy.png({ full: true, scale: dense ? 1 : 2, bg: EXPORT_BG[theme] });
-    downloadHref(`${exportBase}.png`, uri);
+    const handle = canvasRef.current;
+    if (!handle) return;
+    return handle.exportPNG().then((blob) => downloadBlob(`${exportBase}.png`, blob));
+  };
+
+  const exportSvg = () => {
+    const handle = canvasRef.current;
+    if (!handle) return;
+    const svg = handle.exportSVG();
+    downloadBlob(`${exportBase}.svg`, new Blob([svg], { type: "image/svg+xml;charset=utf-8" }));
   };
 
   const filteredPayload = () => {
-    const nodeIds = new Set(visibleNodeIds);
     return {
       exported_at: new Date().toISOString(),
       case_id: caseId,
       filters: prefs,
-      nodes: nodes.filter((n) => nodeIds.has(n.id)),
+      nodes: nodes.filter((n) => visibleNodeIds.has(n.id)),
       edges: visibleEdges,
     };
   };
@@ -929,24 +809,17 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
   };
 
   const focusSelected = () => {
-    const cy = cyRef.current;
-    if (!cy || !selectedId) return;
-    const node = cy.$id(selectedId);
-    if (node.empty()) return;
-    cy.animate({ center: { eles: node }, zoom: Math.max(cy.zoom(), 1.2) }, { duration: 300 });
+    const ids = selectedIds.length > 0 ? selectedIds : selectedId ? [selectedId] : [];
+    if (ids.length === 0) return;
+    if (ids.length === 1) canvasRef.current?.focus(ids[0]);
+    else canvasRef.current?.fitSelection(ids);
   };
 
   const jumpToNode = (nodeId: string) => {
-    const cy = cyRef.current;
-    if (!cy) return;
-    const node = cy.$id(nodeId);
-    if (node.empty()) return;
-    node.unselect();
+    setSelectedIds([nodeId]);
     setSelectedId(nodeId);
-    cy.animate(
-      { center: { eles: node }, zoom: Math.max(cy.zoom(), 1.25) },
-      { duration: 300 }
-    );
+    canvasRef.current?.setSelection([nodeId], nodeId);
+    canvasRef.current?.focus(nodeId, 1.25);
   };
 
   const jumpToSearch = () => {
@@ -968,11 +841,7 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
   };
 
   const fitVisible = () => {
-    const cy = cyRef.current;
-    if (!cy) return;
-    const visible = cy.nodes().filter((node) => node.style("display") !== "none");
-    if (visible.empty()) return;
-    cy.animate({ fit: { eles: visible, padding: 48 } }, { duration: 300 });
+    canvasRef.current?.fit();
   };
 
   const findShortestPath = () => {
@@ -1038,6 +907,162 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
     setPathError(null);
   };
 
+  /* --- sağ tık menüsü eylemleri --- */
+
+  /** Menünün hedef kimliği; "+N" ise hub'ın kendi kimliğine çözülür. */
+  const menuTargetId = contextMenu
+    ? contextMenu.id
+      ? hubIdOfProxy(contextMenu.id) ?? contextMenu.id
+      : null
+    : null;
+
+  const menuItems = useMemo(
+    () =>
+      buildContextMenu({
+        targetId: menuTargetId,
+        selection: new Set(selectedIds),
+        // Komşu sayısı ham grafikten: daraltılmış yapraklar da sayılır.
+        edges,
+        visibleNodeCount: canvasNodeIds.size,
+      }),
+    [menuTargetId, selectedIds, edges, canvasNodeIds]
+  );
+
+  const effectiveSelectionForMenu = (targetId: string | null): string[] => {
+    if (!targetId) return selectedIds;
+    return selectedIds.includes(targetId) ? selectedIds : [targetId];
+  };
+
+  /** Seçimdeki "+N" çiplerini gerçek hub/yaprak kimliklerine açar. */
+  const expandSelectionIds = (ids: readonly string[]): string[] => {
+    const result = new Set<string>();
+    for (const id of ids) {
+      const group = hubGroups.get(id);
+      if (group) {
+        result.add(group.hubId);
+        for (const leaf of group.leafIds) result.add(leaf);
+      } else {
+        result.add(id);
+      }
+    }
+    return [...result];
+  };
+
+  /** Hub daraltılmışsa, komşularını görmek için önce hub açılır. */
+  const revealHubLeaves = (targetId: string | null) => {
+    if (!targetId) return;
+    const group = [...hubGroups.values()].find((item) => item.hubId === targetId);
+    if (!group) return;
+    setExpandedHubs((previous) =>
+      previous.includes(targetId) ? previous : [...previous, targetId]
+    );
+  };
+
+  const runContextAction = (action: ContextMenuAction) => {
+    const targetId = menuTargetId;
+    const selection = effectiveSelectionForMenu(targetId);
+    const targetNode = targetId ? nodes.find((node) => node.id === targetId) ?? null : null;
+
+    switch (action) {
+      case "expand-neighbors": {
+        if (!targetId) return;
+        const group = [...hubGroups.values()].find((item) => item.hubId === targetId);
+        const neighbors = group
+          ? group.leafIds
+          : neighborIds(targetId, edges);
+        setScope((previous) => ({
+          expand: [...new Set([...previous.expand, targetId, ...neighbors])],
+          hide: previous.hide.filter(
+            (id) => id !== targetId && !neighbors.includes(id)
+          ),
+          only: null,
+        }));
+        revealHubLeaves(targetId);
+        setGraphNotice(
+          `${targetNode?.label ?? targetId} ve ${neighbors.length} komşusu genişletildi.`
+        );
+        setSelectedIds([targetId]);
+        setSelectedId(targetId);
+        break;
+      }
+      case "only-neighbors": {
+        if (!targetId) return;
+        const group = [...hubGroups.values()].find((item) => item.hubId === targetId);
+        const neighbors = group ? group.leafIds : neighborIds(targetId, edges);
+        setScope({ expand: [], hide: [], only: [targetId, ...neighbors] });
+        revealHubLeaves(targetId);
+        setGraphNotice(
+          `Yalnız ${targetNode?.label ?? targetId} ve ${neighbors.length} komşusu gösteriliyor.`
+        );
+        break;
+      }
+      case "hide": {
+        if (!targetId) return;
+        const before = canvasNodeIds.size;
+        const hidden = new Set(expandSelectionIds(selection));
+        setScope((previous) => ({
+          ...previous,
+          hide: [...new Set([...previous.hide, ...hidden])],
+        }));
+        // Aynı anda seçim temizlenir; gizlenenler seçili kalmasın.
+        setSelectedIds([]);
+        setSelectedId(null);
+        canvasRef.current?.setSelection([], null);
+        setGraphNotice(
+          `${hidden.size} düğüm gizlendi. Görünür: ${Math.max(0, before - hidden.size)}.`
+        );
+        break;
+      }
+      case "path-from": {
+        if (!targetId) return;
+        setPathFrom(targetId);
+        setPathError(null);
+        setGraphNotice(`Yol başlangıcı: ${targetNode?.label ?? targetId}`);
+        break;
+      }
+      case "path-to": {
+        if (!targetId) return;
+        setPathTo(targetId);
+        setPathError(null);
+        setGraphNotice(`Yol hedefi: ${targetNode?.label ?? targetId}`);
+        break;
+      }
+      case "copy-label": {
+        if (!targetNode) return;
+        const copy = async () => {
+          try {
+            await navigator.clipboard.writeText(targetNode.label);
+            setGraphNotice(`Etiket kopyalandı: ${targetNode.label}`);
+          } catch {
+            setGraphNotice("Etiket kopyalanamadı; tarayıcı izni gerekiyor.");
+          }
+        };
+        void copy();
+        break;
+      }
+      case "focus-selection": {
+        if (selection.length === 0) return;
+        if (selection.length === 1) canvasRef.current?.focus(selection[0]);
+        else canvasRef.current?.fitSelection(selection);
+        setGraphNotice(
+          selection.length === 1
+            ? "Seçili düğüme odaklanıldı."
+            : `${selection.length} seçili düğüme odaklanıldı.`
+        );
+        break;
+      }
+      case "clear-selection": {
+        setSelectedIds([]);
+        setSelectedId(null);
+        canvasRef.current?.setSelection([], null);
+        break;
+      }
+      default:
+        break;
+    }
+    setContextMenu(null);
+  };
+
   /* --- erken çıkışlar --- */
   if (error)
     return (
@@ -1067,7 +1092,7 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
     updatePrefs({ edgeTypes: next });
   };
 
-  const resetFilters = () =>
+  const resetFilters = () => {
     updatePrefs({
       minConfidence: 0,
       minScore: 0,
@@ -1076,15 +1101,19 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
       platforms: [],
       edgeTypes: [],
     });
+    setScope({ expand: [], hide: [], only: null });
+  };
 
   const hiddenEdges = edges.length - visibleEdges.length;
   const multiClusters = clusters.filter((cluster) => cluster.size > 1);
 
+  const edgeColor = (type: string) => EDGE_TYPE_COLORS[type] ?? EDGE_TYPE_FALLBACK;
+
   return (
     <div className="space-y-5">
       {/* ---------- Araç çubuğu ---------- */}
-      <section className="panel space-y-4 p-4">
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
+      <section className="panel flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-2">
+        <div className="flex w-full flex-wrap items-center gap-x-5 gap-y-3">
           <div className="flex items-center gap-2">
             <span className="text-[12px] text-ink-3">Yerleşim</span>
             <div
@@ -1112,7 +1141,7 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
             </div>
             <button
               type="button"
-              onClick={() => runLayout(prefs.layout)}
+              onClick={() => canvasRef.current?.runLayout(prefs.layout)}
               className="btn-quiet btn-sm"
               aria-label="Grafiği yeniden yerleştir"
               title="Yeniden yerleştir"
@@ -1176,9 +1205,11 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
 
           <div className="ml-auto flex flex-wrap items-center gap-2">
             <span className="numeric text-ink-3" aria-live="polite">
-              {stats.visibleNodes}/{nodes.length} düğüm, {stats.visibleEdges}/{edges.length} kenar
+              {canvasNodeIds.size}/{nodes.length} düğüm, {canvasEdgeIds.size}/{edges.length} kenar
+              {selectedIds.length > 1 && ` · ${selectedIds.length} seçili`}
+              {hubGroups.size > 0 && ` · ${hubGroups.size} hub daraltıldı`}
               {multiClusters.length > 0 && ` · ${multiClusters.length} kimlik kümesi`}
-              {stats.layoutMs > 0 && ` — yerleşim ${stats.layoutMs} ms`}
+              {layoutMs > 0 && ` — yerleşim ${layoutMs} ms`}
             </span>
             <button
               type="button"
@@ -1196,6 +1227,12 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
               <ImageIcon size={12} aria-hidden />
               PNG
             </button>
+            <button type="button" onClick={() => runExport("SVG", exportSvg)}
+              className="btn-secondary btn-sm"
+              aria-label="SVG olarak indir">
+              <Download size={12} aria-hidden />
+              SVG
+            </button>
             <button type="button" onClick={() => runExport("JSON", exportJson)}
               className="btn-secondary btn-sm"
               aria-label="JSON olarak indir">
@@ -1211,267 +1248,7 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-x-6 gap-y-3 border-t border-line pt-4">
-          <label className="flex min-w-[280px] flex-1 items-center gap-3 text-[12px] text-ink-3">
-            <span className="whitespace-nowrap">
-              Güven eşiği{" "}
-              <span className="numeric text-ink">{prefs.minConfidence.toFixed(2)}</span>
-            </span>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.05}
-              value={prefs.minConfidence}
-              onChange={(e) => updatePrefs({ minConfidence: Number(e.target.value) })}
-              aria-label="Kenar güven eşiği"
-              className="h-1 w-full max-w-xs cursor-pointer accent-[rgb(var(--accent))]"
-            />
-            <span className="numeric whitespace-nowrap text-ink-3">
-              {hiddenEdges > 0 ? `${hiddenEdges} gizli` : "tümü görünür"}
-            </span>
-          </label>
 
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-            <span className="text-[12px] text-ink-3">Kenar tipi</span>
-            {edgeTypeCounts.length === 0 && (
-              <span className="text-[12px] text-ink-3">kenar yok</span>
-            )}
-            {edgeTypeCounts.map(([type, count]) => {
-              const included = prefs.edgeTypes.includes(type);
-              const active = prefs.edgeTypes.length === 0 || included;
-              return (
-                <button
-                  key={type}
-                  type="button"
-                  aria-pressed={included}
-                  aria-label={`${EDGE_TYPE_LABEL(type)} kenar tipini ${
-                    included ? "filtreden çıkar" : "filtreye ekle"
-                  }`}
-                  onClick={() => toggleEdgeType(type)}
-                  className={`inline-flex items-center gap-1.5 text-[12px] transition-colors ${
-                    active ? "text-ink-2" : "text-ink-3 line-through"
-                  }`}
-                >
-                  <span
-                    className="h-2 w-2 shrink-0 rounded-[1px]"
-                    style={{ backgroundColor: active ? edgeColor(type) : mutedDot }}
-                    aria-hidden
-                  />
-                  {EDGE_TYPE_LABEL(type)}
-                  <span className="numeric text-ink-3">{count}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-line pt-4">
-          <span className="text-[12px] text-ink-3">Platform</span>
-          {platformCounts.map(([platform, count]) => {
-            const included = prefs.platforms.includes(platform);
-            const active = prefs.platforms.length === 0 || included;
-            return (
-              <button
-                key={platform}
-                type="button"
-                aria-pressed={included}
-                aria-label={`${platformMeta(platform).label} platformunu ${
-                  included ? "filtreden çıkar" : "filtreye ekle"
-                }`}
-                onClick={() => togglePlatform(platform)}
-                className={`inline-flex items-center gap-1.5 text-[12px] transition-colors ${
-                  active ? "text-ink-2" : "text-ink-3 line-through"
-                }`}
-              >
-                <span
-                  className="h-2 w-2 shrink-0 rounded-[1px]"
-                  style={{
-                    backgroundColor: active ? platformColor(platform, theme) : mutedDot,
-                  }}
-                  aria-hidden
-                />
-                {platformMeta(platform).label}
-                <span className="numeric text-ink-3">{count}</span>
-              </button>
-            );
-          })}
-          {(prefs.platforms.length > 0 ||
-            prefs.edgeTypes.length > 0 ||
-            prefs.minConfidence > 0 ||
-            prefs.minScore > 0 ||
-            prefs.connectedOnly ||
-            prefs.clusterId) && (
-            <button
-              type="button"
-              onClick={resetFilters}
-              className="btn-quiet btn-sm"
-              aria-label="Filtreleri sıfırla"
-            >
-              <X size={12} aria-hidden />
-              Sıfırla
-            </button>
-          )}
-        </div>
-
-        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-line pt-4">
-          <label className="flex min-w-[240px] flex-1 items-center gap-3 text-[12px] text-ink-3">
-            <span className="whitespace-nowrap">
-              Düğüm skoru{" "}
-              <span className="numeric text-ink">{prefs.minScore.toFixed(2)}</span>
-            </span>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.05}
-              value={prefs.minScore}
-              onChange={(e) => updatePrefs({ minScore: Number(e.target.value) })}
-              aria-label="Düğüm güven skoru eşiği"
-              className="h-1 w-full max-w-xs cursor-pointer accent-[rgb(var(--accent))]"
-            />
-          </label>
-          <button
-            type="button"
-            aria-pressed={prefs.connectedOnly}
-            onClick={() => updatePrefs({ connectedOnly: !prefs.connectedOnly })}
-            title="Kenarı olmayan, tek başına duran kayıtları gizle"
-            className={`inline-flex items-center gap-1.5 text-[12px] transition-colors ${
-              prefs.connectedOnly ? "font-medium text-ink" : "text-ink-3 hover:text-ink"
-            }`}
-          >
-            <Focus size={12} aria-hidden />
-            Yalnız bağlı düğümler
-          </button>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-line pt-4">
-          <span className="text-[12px] text-ink-3">Bağlantı yolu</span>
-          <select
-            value={pathFrom}
-            onChange={(e) => setPathFrom(e.target.value)}
-            aria-label="Yol başlangıç düğümü"
-            className="select w-auto max-w-[190px] py-1 text-[12px]"
-          >
-            <option value="">Başlangıç…</option>
-            {visibleNodes.map((node) => (
-              <option key={node.id} value={node.id}>
-                {node.label} · {platformMeta(node.platform).label}
-              </option>
-            ))}
-          </select>
-          <span className="text-ink-3" aria-hidden>
-            →
-          </span>
-          <select
-            value={pathTo}
-            onChange={(e) => setPathTo(e.target.value)}
-            aria-label="Yol hedef düğümü"
-            className="select w-auto max-w-[190px] py-1 text-[12px]"
-          >
-            <option value="">Hedef…</option>
-            {visibleNodes.map((node) => (
-              <option key={node.id} value={node.id}>
-                {node.label} · {platformMeta(node.platform).label}
-              </option>
-            ))}
-          </select>
-          <button type="button" onClick={findShortestPath} className="btn-secondary btn-sm">
-            Yolu bul
-          </button>
-          {(pathNodeIds.length > 0 || pathError) && (
-            <button type="button" onClick={clearPath} className="btn-quiet btn-sm">
-              <X size={12} aria-hidden />
-              Temizle
-            </button>
-          )}
-        </div>
-
-        {pathError && (
-          <p role="alert" className="rounded-[6px] border border-warn-line bg-warn-soft px-3 py-2 text-[12px] text-warn">
-            {pathError}
-          </p>
-        )}
-
-        {pathNodeIds.length > 0 && (
-          <div className="rounded-[6px] border border-accent-line bg-accent-soft px-3 py-2 text-[12px] text-accent-ink">
-            <p className="font-medium">
-              En kısa yol · {pathNodeIds.length - 1} adım
-            </p>
-            <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-ink-2">
-              {pathNodeIds.map((nodeId, index) => {
-                const node = nodes.find((item) => item.id === nodeId);
-                return (
-                  <span key={`${nodeId}-${index}`} className="inline-flex items-center gap-1.5">
-                    {index > 0 && (
-                      <span className="text-ink-3" aria-hidden>
-                        →
-                      </span>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => jumpToNode(nodeId)}
-                      className="hover:underline"
-                    >
-                      {node?.label ?? nodeId}
-                      {node && (
-                        <span className="ml-1 text-[11px] text-ink-3">
-                          {platformMeta(node.platform).label}
-                        </span>
-                      )}
-                    </button>
-                  </span>
-                );
-              })}
-            </div>
-            <p className="mt-1 text-[11.5px] text-ink-3">
-              Vurgu grafikte sarı kenarlarla gösterilir.
-            </p>
-          </div>
-        )}
-
-        {multiClusters.length > 0 && (
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-line pt-4">
-            <span className="text-[12px] text-ink-3">Kimlik kümesi</span>
-            <button
-              type="button"
-              aria-pressed={prefs.clusterId === null}
-              onClick={() => updatePrefs({ clusterId: null })}
-              className={`rounded-[4px] px-1.5 py-0.5 text-[12px] transition-colors ${
-                prefs.clusterId === null
-                  ? "bg-sunken font-medium text-ink"
-                  : "text-ink-3 hover:text-ink"
-              }`}
-            >
-              Tümü
-            </button>
-            {multiClusters.slice(0, 8).map((cluster) => {
-              const active = prefs.clusterId === cluster.id;
-              return (
-                <button
-                  key={cluster.id}
-                  type="button"
-                  aria-pressed={active}
-                  onClick={() =>
-                    updatePrefs({ clusterId: active ? null : cluster.id })
-                  }
-                  title={`${cluster.reasons[0] ?? cluster.platforms.join(", ")} — ${cluster.evidence_count} kanıt`}
-                  className={`inline-flex items-center gap-1.5 rounded-[4px] px-1.5 py-0.5 text-[12px] transition-colors ${
-                    active
-                      ? "bg-accent-soft font-medium text-accent-ink"
-                      : "text-ink-3 hover:text-ink"
-                  }`}
-                >
-                  <Layers size={11} aria-hidden />
-                  <span className="numeric">{cluster.size}</span> hesap
-                  <span className="numeric text-ink-3">
-                    {Math.round(cluster.max_confidence * 100)}%
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        )}
       </section>
 
       {exportError && (
@@ -1497,10 +1274,47 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
       {/* ---------- Tuval + detay paneli ---------- */}
       <div className={`grid gap-5 ${selectedNode ? "xl:grid-cols-[minmax(0,1fr)_380px]" : ""}`}>
         <div
-          className="relative overflow-hidden rounded-[8px] border border-line bg-surface"
+          ref={canvasBoxRef}
+          className="relative h-[70vh] min-h-[560px] overflow-hidden rounded-[8px] border border-line bg-surface"
           onMouseLeave={() => setHover(null)}
         >
-          <div ref={containerRef} className="h-[560px] w-full xl:h-[620px]" />
+          <GraphCanvas
+            ref={canvasRef}
+            className="h-full w-full"
+            data={graphData}
+            layout={prefs.layout}
+            selectedId={selectedId}
+            selectedIds={selectedIds}
+            visibleNodeIds={canvasNodeIds}
+            visibleEdgeIds={canvasEdgeIds}
+            nodeColors={nodeColors}
+            edgeColors={EDGE_TYPE_COLORS}
+            pathNodeIds={pathNodeIds}
+            pathEdgeIds={pathEdgeIds}
+            onSelect={handleSelect}
+            onSelectionChange={handleSelectionChange}
+            onEdgeHover={handleEdgeHover}
+            onEdgeClick={handleEdgeClick}
+            onContextMenu={handleContextMenu}
+            onLayout={handleLayout}
+          />
+
+          {contextMenu && (
+            <GraphContextMenu
+              x={contextMenu.x}
+              y={contextMenu.y}
+              containerWidth={canvasBoxRef.current?.clientWidth ?? 800}
+              containerHeight={canvasBoxRef.current?.clientHeight ?? 600}
+              items={menuItems}
+              onAction={runContextAction}
+              onClose={() => setContextMenu(null)}
+            />
+          )}
+
+          {/* Canlı bölge: seçim/gizleme eylemleri ekran okuyucuya duyurulur. */}
+          <p className="sr-only" role="status" aria-live="polite">
+            {graphNotice}
+          </p>
 
           {edges.length === 0 && (
             <p className="pointer-events-none absolute left-3 top-3 flex items-center gap-1.5 rounded-[6px] border border-line bg-surface/95 px-2.5 py-1.5 text-[12px] text-ink-3">
@@ -1509,7 +1323,7 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
             </p>
           )}
 
-          {hover && (
+          {hover && hoverEdge && (
             <div
               className="pointer-events-none absolute z-20 max-w-[280px] -translate-x-1/2 -translate-y-[calc(100%+10px)] rounded-[6px] border border-line-2 bg-overlay px-3 py-2 shadow-popover"
               style={{ left: hover.x, top: hover.y }}
@@ -1518,27 +1332,27 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
               <p className="flex items-center gap-1.5 text-[12px] font-medium text-ink">
                 <span
                   className="h-2 w-2 shrink-0 rounded-[1px]"
-                  style={{ backgroundColor: edgeColor(hover.edge.type) }}
+                  style={{ backgroundColor: edgeColor(hoverEdge.type) }}
                   aria-hidden
                 />
-                {EDGE_TYPE_LABEL(hover.edge.type)}
+                {EDGE_TYPE_LABEL(hoverEdge.type)}
                 <span className="numeric ml-auto text-ink-2">
-                  {Math.round(hover.edge.confidence * 100)}%
+                  {Math.round(hoverEdge.confidence * 100)}%
                 </span>
               </p>
-              {hover.edge.reason ? (
-                <p className="mt-1 text-[12px] leading-snug text-ink-3">{hover.edge.reason}</p>
+              {hoverEdge.reason ? (
+                <p className="mt-1 text-[12px] leading-snug text-ink-3">{hoverEdge.reason}</p>
               ) : (
                 <p className="mt-1 text-[12px] text-ink-3">Gerekçe kaydı yok.</p>
               )}
             </div>
           )}
 
-          {selectedNode && (
-            <p className="pointer-events-none absolute bottom-3 left-3 text-[12px] text-ink-3">
-              Bir düğüme tıklayın — Esc ile paneli kapatın
-            </p>
-          )}
+          <p className="pointer-events-none absolute bottom-3 left-3 max-w-[calc(100%-200px)] text-[12px] text-ink-3">
+            {selectedIds.length > 1
+              ? `${selectedIds.length} düğüm seçili — Esc ile temizleyin`
+              : "Shift-sürükle kutu seçimi · Ctrl/Shift-tık çoklu seçim · sağ tık eylemler"}
+          </p>
         </div>
 
         {selectedNode && (
@@ -1548,7 +1362,7 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
             aria-modal="false"
             aria-labelledby="entity-panel-title"
             tabIndex={-1}
-            className="panel flex max-h-[620px] flex-col overflow-hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/25"
+            className="panel flex max-h-[70vh] flex-col overflow-hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/25"
           >
             <div className="flex items-start justify-between gap-3 border-b border-line px-4 py-3">
               <div className="min-w-0">
@@ -1559,7 +1373,7 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
                   <span className="inline-flex items-center gap-1.5 text-[12px] text-ink-3">
                     <span
                       className="h-2 w-2 shrink-0 rounded-[1px]"
-                      style={{ backgroundColor: platformColor(selectedNode.platform, theme) }}
+                      style={{ backgroundColor: platformColor(selectedNode.platform) }}
                       aria-hidden
                     />
                     {platformMeta(selectedNode.platform).label}
@@ -1718,7 +1532,7 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
                         {other && (
                           <button
                             type="button"
-                            onClick={() => setSelectedId(other.id)}
+                            onClick={() => jumpToNode(other.id)}
                             className="mt-1 block max-w-full truncate text-left text-[12px] text-accent-ink hover:underline"
                             title={`${other.label} — ${other.platform}`}
                           >
@@ -1737,6 +1551,324 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
           </aside>
         )}
       </div>
+      <details className="panel">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-[13px] font-medium text-ink [&::-webkit-details-marker]:hidden">
+          <span>Filtreler</span>
+          <span className="numeric text-[12px] font-normal text-ink-3">
+            {visibleNodes.length}/{nodes.length} düğüm · {visibleEdges.length}/{edges.length} kenar
+          </span>
+        </summary>
+        <div className="space-y-4 px-4 py-4">
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+          <label className="flex min-w-[280px] flex-1 items-center gap-3 text-[12px] text-ink-3">
+            <span className="whitespace-nowrap">
+              Güven eşiği{" "}
+              <span className="numeric text-ink">{prefs.minConfidence.toFixed(2)}</span>
+            </span>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={prefs.minConfidence}
+              onChange={(e) => updatePrefs({ minConfidence: Number(e.target.value) })}
+              aria-label="Kenar güven eşiği"
+              className="h-1 w-full max-w-xs cursor-pointer accent-[rgb(var(--accent))]"
+            />
+            <span className="numeric whitespace-nowrap text-ink-3">
+              {hiddenEdges > 0 ? `${hiddenEdges} gizli` : "tümü görünür"}
+            </span>
+          </label>
+
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <span className="text-[12px] text-ink-3">Kenar tipi</span>
+            {edgeTypeCounts.length === 0 && (
+              <span className="text-[12px] text-ink-3">kenar yok</span>
+            )}
+            {edgeTypeCounts.map(([type, count]) => {
+              const included = prefs.edgeTypes.includes(type);
+              const active = prefs.edgeTypes.length === 0 || included;
+              return (
+                <button
+                  key={type}
+                  type="button"
+                  aria-pressed={included}
+                  aria-label={`${EDGE_TYPE_LABEL(type)} kenar tipini ${
+                    included ? "filtreden çıkar" : "filtreye ekle"
+                  }`}
+                  onClick={() => toggleEdgeType(type)}
+                  className={`inline-flex items-center gap-1.5 text-[12px] transition-colors ${
+                    active ? "text-ink-2" : "text-ink-3 line-through"
+                  }`}
+                >
+                  <span
+                    className="h-2 w-2 shrink-0 rounded-[1px]"
+                    style={{ backgroundColor: active ? edgeColor(type) : MUTED_DOT }}
+                    aria-hidden
+                  />
+                  {EDGE_TYPE_LABEL(type)}
+                  <span className="numeric text-ink-3">{count}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-line pt-4">
+          <span className="text-[12px] text-ink-3">Platform</span>
+          {platformCounts.map(([platform, count]) => {
+            const included = prefs.platforms.includes(platform);
+            const active = prefs.platforms.length === 0 || included;
+            return (
+              <button
+                key={platform}
+                type="button"
+                aria-pressed={included}
+                aria-label={`${platformMeta(platform).label} platformunu ${
+                  included ? "filtreden çıkar" : "filtreye ekle"
+                }`}
+                onClick={() => togglePlatform(platform)}
+                className={`inline-flex items-center gap-1.5 text-[12px] transition-colors ${
+                  active ? "text-ink-2" : "text-ink-3 line-through"
+                }`}
+              >
+                <span
+                  className="h-2 w-2 shrink-0 rounded-[1px]"
+                  style={{
+                    backgroundColor: active ? platformColor(platform) : MUTED_DOT,
+                  }}
+                  aria-hidden
+                />
+                {platformMeta(platform).label}
+                <span className="numeric text-ink-3">{count}</span>
+              </button>
+            );
+          })}
+          {(prefs.platforms.length > 0 ||
+            prefs.edgeTypes.length > 0 ||
+            prefs.minConfidence > 0 ||
+            prefs.minScore > 0 ||
+            prefs.connectedOnly ||
+            prefs.clusterId) && (
+            <button
+              type="button"
+              onClick={resetFilters}
+              className="btn-quiet btn-sm"
+              aria-label="Filtreleri sıfırla"
+            >
+              <X size={12} aria-hidden />
+              Sıfırla
+            </button>
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-line pt-4">
+          <label className="flex min-w-[240px] flex-1 items-center gap-3 text-[12px] text-ink-3">
+            <span className="whitespace-nowrap">
+              Düğüm skoru{" "}
+              <span className="numeric text-ink">{prefs.minScore.toFixed(2)}</span>
+            </span>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={prefs.minScore}
+              onChange={(e) => updatePrefs({ minScore: Number(e.target.value) })}
+              aria-label="Düğüm güven skoru eşiği"
+              className="h-1 w-full max-w-xs cursor-pointer accent-[rgb(var(--accent))]"
+            />
+          </label>
+          <button
+            type="button"
+            aria-pressed={prefs.connectedOnly}
+            onClick={() => updatePrefs({ connectedOnly: !prefs.connectedOnly })}
+            title="Kenarı olmayan, tek başına duran kayıtları gizle"
+            className={`inline-flex items-center gap-1.5 text-[12px] transition-colors ${
+              prefs.connectedOnly ? "font-medium text-ink" : "text-ink-3 hover:text-ink"
+            }`}
+          >
+            <Focus size={12} aria-hidden />
+            Yalnız bağlı düğümler
+          </button>
+        </div>
+        {multiClusters.length > 0 && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-line pt-4">
+            <span className="text-[12px] text-ink-3">Kimlik kümesi</span>
+            <button
+              type="button"
+              aria-pressed={prefs.clusterId === null}
+              onClick={() => updatePrefs({ clusterId: null })}
+              className={`rounded-[4px] px-1.5 py-0.5 text-[12px] transition-colors ${
+                prefs.clusterId === null
+                  ? "bg-sunken font-medium text-ink"
+                  : "text-ink-3 hover:text-ink"
+              }`}
+            >
+              Tümü
+            </button>
+            {multiClusters.slice(0, 8).map((cluster) => {
+              const active = prefs.clusterId === cluster.id;
+              return (
+                <button
+                  key={cluster.id}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() =>
+                    updatePrefs({ clusterId: active ? null : cluster.id })
+                  }
+                  title={`${cluster.reasons[0] ?? cluster.platforms.join(", ")} — ${cluster.evidence_count} kanıt`}
+                  className={`inline-flex items-center gap-1.5 rounded-[4px] px-1.5 py-0.5 text-[12px] transition-colors ${
+                    active
+                      ? "bg-accent-soft font-medium text-accent-ink"
+                      : "text-ink-3 hover:text-ink"
+                  }`}
+                >
+                  <Layers size={11} aria-hidden />
+                  <span className="numeric">{cluster.size}</span> hesap
+                  <span className="numeric text-ink-3">
+                    {Math.round(cluster.max_confidence * 100)}%
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-line pt-4">
+          <button
+            type="button"
+            aria-pressed={prefs.collapseHubs}
+            onClick={() => updatePrefs({ collapseHubs: !prefs.collapseHubs })}
+            title="Çok yapraklı hub düğümlerinin yapraklarını tek +N düğümünde topla"
+            className={`inline-flex items-center gap-1.5 text-[12px] transition-colors ${
+              prefs.collapseHubs ? "font-medium text-ink" : "text-ink-3 hover:text-ink"
+            }`}
+          >
+            <Layers size={12} aria-hidden />
+            Hub'ları daralt
+            {hubGroups.size > 0 && (
+              <span className="numeric text-ink-3">{hubGroups.size}</span>
+            )}
+          </button>
+          {expandedHubs.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setExpandedHubs([])}
+              className="text-[12px] text-accent-ink underline decoration-accent-line underline-offset-2 hover:decoration-accent"
+            >
+              Açılan hub'ları yeniden daralt ({expandedHubs.length})
+            </button>
+          )}
+          {(scope.expand.length > 0 || scope.hide.length > 0 || scope.only) && (
+            <button
+              type="button"
+              onClick={() => setScope({ expand: [], hide: [], only: null })}
+              className="btn-quiet btn-sm"
+              aria-label="Grafik kapsamını sıfırla"
+            >
+              <X size={12} aria-hidden />
+              Kapsamı sıfırla
+            </button>
+          )}
+        </div>
+        </div>
+      </details>
+
+      <details className="panel">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-[13px] font-medium text-ink [&::-webkit-details-marker]:hidden">
+          <span>Yol</span>
+          <span className="text-[12px] font-normal text-ink-3">
+            {pathNodeIds.length > 0 ? `${pathNodeIds.length - 1} adım vurgulu` : "En kısa bağlantı yolunu bul"}
+          </span>
+        </summary>
+        <div className="space-y-3 px-4 py-4">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <span className="text-[12px] text-ink-3">Bağlantı yolu</span>
+          <select
+            value={pathFrom}
+            onChange={(e) => setPathFrom(e.target.value)}
+            aria-label="Yol başlangıç düğümü"
+            className="select w-auto max-w-[190px] py-1 text-[12px]"
+          >
+            <option value="">Başlangıç…</option>
+            {visibleNodes.map((node) => (
+              <option key={node.id} value={node.id}>
+                {node.label} · {platformMeta(node.platform).label}
+              </option>
+            ))}
+          </select>
+          <span className="text-ink-3" aria-hidden>
+            →
+          </span>
+          <select
+            value={pathTo}
+            onChange={(e) => setPathTo(e.target.value)}
+            aria-label="Yol hedef düğümü"
+            className="select w-auto max-w-[190px] py-1 text-[12px]"
+          >
+            <option value="">Hedef…</option>
+            {visibleNodes.map((node) => (
+              <option key={node.id} value={node.id}>
+                {node.label} · {platformMeta(node.platform).label}
+              </option>
+            ))}
+          </select>
+          <button type="button" onClick={findShortestPath} className="btn-secondary btn-sm">
+            Yolu bul
+          </button>
+          {(pathNodeIds.length > 0 || pathError) && (
+            <button type="button" onClick={clearPath} className="btn-quiet btn-sm">
+              <X size={12} aria-hidden />
+              Temizle
+            </button>
+          )}
+        </div>
+
+        {pathError && (
+          <p role="alert" className="rounded-[6px] border border-warn-line bg-warn-soft px-3 py-2 text-[12px] text-warn">
+            {pathError}
+          </p>
+        )}
+
+        {pathNodeIds.length > 0 && (
+          <div className="rounded-[6px] border border-accent-line bg-accent-soft px-3 py-2 text-[12px] text-accent-ink">
+            <p className="font-medium">
+              En kısa yol · {pathNodeIds.length - 1} adım
+            </p>
+            <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-ink-2">
+              {pathNodeIds.map((nodeId, index) => {
+                const node = nodes.find((item) => item.id === nodeId);
+                return (
+                  <span key={`${nodeId}-${index}`} className="inline-flex items-center gap-1.5">
+                    {index > 0 && (
+                      <span className="text-ink-3" aria-hidden>
+                        →
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => jumpToNode(nodeId)}
+                      className="hover:underline"
+                    >
+                      {node?.label ?? nodeId}
+                      {node && (
+                        <span className="ml-1 text-[11px] text-ink-3">
+                          {platformMeta(node.platform).label}
+                        </span>
+                      )}
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
+            <p className="mt-1 text-[11.5px] text-ink-3">
+              Vurgu grafikte sarı kenarlarla gösterilir.
+            </p>
+          </div>
+        )}
+        </div>
+      </details>
+
     </div>
   );
 }
