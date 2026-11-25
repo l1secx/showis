@@ -12,6 +12,7 @@ const TABS = [
   { key: "hypotheses", label: "Hipotezler", href: "hypotheses" },
   { key: "evidence", label: "Kanıt", href: "evidence" },
   { key: "watch", label: "İzleme", href: "watch" },
+  { key: "timeline", label: "Zaman çizelgesi", href: "timeline" },
   { key: "supply-chain", label: "Tedarik Zinciri", href: "supply-chain" },
   { key: "scan", label: "Tarama", href: "scan" },
   { key: "findings", label: "Bulgular", href: "findings" },
@@ -149,8 +150,11 @@ export default function CaseLayout({ children }: { children: React.ReactNode }) 
         {/* Kayıt başlığı */}
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
-            <nav className="flex items-center gap-1.5 text-[12px] text-ink-3">
-              <Link href="/" className="transition-colors hover:text-ink">
+            <nav aria-label="Sayfayolu" className="flex items-center gap-1.5 text-[12px] text-ink-3">
+              <Link
+                href="/"
+                className="inline-flex items-center transition-colors hover:text-ink max-sm:min-h-[40px]"
+              >
                 Vakalar
               </Link>
               <span className="text-ink-3" aria-hidden>
@@ -158,16 +162,16 @@ export default function CaseLayout({ children }: { children: React.ReactNode }) 
               </span>
               <span className="numeric text-ink-3">{id.slice(0, 8)}</span>
             </nav>
-            <h1 className="page-title mt-1.5 truncate">
+            <h1 className="page-title mt-1.5 break-words">
               {caseData?.name ?? "Vaka kaydı"}
             </h1>
 
             {fields.length > 0 && (
               <dl className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-1.5">
                 {fields.map((f) => (
-                  <div key={f.label} className="flex items-baseline gap-1.5">
-                    <dt className="text-[12px] text-ink-3">{f.label}</dt>
-                    <dd className="text-[12.5px] font-medium text-ink-2">{f.value}</dd>
+                  <div key={f.label} className="flex min-w-0 items-baseline gap-1.5">
+                    <dt className="shrink-0 text-[12px] text-ink-3">{f.label}</dt>
+                    <dd className="break-words text-[12.5px] font-medium text-ink-2">{f.value}</dd>
                   </div>
                 ))}
                 {caseData?.target?.review_required && (
@@ -194,7 +198,7 @@ export default function CaseLayout({ children }: { children: React.ReactNode }) 
 
         {/* Sekmeler */}
         <div>
-          <div className="scroll-x flex gap-6 border-b border-line">
+          <nav aria-label="Vaka sekmeleri" className="scroll-x flex gap-6 border-b border-line pb-px">
             {TABS.map((t) => {
               const href = `${base}/${t.href}`;
               const active = pathname === href || pathname === `${href}/`;
@@ -204,7 +208,7 @@ export default function CaseLayout({ children }: { children: React.ReactNode }) 
                   href={href}
                   prefetch={false}
                   aria-current={active ? "page" : undefined}
-                  className={`relative flex items-center pb-2.5 pt-1 text-[13px] transition-colors ${
+                  className={`relative flex min-h-[40px] shrink-0 items-center justify-center whitespace-nowrap pb-2.5 pt-1 text-[13px] transition-colors max-sm:min-w-[40px] ${
                     active
                       ? "font-medium text-ink after:absolute after:inset-x-0 after:bottom-[-1px] after:h-[2px] after:bg-accent"
                       : "text-ink-3 hover:text-ink"
@@ -214,7 +218,7 @@ export default function CaseLayout({ children }: { children: React.ReactNode }) 
                 </Link>
               );
             })}
-          </div>
+          </nav>
 
           <div className="pt-6">{children}</div>
         </div>
