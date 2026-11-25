@@ -98,6 +98,11 @@ class Case(Base):
     owner: Mapped[str | None] = mapped_column(String(128), nullable=True)
     #: Tarama tamamlandığında POST edilecek webhook (SSRF guard ile).
     webhook_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Havuzda kullanıcı kararı/düzenlemesi sonrası muhakeme çıktıları bayat.
+    #: Korelasyon veya hipotez üretimi çalışınca temizlenir.
+    reasoning_stale_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

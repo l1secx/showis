@@ -10,14 +10,18 @@ import test_research_interactive as _interactive
 import test_research_workspace as _workspace
 from showis.db.models import Case as DbCase
 from showis.db.models import PoolItem, ResearchSession, SupplyChainEdge, SupplyChainNode
+from showis.services.pool import create_item
 from showis.services.research import (
     DEPTH_PROFILES,
     MAX_QUEUED_WRITES_PER_AGENT,
     ResearchRuntime,
     SubagentContext,
+    SubagentReport,
+    SubagentSpec,
     _apply_write_intents,
     _BudgetGate,
     _run_subagent,
+    _run_subagent_wave,
     _subagent_tool,
     _subagent_tool_specs,
 )
@@ -200,3 +204,69 @@ async def test_start_scan_rejected_outside_agent_mode(db_factory, client):
             runtime, [{"tool": "start_scan", "input": {}, "agent": 0}]
         )
         assert outcomes[0]["ok"] is False and "tam ajan" in outcomes[0]["error"]
+
+
+@pytest.mark.asyncio
+async def test_supply_chain_context_refreshes_after_wave_writes(db_factory, client):
+    """Ajanın yazdığı tedarik zinciri kayıtları sonraki dalga/sentez bağlamına girer."""
+    async with db_factory() as db:
+        runtime, _, _ = await _runtime(db, client, db_factory, "research")
+        assert runtime.supply_chain_text == ""
+        outcomes = await _apply_write_intents(
+            runtime,
+            [
+                {"tool": "add_supply_chain_node", "input": {"name": "Acme Ltd"}, "agent": 0},
+                {"tool": "add_supply_chain_node", "input": {"name": "Beta AŞ"}, "agent": 0},
+                {
+                    "tool": "add_supply_chain_edge",
+                    "input": {"source": "Acme Ltd", "target": "Beta AŞ", "relation": "supplies"},
+                    "agent": 0,
+                },
+            ],
+        )
+        assert [o["ok"] for o in outcomes] == [True, True, True]
+    assert "Acme Ltd" in runtime.supply_chain_text
+    assert "supplies" in runtime.supply_chain_text
+
+
+@pytest.mark.asyncio
+async def test_wave_pool_snapshot_sees_items_added_after_session_start(
+    db_factory, client, monkeypatch
+):
+    """Dalga havuz anlık görüntüsü DB'den tazelenir; onaylı yeni kayıt ajan bağlamına girer."""
+    captured: list[list[dict[str, Any]]] = []
+
+    async def fake_subagent(ctx: SubagentContext):
+        captured.append(list(ctx.pool_snapshot))
+        return SubagentReport(summary="tamam"), {"role": ctx.role}
+
+    monkeypatch.setattr("showis.services.research._run_subagent", fake_subagent)
+    async with db_factory() as db:
+        runtime, case_id, _ = await _runtime(db, client, db_factory, "research")
+        runtime.search_provider = _interactive._Provider()
+        assert runtime.pool_items == []
+        await create_item(
+            db,
+            case_id=case_id,
+            kind="organization",
+            label="Onaylı Tedarikçi",
+            value="Delta Lojistik",
+            source="user",
+            status="confirmed",
+        )
+        await create_item(
+            db,
+            case_id=case_id,
+            kind="organization",
+            label="Reddedilen",
+            value="Gizli Lojistik",
+            source="ai",
+            status="rejected",
+        )
+        await db.commit()
+        specs = [SubagentSpec(role="business_analyst", objective="tedarik zinciri")]
+        await _run_subagent_wave(runtime, specs, wave=1)
+    assert captured
+    values = {row["value"] for row in captured[0]}
+    assert "Delta Lojistik" in values
+    assert "Gizli Lojistik" not in values

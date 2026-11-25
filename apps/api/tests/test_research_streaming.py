@@ -220,3 +220,44 @@ async def test_synthesize_bio_streams_summary(db_factory, client):
     tokens = "".join(e["data"]["text"] for e in _drain(queue) if e["type"] == "research.token")
     assert tokens == "Ankara'da yazılım geliştirici."
     assert BioDraft.model_validate(json.loads(payload)).headline == "Kerem Boz"
+
+
+class _BrokenClient:
+    async def stream(self, *args, **kwargs):
+        for event in ():
+            yield event
+        raise RuntimeError("llm yok")
+
+    async def complete(self, *args, **kwargs):
+        raise RuntimeError("llm yok")
+
+
+@pytest.mark.asyncio
+async def test_synthesize_bio_does_not_rewrite_user_confirmed_row(db_factory, client):
+    """AI, kullanıcının onayladığı biyografiyi ezmez; yeni öneri kaydı açar."""
+    from showis.db.models import PoolItem
+    from showis.services.pool import create_item
+
+    async with db_factory() as db:
+        runtime, _ = await _runtime(db, client, db_factory, _llm())
+        confirmed, _ = await create_item(
+            db,
+            case_id=runtime.case.id,
+            kind="bio",
+            label="Onaylı biyografi",
+            value="ONAYLI BIO",
+            source="user",
+            status="confirmed",
+        )
+        await db.commit()
+        runtime.reasoner_client = _BrokenClient()
+        markdown, _ = await _synthesize_bio(runtime, pool_rows=[], pool_text="")
+        assert markdown
+        bios = (
+            (await db.execute(select(PoolItem).where(PoolItem.kind == "bio"))).scalars().all()
+        )
+        kept = next(row for row in bios if row.id == confirmed.id)
+        assert kept.value == "ONAYLI BIO" and kept.status == "confirmed"
+        assert any(
+            row.id != confirmed.id and row.status in {"proposed", "candidate"} for row in bios
+        )

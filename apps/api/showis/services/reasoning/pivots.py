@@ -20,6 +20,18 @@ from showis.services.phone import PhoneInfo, parse_phone, phone_attributes, sear
 from showis.services.pool import create_item
 from showis.services.reasoning.avatars import hash_item_avatar
 from showis.services.reasoning.graph import upsert_relation
+from showis_connectors.domain_intel import (
+    CRT_SH_PAGE,
+    DNS_DOH_PAGE,
+    WAYBACK_PAGE,
+    DomainIntelError,
+    fetch_dns_records,
+    fetch_rdap_record,
+    fetch_subdomains,
+    fetch_wayback_history,
+    normalize_domain,
+)
+from showis_engine.http import HttpClient
 from showis_engine.variants import generate_variants
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -130,6 +142,34 @@ PIVOTS: tuple[Pivot, ...] = (
         True,
     ),
     Pivot("domain_site", "Site adresi", ("domain",), "Alan adının ana sayfa adresi."),
+    Pivot(
+        "domain_subdomains",
+        "Alt alan adları (crt.sh)",
+        ("domain",),
+        "Sertifika şeffaflığı kayıtlarından alt alan adları; joker ayıklanır.",
+        True,
+    ),
+    Pivot(
+        "domain_dns",
+        "DNS kayıtları",
+        ("domain",),
+        "A/AAAA/MX/NS/TXT çözümlemesi; SPF ve doğrulama ipuçları.",
+        True,
+    ),
+    Pivot(
+        "domain_rdap",
+        "Kayıt bilgisi (RDAP)",
+        ("domain",),
+        "Kayıt tarihi, registrar ve ad sunucuları; redakte alanlar korunur.",
+        True,
+    ),
+    Pivot(
+        "domain_archive",
+        "Arşiv geçmişi (Wayback)",
+        ("domain",),
+        "Arşivde ilk/son görülme ve örnek URL'ler.",
+        True,
+    ),
     Pivot(
         "url_fetch",
         "Sayfayı oku",
@@ -439,6 +479,244 @@ async def _domain_site(ctx: _Ctx) -> None:
         await ctx.relate(node, ctx.item, "linked_from", 1.0, "alan adı ana sayfası")
 
 
+def _domain_http_client() -> HttpClient:
+    """Pivot ağı için politikalı istemci: SSRF kapısı açık, robots kapalı.
+
+    Bu uçlar girişsiz kamuya açık API'lerdir; sayfa okuma değil JSON sorgusu
+    yapılır. HTTP istek bütçesi ve SSRF kapısı HttpClient içinde korunur.
+    """
+    return HttpClient(timeout=15.0, enable_ssrf_guard=True)
+
+
+async def _guarded_domain(value: str) -> str:
+    try:
+        return normalize_domain(value)
+    except DomainIntelError as exc:
+        raise PivotError(str(exc)) from exc
+
+
+def _intel_failure(exc: DomainIntelError) -> PivotError:
+    return PivotError(str(exc))
+
+
+async def _domain_subdomains(ctx: _Ctx) -> None:
+    domain = await _guarded_domain(ctx.item.value)
+    client = _domain_http_client()
+    try:
+        names = await fetch_subdomains(client, domain)
+    except DomainIntelError as exc:
+        raise _intel_failure(exc) from exc
+    if not names:
+        ctx.result.notes.append("crt.sh kayıtlarında alt alan adı bulunamadı.")
+        return
+    attributes = dict(ctx.item.attributes or {})
+    intel = dict(attributes.get("domain_intel") or {})
+    intel["subdomains"] = {
+        "names": names,
+        "count": len(names),
+        "source": "crt.sh",
+        "source_url": CRT_SH_PAGE.format(domain=domain),
+    }
+    attributes["domain_intel"] = intel
+    ctx.item.attributes = attributes
+    added = 0
+    for name in names:
+        node = await ctx.add_item(
+            "domain",
+            name,
+            f"Alt alan adı ({name})",
+            confidence=0.55,
+            attributes={
+                "parent_domain": domain,
+                "source": "crt.sh",
+                "source_url": CRT_SH_PAGE.format(domain=domain),
+            },
+            reason="sertifika şeffaflığı kaydı",
+        )
+        if node is not None:
+            added += 1
+            await ctx.relate(node, ctx.item, "linked_from", 1.0, "crt.sh alt alan adı")
+    ctx.result.notes.append(
+        f"crt.sh: {len(names)} tekil alt alan adı bulundu, {added} kadarı havuza eklendi; "
+        "joker ve yinelenenler ayıklandı."
+    )
+
+
+async def _domain_dns(ctx: _Ctx) -> None:
+    domain = await _guarded_domain(ctx.item.value)
+    client = _domain_http_client()
+    try:
+        records = await fetch_dns_records(client, domain)
+    except DomainIntelError as exc:
+        raise _intel_failure(exc) from exc
+
+    attributes = dict(ctx.item.attributes or {})
+    intel = dict(attributes.get("domain_intel") or {})
+    dns_payload = {
+        key: value
+        for key, value in {
+            "a": records.a,
+            "aaaa": records.aaaa,
+            "mx": records.mx,
+            "ns": records.ns,
+            "txt": records.txt,
+            "spf": records.spf,
+            "verification": records.verification,
+            "source": "dns.google",
+            "source_url": DNS_DOH_PAGE.format(domain=domain),
+        }.items()
+        if value
+    }
+    intel["dns"] = dns_payload
+    attributes["domain_intel"] = intel
+    ctx.item.attributes = attributes
+
+    for address in records.a[:4]:
+        node = await ctx.add_item(
+            "ip",
+            address,
+            f"IPv4 ({address})",
+            confidence=0.5,
+            attributes={"domain": domain, "record": "A", "source": "dns.google"},
+            reason="A kaydı",
+        )
+        if node is not None:
+            await ctx.relate(node, ctx.item, "linked_from", 1.0, "A kaydı")
+    for address in records.aaaa[:2]:
+        node = await ctx.add_item(
+            "ip",
+            address,
+            f"IPv6 ({address})",
+            confidence=0.45,
+            attributes={"domain": domain, "record": "AAAA", "source": "dns.google"},
+            reason="AAAA kaydı",
+        )
+        if node is not None:
+            await ctx.relate(node, ctx.item, "linked_from", 0.8, "AAAA kaydı")
+    for mail_host in records.mx[:3]:
+        node = await ctx.add_item(
+            "domain",
+            mail_host,
+            f"MX ({mail_host})",
+            confidence=0.45,
+            attributes={"domain": domain, "record": "MX", "source": "dns.google"},
+            reason="MX kaydı",
+        )
+        if node is not None:
+            await ctx.relate(ctx.item, node, "linked_from", 1.0, "MX kaydı")
+    for ns_host in records.ns[:6]:
+        if ns_host == domain:
+            continue
+        node = await ctx.add_item(
+            "domain",
+            ns_host,
+            f"NS ({ns_host})",
+            confidence=0.5,
+            attributes={"domain": domain, "record": "NS", "source": "dns.google"},
+            reason="NS kaydı",
+        )
+        if node is not None:
+            await ctx.relate(ctx.item, node, "linked_from", 1.0, "NS kaydı")
+
+    if records.is_empty():
+        ctx.result.notes.append("DNS: kayıt bulunamadı (NXDOMAIN veya boş yanıt).")
+    if records.spf:
+        ctx.result.notes.append(f"SPF: {' | '.join(records.spf)[:300]}")
+    if records.verification:
+        ctx.result.notes.append(
+            f"TXT doğrulama kayıtları: {len(records.verification)} adet "
+            "(üçüncü taraf hizmet kanıtı)."
+        )
+    if records.warnings:
+        ctx.result.notes.append(f"{len(records.warnings)} DNS türü alınamadı.")
+
+
+async def _domain_rdap(ctx: _Ctx) -> None:
+    domain = await _guarded_domain(ctx.item.value)
+    client = _domain_http_client()
+    try:
+        record = await fetch_rdap_record(client, domain)
+    except DomainIntelError as exc:
+        raise _intel_failure(exc) from exc
+
+    attributes = dict(ctx.item.attributes or {})
+    intel = dict(attributes.get("domain_intel") or {})
+    intel["rdap"] = record
+    attributes["domain_intel"] = intel
+    ctx.item.attributes = attributes
+
+    for nameserver in (record.get("nameservers") or [])[:6]:
+        node = await ctx.add_item(
+            "domain",
+            nameserver,
+            f"Ad sunucusu ({nameserver})",
+            confidence=0.5,
+            attributes={
+                "domain": domain,
+                "record": "RDAP",
+                "source": "rdap.org",
+                "source_url": record.get("source_url"),
+            },
+            reason="RDAP ad sunucusu",
+        )
+        if node is not None:
+            await ctx.relate(ctx.item, node, "linked_from", 1.0, "RDAP ad sunucusu")
+
+    parts = [
+        f"registrar: {record.get('registrar')}" if record.get("registrar") else "",
+        f"kayıt: {record.get('created_at')}" if record.get("created_at") else "",
+        f"bitiş: {record.get('expires_at')}" if record.get("expires_at") else "",
+    ]
+    summary = "; ".join(part for part in parts if part) or "kayıt ayrıntısı sınırlı"
+    ctx.result.notes.append(f"RDAP — {summary}")
+    if record.get("statuses"):
+        ctx.result.notes.append(f"Durumlar: {', '.join(record['statuses'][:6])}")
+
+
+async def _domain_archive(ctx: _Ctx) -> None:
+    domain = await _guarded_domain(ctx.item.value)
+    client = _domain_http_client()
+    try:
+        history = await fetch_wayback_history(client, domain)
+    except DomainIntelError as exc:
+        raise _intel_failure(exc) from exc
+
+    attributes = dict(ctx.item.attributes or {})
+    intel = dict(attributes.get("domain_intel") or {})
+    intel["wayback"] = history
+    attributes["domain_intel"] = intel
+    ctx.item.attributes = attributes
+
+    for sample in (history.get("samples") or [])[:6]:
+        url = str(sample.get("url") or "")
+        if not url:
+            continue
+        node = await ctx.add_item(
+            "url",
+            url,
+            f"Arşiv örneği — {url[:100]}",
+            confidence=0.35,
+            attributes={
+                "domain": domain,
+                "timestamp": sample.get("timestamp"),
+                "record": "wayback",
+                "source": "web.archive.org",
+                "source_url": WAYBACK_PAGE.format(domain=domain),
+            },
+            reason="Wayback CDX örneği",
+        )
+        if node is not None:
+            await ctx.relate(ctx.item, node, "linked_from", 0.5, "arşiv örneği")
+
+    if history.get("count"):
+        ctx.result.notes.append(
+            f"Wayback: {history['count']} URL; ilk {history.get('first_seen')}, "
+            f"son {history.get('last_seen')}."
+        )
+    else:
+        ctx.result.notes.append("Wayback: arşivlenmiş URL bulunamadı.")
+
+
 async def _url_fetch(ctx: _Ctx) -> None:
     from showis.services.research import ToolError, _fetch_public_page
 
@@ -520,6 +798,10 @@ _HANDLERS: dict[str, Callable[[_Ctx], Awaitable[None]]] = {
     "phone_normalize": _phone_normalize,
     "phone_search": _phone_search,
     "domain_site": _domain_site,
+    "domain_subdomains": _domain_subdomains,
+    "domain_dns": _domain_dns,
+    "domain_rdap": _domain_rdap,
+    "domain_archive": _domain_archive,
     "url_fetch": _url_fetch,
 }
 

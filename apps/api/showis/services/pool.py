@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import hashlib
 import re
+from datetime import datetime, timezone
 from typing import Any, Iterable, Sequence
 
 from showis.db.models import Case, CaseComment, PoolItem, Seed, Target
 from showis.services.phone import parse_phone, phone_attributes
 from showis_engine.variants import normalize_turkish
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,6 +41,11 @@ POOL_KINDS: frozenset[str] = frozenset(
 )
 POOL_SOURCES: frozenset[str] = frozenset({"user", "scan", "ai", "import"})
 POOL_STATUSES: frozenset[str] = frozenset({"proposed", "candidate", "confirmed", "rejected"})
+
+#: Toplu durum ucunda kullanıcının verebileceği kararlar (AI için değil).
+BULK_STATUSES: frozenset[str] = frozenset({"confirmed", "rejected"})
+#: Tek istekte işlenebilecek en fazla öğe kimliği.
+MAX_BULK_ITEMS = 200
 
 MAX_LABEL = 256
 MAX_VALUE = 20000
@@ -170,6 +176,9 @@ async def create_item(
     status = str(status or ("confirmed" if source == "user" else "candidate")).strip().lower()
     if status not in POOL_STATUSES:
         raise PoolValidationError(f"gecersiz durum: {status}")
+    if source != "user" and status == "confirmed":
+        # Değişmez: AI/tarama/pivot yalnız proposed/candidate yazar.
+        status = "proposed"
     confidence = max(0.0, min(1.0, float(confidence or 0.0)))
 
     existing = (
@@ -493,3 +502,70 @@ def format_context(items: Sequence[PoolItem], limit: int = 60) -> str:
             f"- [{item.kind}] {item.label}: {value}{extra} (kaynak={item.source})"
         )
     return "\n".join(lines)
+
+
+def mark_reasoning_stale(case: Case, *, now: datetime | None = None) -> None:
+    """Kullanıcı havuz kararı/düzenlemesi sonrası muhakeme çıktılarını bayatlatır.
+
+    `reasoning_stale_at` yalnız ilk bayatlamada yazılır; art arda kararlar aynı
+    zaman damgasını korur ki istemci "ne zamandan beri bayat" bilgisini tutarlı görsün.
+    Commit çağırana aittir.
+    """
+    if case.reasoning_stale_at is None:
+        case.reasoning_stale_at = now or datetime.now(timezone.utc)
+
+
+async def clear_reasoning_stale(db: AsyncSession, case_id: str) -> None:
+    """Korelasyon/hipotez üretimi muhakemeyi tazeler; bayat damgasını temizler.
+
+    Çağıranın transaction'ında çalışır; ayrı commit açmaz.
+    """
+    await db.execute(
+        update(Case)
+        .where(Case.id == case_id, Case.reasoning_stale_at.is_not(None))
+        .values(reasoning_stale_at=None)
+    )
+
+
+async def bulk_set_status(
+    db: AsyncSession,
+    *,
+    case_id: str,
+    item_ids: Sequence[str],
+    status: str,
+    now: datetime | None = None,
+) -> tuple[int, int]:
+    """Yalnız bu vakanın öğelerine toplu durum yazar; tek transaction çağıranın.
+
+    Dönüş: `(updated, skipped)`. Tekrarlanan kimlik bir kez sayılır; bu vakanın
+    dışındaki veya var olmayan kimlikler `skipped` olur. `status` yalnız
+    `confirmed|rejected` olabilir (kullanıcı kararı; AI yolu bu işlevi çağırmaz).
+    """
+    if status not in BULK_STATUSES:
+        raise PoolValidationError(f"gecersiz toplu durum: {status}")
+    unique_ids = list(dict.fromkeys(str(item_id) for item_id in item_ids))
+    if not unique_ids:
+        raise PoolValidationError("item_ids bos olamaz")
+    if len(unique_ids) > MAX_BULK_ITEMS:
+        raise PoolValidationError(f"item_ids en fazla {MAX_BULK_ITEMS} olabilir")
+
+    owned = (
+        (
+            await db.execute(
+                select(PoolItem.id).where(
+                    PoolItem.case_id == case_id, PoolItem.id.in_(unique_ids)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    owned_ids = list(owned)
+    if owned_ids:
+        await db.execute(
+            update(PoolItem)
+            .where(PoolItem.case_id == case_id, PoolItem.id.in_(owned_ids))
+            .values(status=status, updated_at=now or datetime.now(timezone.utc))
+        )
+    await db.flush()
+    return len(owned_ids), len(unique_ids) - len(owned_ids)

@@ -411,7 +411,7 @@ def test_alembic_single_head_is_latest():
     cfg = Config(str(root / "alembic.ini"))
     cfg.set_main_option("script_location", str(root / "alembic"))
     heads = ScriptDirectory.from_config(cfg).get_heads()
-    assert heads == ["0023_watch_alerts"]
+    assert heads == ["0024_case_reasoning_stale"]
 
 
 @pytest.mark.asyncio

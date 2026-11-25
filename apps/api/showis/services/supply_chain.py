@@ -85,6 +85,9 @@ async def create_node(
     status = str(status or ("confirmed" if source == "user" else "candidate")).strip().lower()
     if status not in POOL_STATUSES:
         raise PoolValidationError(f"gecersiz durum: {status}")
+    if source != "user" and status == "confirmed":
+        # Değişmez: AI/tarama/pivot yalnız proposed/candidate yazar.
+        status = "proposed"
     confidence = max(0.0, min(1.0, float(confidence or 0.0)))
 
     existing = (
@@ -168,6 +171,9 @@ async def create_edge(
     status = str(status or ("confirmed" if source == "user" else "candidate")).strip().lower()
     if status not in POOL_STATUSES:
         raise PoolValidationError(f"gecersiz durum: {status}")
+    if source != "user" and status == "confirmed":
+        # Değişmez: AI/tarama/pivot yalnız proposed/candidate yazar.
+        status = "proposed"
     confidence = max(0.0, min(1.0, float(confidence or 0.0)))
     existing = (
         await db.execute(

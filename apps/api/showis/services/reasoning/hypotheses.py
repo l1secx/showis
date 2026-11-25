@@ -13,6 +13,7 @@ from typing import Any, Sequence
 
 from pydantic import BaseModel, Field
 from showis.db.models import Hypothesis, PoolItem, PoolRelation
+from showis.services.pool import clear_reasoning_stale
 from showis.services.reasoning.graph import identity_clusters, independent_sources
 from showis.services.reasoning.scoring import score
 from showis.services.research_interactive import llm_structured
@@ -198,6 +199,8 @@ async def generate_hypotheses(
         if rationale:
             row.rationale = rationale
         out.append(row)
+    # Hipotezler yeniden üretildi: havuz kaynaklı bayat damgası temizlenir.
+    await clear_reasoning_stale(db, case_id)
     await db.commit()
     for row in out:
         await db.refresh(row)

@@ -2,21 +2,26 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
+from showis.core.security import get_actor
 from showis.db.models import Case, PoolItem
 from showis.db.session import get_db
 from showis.services.audit import record_request_audit
 from showis.services.breach import BreachError, check_email
 from showis.services.pool import (
+    MAX_BULK_ITEMS,
     POOL_KINDS,
     POOL_SOURCES,
     POOL_STATUSES,
     PoolValidationError,
+    bulk_set_status,
     create_item,
     ensure_case_pool,
+    mark_reasoning_stale,
     search_items,
     validate_kind,
 )
@@ -41,6 +46,13 @@ class PoolItemPatch(BaseModel):
     status: str | None = Field(default=None, max_length=16)
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     attributes: dict[str, Any] | None = None
+
+
+class PoolBulkStatus(BaseModel):
+    """Toplu durum isteği — yalnız kullanıcı kararı (`confirmed|rejected`)."""
+
+    item_ids: list[UUID] = Field(min_length=1, max_length=MAX_BULK_ITEMS)
+    status: Literal["confirmed", "rejected"]
 
 
 class PoolItemResponse(BaseModel):
@@ -123,6 +135,8 @@ async def list_pool(
 ):
     await _require_case(db, case_id)
     await ensure_case_pool(db, case_id)
+    # `ensure_case_pool` commit eder; vaka bayat damgası için taze okunur.
+    case = await _require_case(db, case_id)
     kinds = _parse_csv(kind, POOL_KINDS, "kind")
     sources = _parse_csv(source, POOL_SOURCES, "source")
     statuses = _parse_csv(status_filter, POOL_STATUSES, "status")
@@ -141,6 +155,9 @@ async def list_pool(
         "total": total,
         "limit": limit,
         "offset": offset,
+        "reasoning_stale_at": (
+            case.reasoning_stale_at.isoformat() if case.reasoning_stale_at else None
+        ),
     }
 
 
@@ -182,6 +199,48 @@ async def add_pool_item(
         details={"kind": item.kind, "source": item.source, "status": item.status},
     )
     return _response(item)
+
+
+@router.post("/{case_id}/pool/bulk")
+async def bulk_update_status(
+    case_id: str,
+    data: PoolBulkStatus,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Toplu onay/ret — yalnız kullanıcı kimlikli çağrı; AI yolu kullanmaz.
+
+    Tek transaction: durum güncellemesi, bayat damgası ve audit birlikte yazılır.
+    Bu vakanın dışındaki kimlikler güncellenmez; `skipped` olarak sayılır.
+    """
+    actor = get_actor(request)
+    case = await _require_case(db, case_id)
+    try:
+        updated, skipped = await bulk_set_status(
+            db,
+            case_id=case_id,
+            item_ids=[str(item_id) for item_id in data.item_ids],
+            status=data.status,
+        )
+    except PoolValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if updated:
+        mark_reasoning_stale(case)
+    # `record_request_audit` commit eder: güncelleme + bayat damgası + audit tek işlemdedir.
+    await record_request_audit(
+        db=db,
+        request=request,
+        action="pool.items.bulk_status",
+        case_id=case_id,
+        target=f"Case: {case_id}",
+        details={
+            "status": data.status,
+            "updated": updated,
+            "skipped": skipped,
+            "actor": actor.username,
+        },
+    )
+    return {"updated": updated, "skipped": skipped}
 
 
 @router.post("/{case_id}/pool/{item_id}/breach-check")
@@ -231,28 +290,41 @@ async def update_pool_item(
     db: AsyncSession = Depends(get_db),
 ):
     await _require_case(db, case_id)
+    case = await _require_case(db, case_id)
     item = await _require_item(db, case_id, item_id)
     changed: list[str] = []
+    stale = False
     if data.label is not None:
         label = " ".join(data.label.split())[:256]
         if not label:
             raise HTTPException(status_code=422, detail="label boş olamaz")
-        item.label = label
-        changed.append("label")
+        if label != item.label:
+            item.label = label
+            changed.append("label")
+            stale = True
     if data.status is not None:
         next_status = data.status.strip().lower()
         if next_status not in POOL_STATUSES:
             raise HTTPException(status_code=422, detail="geçersiz durum")
-        item.status = next_status
-        changed.append("status")
+        if next_status != item.status:
+            item.status = next_status
+            changed.append("status")
+            stale = True
     if data.confidence is not None:
-        item.confidence = data.confidence
-        changed.append("confidence")
+        if data.confidence != item.confidence:
+            item.confidence = data.confidence
+            changed.append("confidence")
+            stale = True
     if data.attributes is not None:
         merged = dict(item.attributes or {})
         merged.update(data.attributes)
-        item.attributes = merged
-        changed.append("attributes")
+        if merged != (item.attributes or {}):
+            item.attributes = merged
+            changed.append("attributes")
+            stale = True
+    # Kullanıcı kararı/düzenlemesi muhakeme çıktılarını bayatlatır.
+    if stale:
+        mark_reasoning_stale(case)
     await db.commit()
     await db.refresh(item)
     await record_request_audit(
@@ -273,11 +345,13 @@ async def delete_pool_item(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    await _require_case(db, case_id)
+    case = await _require_case(db, case_id)
     item = await _require_item(db, case_id, item_id)
     kind = item.kind
     await delete_relations_for_item(db, item.id)
     await db.delete(item)
+    # Havuzdan öğe kalkınca mevcut ilişki/hipotez çıktıları bayatlar.
+    mark_reasoning_stale(case)
     await db.commit()
     await record_request_audit(
         db=db,

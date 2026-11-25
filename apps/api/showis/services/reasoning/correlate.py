@@ -19,6 +19,7 @@ from typing import Any, Callable, Sequence
 
 import yaml
 from showis.db.models import PoolItem, PoolRelation
+from showis.services.pool import clear_reasoning_stale
 from showis.services.reasoning.graph import (
     IDENTITY_TYPES,
     RELATION_TYPES,
@@ -541,6 +542,8 @@ async def run_correlation(db: AsyncSession, case_id: str) -> dict[str, Any]:
             source="rule",
             created_by="rule:consistency",
         )
+    # Muhakeme yeniden üretildi: havuz kaynaklı bayat damgası temizlenir.
+    await clear_reasoning_stale(db, case_id)
     await db.commit()
     return {
         "rules": len(RULES),

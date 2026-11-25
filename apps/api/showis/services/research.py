@@ -84,6 +84,9 @@ from showis.services.research_playbook import (
 from showis.services.supply_chain import (
     create_edge,
     create_node,
+    format_summary,
+    list_edges,
+    list_nodes,
 )
 from showis.services.targets import db_target_to_contract
 from showis_contracts import Platform
@@ -1148,6 +1151,7 @@ class ResearchRuntime:
         # İnteraktif kontrol (yönlendirme/durdurma/soru); testlerde None olabilir.
         self.control: ResearchControl | None = get_control(session.id)
         self.steering_notes: list[str] = []
+        self.supply_chain_text = ""
         self.steer_cursor = 0
         self.current_wave = 1
         self.snapshot_ids: dict[str, str] = {}
@@ -1726,6 +1730,8 @@ class SubagentContext:
     steering: list[str] = field(default_factory=list)
     steer_cursor: int = 0
     mode: str = "research"
+    #: Onaylı/öneri tedarik zinciri düğüm ve kenarları (reddedilenler hariç).
+    supply_chain_text: str = ""
     #: Yazma niyetleri: alt ajanlar DB'siz çalışır; ana döngü tek oturumda uygular.
     write_queue: list[dict[str, Any]] = field(default_factory=list)
     #: Alt ajanın okuduğu sayfalar: ana döngü kanıt arşivine yazar.
@@ -1788,6 +1794,9 @@ KİMLİK TOHUMLARI
 - E-postalar: {', '.join(ctx.identity.emails[:4]) or '(yok)'}
 - Kurumlar: {', '.join(ctx.identity.organizations[:4]) or '(yok)'}
 - Yerler: {', '.join(ctx.identity.locations[:4]) or '(yok)'}
+
+TEDARİK ZİNCİRİ (onaylı/öneri kayıtlar; reddedilenler hariç)
+{ctx.supply_chain_text or '(kayıt yok)'}
 
 Araçlar: web_search (tek sorgu), fetch_page (tek URL), search_pool (vaka havuzu).
 Her adımda yalnızca gerekli araçları çağır veya nihai raporu ver.
@@ -2590,6 +2599,8 @@ KAPSAMA
 
 AÇIK İPUÇLARI
 {lead_text}
+TEDARİK ZİNCİRİ (onaylı/öneri kayıtlar; reddedilenler hariç)
+{runtime.supply_chain_text or '(kayıt yok)'}
 {_steering_block(runtime.steering_notes)}
 Görevin: bir sonraki dalgayı planla. İsim + kullanıcı adı kombinasyonlarını,
 linktree/about.me/beacons gibi toplayıcıları, sayfa içi profil linklerini ve
@@ -2658,6 +2669,7 @@ async def _apply_write_intents(
 ) -> list[dict[str, Any]]:
     """Alt ajan yazma niyetlerini ana döngüde uygular (yalnız proposed/candidate)."""
     outcomes: list[dict[str, Any]] = []
+    supply_chain_written = False
     common: dict[str, Any] = {
         "db": runtime.db,
         "session": runtime.session,
@@ -2696,6 +2708,8 @@ async def _apply_write_intents(
         outcomes.append({"tool": tool, "ok": error is None, "error": error, "result": result})
         if error:
             runtime.errors.append(f"{tool}: {error}")
+        elif tool in {"add_supply_chain_node", "add_supply_chain_edge"}:
+            supply_chain_written = True
         await emit(
             runtime.session.id,
             "tool_end",
@@ -2714,6 +2728,11 @@ async def _apply_write_intents(
                 "ok": error is None,
                 "error": error,
             },
+        )
+    if supply_chain_written:
+        # Ajanın yazdığı düğüm/kenarlar sonraki dalga ve nihai sentez bağlamına girer.
+        runtime.supply_chain_text = await _load_supply_chain_context(
+            runtime.db, runtime.case.id
         )
     return outcomes
 
@@ -2790,6 +2809,9 @@ async def _run_subagent_wave(
     if runtime.search_provider is None:
         return []
 
+    # Dalga başında havuz DB'den tazelenir: önceki dalgada yazılan/onaylanan
+    # kayıtlar alt ajanların `search_pool` anlık görüntüsüne girer.
+    pool_rows = await _pool_context_rows(runtime.db, runtime.case.id, limit=80)
     pool_snapshot = [
         {
             "id": item.get("id"),
@@ -2798,7 +2820,7 @@ async def _run_subagent_wave(
             "value": str(item.get("value") or "")[:800],
             "status": item.get("status"),
         }
-        for item in runtime.pool_items[:80]
+        for item in pool_rows
     ]
     semaphore = asyncio.Semaphore(max(1, min(3, len(specs))))
     contexts = [
@@ -2826,6 +2848,7 @@ async def _run_subagent_wave(
             steering=list(runtime.steering_notes),
             steer_cursor=runtime.steer_cursor,
             mode=runtime.session.mode,
+            supply_chain_text=runtime.supply_chain_text,
         )
         for index, spec in enumerate(specs)
     ]
@@ -2998,6 +3021,9 @@ organizations[], timeline[], interests[], risk_notes[], confidence.
             .where(
                 PoolItem.case_id == runtime.case.id,
                 PoolItem.kind == "bio",
+                # Kullanıcı kararı (confirmed/rejected) korunur; AI yalnız kendi
+                # bekleyen taslağını günceller, onaylı kaydı ezmez.
+                PoolItem.status.notin_(("confirmed", "rejected")),
             )
             .order_by(PoolItem.updated_at.desc())
             .limit(1)
@@ -3343,6 +3369,44 @@ def _resume_snapshot(runtime: ResearchRuntime, next_wave: int) -> dict[str, Any]
     }
 
 
+async def _pool_context_rows(
+    db: AsyncSession, case_id: str, *, limit: int
+) -> list[dict[str, Any]]:
+    """Araştırma bağlamı için tazelenmiş havuz satırları; reddedilenler hariç."""
+    rows = await context_items(
+        db,
+        case_id=case_id,
+        limit=limit,
+        statuses=("confirmed", "candidate", "proposed"),
+    )
+    return [
+        {
+            "id": item.id,
+            "kind": item.kind,
+            "label": item.label,
+            "value": item.value,
+            "attributes": item.attributes or {},
+            "provenance": item.provenance or {},
+            "status": item.status,
+            "confidence": item.confidence,
+            "source": item.source,
+        }
+        for item in rows
+    ]
+
+
+async def _load_supply_chain_context(db: AsyncSession, case_id: str) -> str:
+    """Araştırma bağlamı için tedarik zinciri özeti; reddedilenler hariç."""
+    statuses = ("confirmed", "candidate", "proposed")
+    nodes = await list_nodes(db, case_id=case_id, statuses=statuses)
+    edges = await list_edges(db, case_id=case_id, statuses=statuses)
+    node_ids = {node.id for node in nodes}
+    edges = [
+        edge for edge in edges if edge.source_id in node_ids and edge.target_id in node_ids
+    ]
+    return format_summary(nodes, edges)
+
+
 async def _checkpoint_for_question(runtime: ResearchRuntime) -> None:
     """`ask_user` öncesi: bulguları yazar ve geçerli dalgayı `resume` olarak saklar.
 
@@ -3409,25 +3473,7 @@ async def _run_loop(
             }
         )
 
-    pool_rows = [
-        {
-            "id": item.id,
-            "kind": item.kind,
-            "label": item.label,
-            "value": item.value,
-            "attributes": item.attributes or {},
-            "provenance": item.provenance or {},
-            "status": item.status,
-            "confidence": item.confidence,
-            "source": item.source,
-        }
-        for item in await context_items(
-            db,
-            case_id=case.id,
-            limit=120,
-            statuses=("confirmed", "candidate", "proposed"),
-        )
-    ]
+    pool_rows = await _pool_context_rows(db, case.id, limit=120)
     seed_rows = (
         await db.execute(select(Seed).where(Seed.case_id == case.id))
     ).scalars().all()
@@ -3459,6 +3505,7 @@ async def _run_loop(
     )
     runtime.reasoner_client = reasoner_client or client
     runtime.extractor_client = extractor_client or client
+    runtime.supply_chain_text = await _load_supply_chain_context(db, case.id)
     if runtime.control is not None:
         runtime.control.on_checkpoint = lambda: _checkpoint_for_question(runtime)
     if resume:
@@ -3661,6 +3708,11 @@ async def _run_loop(
                 pool_text = f"İLİŞKİ GRAFI (önem sıralı)\n{graph_text}\n\n{pool_text}"
         except Exception:  # noqa: BLE001 - graf özeti sentezi düşürmesin
             logger.debug("Graf ozeti eklenemedi", exc_info=True)
+        if runtime.supply_chain_text:
+            pool_text = (
+                "TEDARİK ZİNCİRİ (onaylı/öneri; reddedilenler hariç)\n"
+                f"{runtime.supply_chain_text}\n\n{pool_text}"
+            )
         await _set_activity(db, session, stats, "Biyografi ve nihai sentez yazılıyor")
         bio_markdown, _bio_structured = await _synthesize_bio(
             runtime, pool_rows=quality_rows, pool_text=pool_text
