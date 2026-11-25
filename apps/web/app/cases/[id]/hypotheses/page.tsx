@@ -165,24 +165,24 @@ export default function HypothesesPage() {
         </section>
       )}
 
-      <section className="space-y-3">
-        {loading ? (
-          <p className="text-[13px] text-ink-3">Yükleniyor</p>
-        ) : hypotheses.length === 0 ? (
-          <p className="text-[13px] text-ink-3">
-            Henüz hipotez yok. Önce havuzda öğe/ilişki oluşturun, ardından korelasyonu çalıştırıp
-            hipotez üretin.
-          </p>
-        ) : (
-          hypotheses.map((hypothesis) => (
-            <article key={hypothesis.id} className="panel">
+      {loading ? (
+        <p className="text-[13px] text-ink-3">Yükleniyor</p>
+      ) : hypotheses.length === 0 ? (
+        <p className="text-[13px] text-ink-3">
+          Henüz hipotez yok. Önce havuzda öğe/ilişki oluşturun, ardından korelasyonu çalıştırıp
+          hipotez üretin.
+        </p>
+      ) : (
+        <section className="panel divide-y divide-line">
+          {hypotheses.map((hypothesis) => (
+            <article key={hypothesis.id}>
               <div className="panel-head flex-wrap">
                 <div className="min-w-0">
                   <p className="text-[13px] font-medium text-ink">{hypothesis.statement}</p>
-                  <div className="mt-2 flex items-center gap-3 text-[12px] text-ink-3">
+                  <div className="mt-2 flex flex-wrap items-center gap-3 text-[12px] text-ink-3">
                     <span className="numeric">{STATUS_TR[hypothesis.status] || hypothesis.status}</span>
                     <span className="inline-flex items-center gap-2">
-                      <span className="h-1.5 w-28 overflow-hidden rounded bg-sunken" aria-hidden>
+                      <span className="meter w-28" aria-hidden>
                         <span
                           className="block h-full bg-accent"
                           style={{ width: `${Math.round(hypothesis.confidence * 100)}%` }}
@@ -192,7 +192,7 @@ export default function HypothesesPage() {
                     </span>
                   </div>
                 </div>
-                <div className="flex shrink-0 gap-1">
+                <div className="flex shrink-0 flex-wrap gap-1">
                   <button type="button" className="btn-secondary btn-sm" disabled={busy}
                     onClick={() => act(async () => void (await api.patchHypothesis(id, hypothesis.id, { status: "confirmed" })))}>
                     Onayla
@@ -201,8 +201,13 @@ export default function HypothesesPage() {
                     onClick={() => act(async () => void (await api.patchHypothesis(id, hypothesis.id, { status: "rejected" })))}>
                     Reddet
                   </button>
-                  <button type="button" className="btn-quiet btn-sm" disabled={busy} aria-label="Sil"
-                    onClick={() => act(async () => void (await api.deleteHypothesis(id, hypothesis.id)))}>
+                  <button
+                    type="button"
+                    className="btn-quiet btn-sm max-sm:min-w-[40px]"
+                    disabled={busy}
+                    aria-label={`${hypothesis.statement.slice(0, 60)} hipotezini sil`}
+                    onClick={() => act(async () => void (await api.deleteHypothesis(id, hypothesis.id)))}
+                  >
                     <Trash2 size={12} aria-hidden />
                   </button>
                 </div>
@@ -234,9 +239,9 @@ export default function HypothesesPage() {
                 )}
               </div>
             </article>
-          ))
-        )}
-      </section>
+          ))}
+        </section>
+      )}
 
       <section className="panel">
         <div className="panel-head">
@@ -249,12 +254,12 @@ export default function HypothesesPage() {
           <ul className="divide-y divide-line">
             {pending.slice(0, 60).map((rel) => (
               <li key={rel.id} className="flex flex-wrap items-center gap-2 px-4 py-2.5 text-[12.5px]">
-                <span className="min-w-0 flex-1 truncate text-ink">
+                <span className="min-w-0 flex-1 basis-full break-words text-ink sm:basis-auto">
                   {labels[rel.src_item_id] || rel.src_item_id}
                   <span className="mx-2 text-ink-3">— {RELATION_TR[rel.type] || rel.type} →</span>
                   {labels[rel.dst_item_id] || rel.dst_item_id}
                 </span>
-                <span className="numeric text-[11px] text-ink-3">
+                <span className="numeric text-[12px] text-ink-3">
                   {STATUS_TR[rel.status] || rel.status} · %{Math.round(rel.confidence * 100)}
                 </span>
                 <button type="button" className="btn-secondary btn-sm" disabled={busy}

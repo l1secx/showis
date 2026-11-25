@@ -11,6 +11,11 @@ export function Markdown({ children }: { children: string }) {
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
+          table: ({ children }) => (
+            <div className="scroll-x">
+              <table>{children}</table>
+            </div>
+          ),
           a: ({ href, children: label }) => (
             <a
               href={href}

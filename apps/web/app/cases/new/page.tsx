@@ -201,8 +201,11 @@ export default function NewCasePage() {
   return (
     <div className="space-y-6">
       <div>
-        <nav className="flex items-center gap-1.5 text-[12px] text-ink-3">
-          <Link href="/" className="transition-colors hover:text-ink">
+        <nav aria-label="Sayfayolu" className="flex items-center gap-1.5 text-[12px] text-ink-3">
+          <Link
+            href="/"
+            className="inline-flex items-center transition-colors hover:text-ink max-sm:min-h-[40px]"
+          >
             Vakalar
           </Link>
           <span className="text-ink-3" aria-hidden>
@@ -221,9 +224,9 @@ export default function NewCasePage() {
         <div className="space-y-6 lg:col-span-2">
           {/* --- Hedef --- */}
           <section className="panel">
-            <div className="panel-head">
+            <div className="panel-head flex-wrap">
               <h2 className="panel-title">Hedef</h2>
-              <p className="text-[12px] text-ink-3">
+              <p className="min-w-0 text-[12px] text-ink-3">
                 {mode === "handle"
                   ? "Kullanıcı adı tek başına yeterlidir"
                   : mode === "name"
@@ -254,9 +257,9 @@ export default function NewCasePage() {
                       role="radio"
                       aria-checked={active}
                       onClick={() => setMode(m.value)}
-                      className={`rounded-[4px] px-3 py-1.5 text-[12.5px] transition-colors ${
+                      className={`inline-flex items-center justify-center rounded-[4px] px-3 py-1.5 text-[12.5px] transition-colors max-sm:min-h-[40px] max-sm:min-w-[40px] ${
                         active
-                          ? "bg-surface font-medium text-ink shadow-scrim"
+                          ? "bg-surface font-medium text-ink"
                           : "text-ink-3 hover:text-ink"
                       }`}
                     >
@@ -546,7 +549,7 @@ export default function NewCasePage() {
             </summary>
             <div className="space-y-3 border-t border-line p-5">
               {seeds.map((s, i) => (
-                <div key={i} className="grid grid-cols-3 items-end gap-3">
+                <div key={i} className="grid grid-cols-1 items-end gap-3 sm:grid-cols-3">
                   <label className="block">
                     <span className="label">Platform</span>
                     <select
@@ -632,7 +635,7 @@ export default function NewCasePage() {
                 })}
               </fieldset>
 
-              <label className="mt-4 flex cursor-pointer items-start gap-2.5 border-t border-line pt-4 text-[12.5px] text-ink-2">
+              <label className="mt-4 flex cursor-pointer items-start gap-2.5 border-t border-line pt-4 text-[12.5px] text-ink-2 max-sm:min-h-[40px]">
                 <input
                   type="checkbox"
                   checked={autoScan}
@@ -654,7 +657,7 @@ export default function NewCasePage() {
                   Hukuki dayanağımı ve yalnızca kamuya açık kaynakları, üçüncü taraf
                   sitelerin <strong className="font-semibold">robots.txt</strong> ve
                   kullanım koşullarına uygun şekilde tarayacağımı onaylıyorum.
-                  <span id="authorization-hint" className="mt-1 block text-[11.5px] font-normal">
+                  <span id="authorization-hint" className="mt-1 block text-[12px] font-normal">
                     Giriş duvarı, CAPTCHA veya erişim kontrolü aşılmaz; veri sahibi
                     talepleri ve saklama süresi operatör sorumluluğundadır.
                   </span>

@@ -83,15 +83,15 @@ function ToolMessage({ message }: { message: ResearchMessage }) {
     "sonuç";
   return (
     <details className="rounded-[6px] border border-line bg-sunken/60 px-3 py-2 text-[12px] text-ink-3">
-      <summary className="flex cursor-pointer list-none items-center gap-2 marker:content-none">
+      <summary className="flex cursor-pointer list-none items-center gap-2 marker:content-none max-sm:min-h-[40px]">
         <span className="numeric text-ink-3">{message.tool_name}</span>
-        <span className="truncate text-ink-2">{String(summary).slice(0, 140)}</span>
+        <span className="min-w-0 break-words text-ink-2">{String(summary).slice(0, 140)}</span>
         <ChevronDown size={12} aria-hidden className="ml-auto shrink-0" />
       </summary>
       {result.error ? (
         <p className="mt-2 text-danger">{String(result.error)}</p>
       ) : (
-        <pre className="numeric mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words text-[11px] leading-relaxed text-ink-2">
+        <pre className="numeric mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words text-[12px] leading-relaxed text-ink-2">
           {JSON.stringify(result, null, 2).slice(0, 6000)}
         </pre>
       )}
@@ -599,7 +599,7 @@ function ResearchPageInner() {
       )}
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
-        <div className="space-y-6">
+        <div className="min-w-0 space-y-6">
           <section className="panel">
             <div className="panel-head">
               <div>
@@ -758,7 +758,7 @@ function ResearchPageInner() {
             <section className="panel">
               <div className="panel-head flex-wrap">
                 <div className="min-w-0">
-                  <h2 className="panel-title truncate">{session.title}</h2>
+                  <h2 className="panel-title break-words">{session.title}</h2>
                   <div className="mt-1 flex flex-wrap items-center gap-3 text-[12px] text-ink-3">
                     <Status value={session.status} />
                     <span>{session.mode === "agent" ? "Tam ajan" : "Araştır ve öner"}</span>
@@ -792,7 +792,7 @@ function ResearchPageInner() {
                     )}
                   </div>
                 </div>
-                <div className="flex shrink-0 items-center gap-1">
+                <div className="flex flex-wrap shrink-0 items-center gap-1">
                   {isRunning && (
                     <button
                       type="button"
@@ -881,6 +881,7 @@ function ResearchPageInner() {
                     <input
                       className="input"
                       placeholder="Kendi yanıtınızı yazın"
+                      aria-label="Ajana kendi yanıtınız"
                       value={answerText}
                       onChange={(e) => setAnswerText(e.target.value)}
                       maxLength={2000}
@@ -921,8 +922,8 @@ function ResearchPageInner() {
                           ) : (
                             <X size={11} className="text-danger" aria-hidden />
                           )}
-                          <span className="numeric">{tool.tool}</span>
-                          <span className="truncate text-ink-2">{tool.summary}</span>
+                          <span className="numeric shrink-0">{tool.tool}</span>
+                          <span className="min-w-0 break-words text-ink-2">{tool.summary}</span>
                         </li>
                       ))}
                     </ul>
@@ -931,23 +932,26 @@ function ResearchPageInner() {
               )}
 
               {proposals.length > 0 && (
-                <div className="space-y-2 border-t border-line bg-sunken/40 px-5 py-3">
+                <div className="border-t border-line px-5 py-3">
                   <p className="text-[12px] font-medium text-ink-2">
                     Onay bekleyen öneriler ({proposals.length})
                   </p>
-                  <ul className="space-y-1.5">
+                  <ul className="mt-1.5 divide-y divide-line">
                     {proposals.slice(0, 12).map((item) => (
                       <li
                         key={item.item_id}
-                        className="flex flex-wrap items-center gap-2 rounded-[6px] border border-line bg-surface px-3 py-2 text-[12.5px]"
+                        className="flex flex-wrap items-center gap-2 py-2 text-[12.5px]"
                       >
-                        <span className="numeric rounded bg-sunken px-1.5 text-[11px] text-ink-3">
+                        <span className="numeric rounded-control bg-sunken px-1.5 py-0.5 text-[12px] text-ink-3">
                           {item.kind}
                         </span>
-                        <span className="min-w-0 flex-1 truncate text-ink" title={item.value}>
+                        <span
+                          className="min-w-0 w-full break-words text-ink sm:w-auto sm:flex-1"
+                          title={item.value}
+                        >
                           {item.label || item.value}
                         </span>
-                        <span className="numeric text-[11px] text-ink-3">
+                        <span className="numeric text-[12px] text-ink-3">
                           {Math.round((item.confidence || 0) * 100)}%
                         </span>
                         <button
@@ -966,7 +970,7 @@ function ResearchPageInner() {
                         </button>
                         <Link
                           href={`/cases/${id}/pool?q=${encodeURIComponent(item.value.slice(0, 80))}`}
-                          className="text-[12px] text-accent-ink hover:underline"
+                          className="inline-flex items-center text-[12px] text-accent-ink hover:underline max-sm:min-h-[40px]"
                         >
                           Düzenle
                         </Link>
@@ -985,7 +989,7 @@ function ResearchPageInner() {
                     </span>
                     <Link
                       href={`/cases/${id}/pool?kind=bio`}
-                      className="ml-auto text-[12px] font-medium underline"
+                      className="ml-auto text-[12px] font-medium underline max-sm:inline-flex max-sm:min-h-[40px] max-sm:items-center"
                     >
                       Havuzda aç
                     </Link>
@@ -1008,7 +1012,7 @@ function ResearchPageInner() {
                         key={message.id}
                         className="rounded-[6px] border-l-2 border-accent bg-accent-soft/50 px-3 py-2 text-[13px] leading-relaxed text-ink"
                       >
-                        <p className="text-[11px] font-medium text-accent-ink">
+                        <p className="text-[12px] font-medium text-accent-ink">
                           {message.tool_name === "steer"
                             ? "Yönlendirme"
                             : message.tool_name === "answer"
@@ -1025,7 +1029,7 @@ function ResearchPageInner() {
                         key={message.id}
                         className="rounded-[6px] border border-warn-line bg-warn-soft/50 px-3 py-2 text-[12.5px] text-ink"
                       >
-                        <p className="text-[11px] font-medium text-warn">Ajanın sorusu</p>
+                        <p className="text-[12px] font-medium text-warn">Ajanın sorusu</p>
                         <p className="mt-1">{message.content}</p>
                       </div>
                     );
@@ -1042,7 +1046,7 @@ function ResearchPageInner() {
                     >
                       {isFinal ? (
                         <>
-                          <div className="flex items-center gap-2 text-[11px] font-medium text-ok">
+                          <div className="flex items-center gap-2 text-[12px] font-medium text-ok">
                             <Sparkles size={12} aria-hidden />
                             Nihai sentez
                           </div>
@@ -1051,7 +1055,7 @@ function ResearchPageInner() {
                           </div>
                           {message.citations.length > 0 && (
                             <div className="mt-3 border-t border-line pt-2">
-                              <p className="text-[11px] font-medium text-ink-3">Kaynaklar</p>
+                              <p className="text-[12px] font-medium text-ink-3">Kaynaklar</p>
                               <ul className="mt-1 space-y-1">
                                 {message.citations.map((citation, index) => (
                                   <li key={index} className="text-[12px] text-ink-2">
@@ -1060,7 +1064,7 @@ function ResearchPageInner() {
                                         href={citation.url}
                                         target="_blank"
                                         rel="noreferrer noopener"
-                                        className="inline-flex items-center gap-1 text-accent-ink hover:underline"
+                                        className="inline-flex items-center gap-1 text-accent-ink hover:underline max-sm:min-h-[40px]"
                                       >
                                         {citation.label || citation.url}
                                         <ExternalLink size={11} aria-hidden />
@@ -1085,7 +1089,7 @@ function ResearchPageInner() {
                                     {citation.snapshot_id && (
                                       <Link
                                         href={`/cases/${id}/evidence?snapshot=${citation.snapshot_id}`}
-                                        className="ml-2 text-[11px] text-ink-3 hover:underline"
+                                        className="ml-2 text-[12px] text-ink-3 hover:underline"
                                       >
                                         arşiv kopyası
                                       </Link>
@@ -1119,7 +1123,7 @@ function ResearchPageInner() {
                   </span>
                   <div className="flex gap-2">
                     <input
-                      className="input"
+                      className="input min-w-0"
                       placeholder={
                         isRunning
                           ? "Örn: önce GitHub hesaplarına odaklan..."
@@ -1150,7 +1154,7 @@ function ResearchPageInner() {
                       key={command.label}
                       type="button"
                       onClick={() => setFollowUp(command.text)}
-                      className="numeric rounded-full border border-line px-2 py-0.5 text-[11.5px] text-ink-3 hover:bg-hover"
+                      className="numeric inline-flex items-center rounded-control border border-line px-2 py-0.5 text-[12px] text-ink-3 transition-colors hover:bg-hover hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/25 max-sm:min-h-[40px]"
                       title={command.text}
                     >
                       {command.label}
@@ -1191,15 +1195,15 @@ function ResearchPageInner() {
                         selectedId === item.id ? "bg-accent-soft/40" : ""
                       }`}
                     >
-                      <span className="line-clamp-2 text-[12.5px] font-medium text-ink">
+                      <span className="break-words text-[12.5px] font-medium text-ink sm:line-clamp-2">
                         {item.title}
                       </span>
-                      <span className="mt-1 flex items-center gap-2 text-[11.5px] text-ink-3">
+                      <span className="mt-1 flex items-center gap-2 text-[12px] text-ink-3">
                         <Status value={item.status} />
                         <span className="numeric">{item.createdLabel}</span>
                       </span>
                       {(item.status === "running" || item.status === "queued") && item.activity && (
-                        <span className="mt-1 line-clamp-1 text-[11.5px] text-accent-ink">
+                        <span className="mt-1 line-clamp-1 text-[12px] text-accent-ink">
                           {item.activity}
                         </span>
                       )}
@@ -1209,7 +1213,7 @@ function ResearchPageInner() {
               </ul>
             )}
           </div>
-          <p className="px-1 text-[11.5px] leading-relaxed text-ink-3">
+          <p className="px-1 text-[12px] leading-relaxed text-ink-3">
             Araştırma yalnızca herkese açık kaynakları okur. AI kayıtları havuzda ve
             tedarik zincirinde onay bekleyen öneri olarak işaretlenir.
           </p>

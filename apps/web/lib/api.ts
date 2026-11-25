@@ -275,6 +275,12 @@ export interface PoolList {
   offset: number;
 }
 
+/** Toplu durum ucunun yanıtı: güncellenen ve atlanan kayıt sayısı. */
+export interface PoolBulkResult {
+  updated: number;
+  skipped: number;
+}
+
 export interface ResearchCitation {
   label?: string;
   url?: string | null;
@@ -641,6 +647,12 @@ export const api = {
     }),
   deletePoolItem: (caseId: string, itemId: string) =>
     req<null>(`/cases/${caseId}/pool/${itemId}`, { method: "DELETE" }),
+  /** Toplu durum: yalnız kullanıcı eylemi; AI yolu bu ucu kullanmaz. */
+  bulkUpdatePool: (caseId: string, itemIds: string[], status: "confirmed" | "rejected") =>
+    req<PoolBulkResult>(`/cases/${caseId}/pool/bulk`, {
+      method: "POST",
+      body: JSON.stringify({ item_ids: itemIds, status }),
+    }),
   checkPoolBreach: (caseId: string, itemId: string) =>
     req<{ item_id: string; breach: Record<string, any> }>(
       `/cases/${caseId}/pool/${itemId}/breach-check`,

@@ -387,7 +387,7 @@ export default function SettingsPage() {
           Anahtar yoksa paylaşılan sunucu token’ı (admin) kullanılır.
         </p>
         <div className="mt-3 flex flex-wrap items-end gap-2">
-          <label className="min-w-[260px] flex-1">
+          <label className="min-w-0 flex-1 basis-[260px]">
             <span className="label">Kullanıcı anahtarı</span>
             <input
               type="password"
@@ -423,7 +423,7 @@ export default function SettingsPage() {
           <div className="mt-5 border-t border-line pt-4">
             <h3 className="text-[12.5px] font-semibold text-ink">Kullanıcı oluştur</h3>
             <div className="mt-2 flex flex-wrap items-end gap-2">
-              <label className="min-w-[180px] flex-1">
+              <label className="min-w-0 flex-1 basis-[180px]">
                 <span className="label">Kullanıcı adı</span>
                 <input
                   className="input font-mono"
@@ -448,7 +448,7 @@ export default function SettingsPage() {
                 type="button"
                 onClick={createUser}
                 disabled={!newUsername.trim()}
-                className="btn-primary btn-sm"
+                className="btn-secondary btn-sm"
               >
                 Oluştur
               </button>
@@ -461,8 +461,8 @@ export default function SettingsPage() {
             {users.length > 0 && (
               <ul className="mt-3 divide-y divide-line text-[12px]">
                 {users.map((user) => (
-                  <li key={user.username} className="flex items-center gap-3 py-1.5">
-                    <span className="font-mono text-ink-2">{user.username}</span>
+                  <li key={user.username} className="flex flex-wrap items-center gap-3 py-1.5">
+                    <span className="break-all font-mono text-ink-2">{user.username}</span>
                     <span className="text-ink-3">{user.role}</span>
                     <span className={user.active ? "text-ok" : "text-danger"}>
                       {user.active ? "aktif" : "pasif"}
@@ -489,7 +489,7 @@ export default function SettingsPage() {
       )}
 
       <div>
-        <div className="flex gap-6 border-b border-line">
+        <div className="scroll-x flex gap-6 border-b border-line pb-px">
           {TABS.map((tab) => (
             <button
               key={tab.key}
@@ -499,7 +499,7 @@ export default function SettingsPage() {
                 setSecretInput("");
               }}
               aria-current={activeTab === tab.key ? "page" : undefined}
-              className={`relative pb-2.5 pt-1 text-[13px] transition-colors ${
+              className={`relative flex min-h-[40px] shrink-0 items-center justify-center whitespace-nowrap pb-2.5 pt-1 text-[13px] transition-colors max-sm:min-w-[40px] ${
                 activeTab === tab.key
                   ? "font-medium text-ink after:absolute after:inset-x-0 after:bottom-[-1px] after:h-[2px] after:bg-accent"
                   : "text-ink-3 hover:text-ink"
@@ -591,7 +591,7 @@ export default function SettingsPage() {
                             key={profile.id}
                             className="flex flex-wrap items-start justify-between gap-3 py-3"
                           >
-                            <div className="min-w-0">
+                            <div className="min-w-0 max-sm:w-full">
                               <div className="flex flex-wrap items-center gap-2">
                                 <span className="text-[13px] font-medium text-ink">
                                   {profile.name}
@@ -613,7 +613,7 @@ export default function SettingsPage() {
                                 {profile.preset} · {profile.config.model || "model yok"} ·{" "}
                                 {profile.secret_masked || "anahtar yok"}
                               </p>
-                              <p className="numeric mt-0.5 break-all text-[11.5px] text-ink-3">
+                              <p className="numeric mt-0.5 break-all text-[12px] text-ink-3">
                                 {profile.config.base_url}
                               </p>
                             </div>
@@ -646,9 +646,10 @@ export default function SettingsPage() {
                               </button>
                               <button
                                 type="button"
-                                className="btn-danger-quiet btn-sm"
+                                className="btn-danger-quiet btn-sm max-sm:min-w-[40px]"
                                 disabled={aiBusy}
                                 onClick={() => deleteAIProvider(profile)}
+                                aria-label={`${profile.name} profilini sil`}
                               >
                                 <Trash2 size={12} aria-hidden />
                               </button>
@@ -740,7 +741,7 @@ export default function SettingsPage() {
                         )}
                         Modelleri getir
                       </button>
-                      <span className="text-[11.5px] text-ink-3">
+                      <span className="text-[12px] text-ink-3">
                         API anahtarıyla erişilebilen modeller sağlayıcıdan okunur.
                       </span>
                     </div>
@@ -791,7 +792,7 @@ export default function SettingsPage() {
                             </label>
                           ))}
                         </div>
-                        <p className="mt-1.5 text-[11.5px] text-ink-3">
+                        <p className="mt-1.5 text-[12px] text-ink-3">
                           Seçilen modeller tarama ve araştırma ekranlarında model
                           seçicisinde görünür. Varsayılan model yukarıdaki “Model” alanıdır.
                         </p>
@@ -849,7 +850,7 @@ export default function SettingsPage() {
                             </label>
                           ))}
                         </div>
-                        <p className="mt-1.5 text-[11.5px] text-ink-3">
+                        <p className="mt-1.5 text-[12px] text-ink-3">
                           Planlama ve muhakeme güçlü modelde, sayfa çıkarımı ve özet ucuz modelde
                           çalışır. Boş rol, varsayılan modele düşer.
                         </p>
@@ -894,14 +895,14 @@ export default function SettingsPage() {
                         {editingProviderId ? "Güncelle" : "Profili ekle"}
                       </button>
                       {!editingProviderId && aiProviders.length === 0 && (
-                        <span className="self-center text-[11.5px] text-ink-3">
+                        <span className="self-center text-[12px] text-ink-3">
                           İlk profil anahtarla birlikte otomatik aktifleşir.
                         </span>
                       )}
                     </div>
                   </div>
 
-                  <p className="border-t border-line pt-3 text-[11.5px] leading-relaxed text-ink-3">
+                  <p className="border-t border-line pt-3 text-[12px] leading-relaxed text-ink-3">
                     Eski tek <span className="numeric">llm</span> ayarı geriye dönük uyumluluk
                     için korunur; aktif profil yoksa yedek olarak kullanılır.
                   </p>

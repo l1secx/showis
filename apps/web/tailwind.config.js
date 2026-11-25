@@ -6,6 +6,8 @@
  * (`surface`, `ink-2`, `line`, `accent`) yazılır; palet değişirse tek yer
  * değişir. RGB kanal üçlüsü sayesinde Tailwind'in `/50` opaklık
  * değiştiricileri (`border-accent/30`) çalışır.
+ *
+ * Tek tema vardır: siyah. Zemin ve yüzey `0 0 0`; panel ayrımı 1px çizgi.
  */
 const token = (name) => `rgb(var(--${name.replace(/^--/, "")}) / <alpha-value>)`;
 
@@ -27,6 +29,7 @@ module.exports = {
           DEFAULT: token("--ink"),
           2: token("--ink-2"),
           3: token("--ink-3"),
+          4: token("--ink-4"),
         },
 
         line: {
@@ -74,14 +77,15 @@ module.exports = {
         base: ["13.5px", { lineHeight: "1.55" }],
       },
       borderRadius: {
-        panel: "8px",
-        control: "6px",
+        panel: "6px",
+        control: "4px",
       },
       boxShadow: {
-        // Yükselti bir kez ilan edilir: gölge yalnızca yüzer yüzeylerde.
-        // Değerler CSS tokenı — koyu temada gölge derinleşir.
+        // Yükselti çizgiyle anlatılır; gölge yalnızca yüzer popover'da.
+        // `scrim` saydamdır: seçili segment gibi eski yüzeyler gölge taşımaz.
         popover: "var(--shadow-popover)",
         scrim: "var(--shadow-scrim)",
+        lg: "0 0 #0000",
       },
       maxWidth: {
         prose: "68ch",

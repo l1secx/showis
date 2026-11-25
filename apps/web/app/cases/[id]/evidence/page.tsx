@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
-import { AlertTriangle, ExternalLink, Loader2, ShieldCheck, ShieldAlert } from "lucide-react";
+import { AlertTriangle, ExternalLink, Loader2 } from "lucide-react";
 import { api, type EvidenceSnapshotRow } from "../../../../lib/api";
 
 const SOURCE_TR: Record<string, string> = {
@@ -61,14 +61,14 @@ export default function EvidencePage() {
   }, [requested, open]);
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+    <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
       <section aria-labelledby="evidence-title" className="space-y-3">
-        <div className="flex items-center justify-between gap-2">
-          <h2 id="evidence-title" className="text-sm font-semibold">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <h2 id="evidence-title" className="section-heading">
             Kanıt arşivi
           </h2>
           <form
-            className="flex gap-2"
+            className="flex w-full gap-2 sm:w-auto"
             onSubmit={(event) => {
               event.preventDefault();
               void load(query.trim() || undefined);
@@ -79,39 +79,41 @@ export default function EvidencePage() {
               onChange={(event) => setQuery(event.target.value)}
               placeholder="URL veya başlık ara"
               aria-label="Kanıt ara"
-              className="rounded border border-line px-2 py-1 text-[13px]"
+              className="input min-w-0 flex-1 sm:w-[200px] sm:flex-none"
             />
-            <button type="submit" className="rounded border border-line px-2 py-1 text-[13px]">
+            <button type="submit" className="btn-secondary btn-sm shrink-0">
               Ara
             </button>
           </form>
         </div>
         {error && (
-          <p role="alert" className="flex items-center gap-1 text-[13px] text-danger">
+          <p role="alert" className="flex items-center gap-1.5 text-[13px] text-danger">
             <AlertTriangle size={14} aria-hidden /> {error}
           </p>
         )}
         {loading ? (
-          <p className="flex items-center gap-1 text-ink-3">
+          <p className="flex items-center gap-1.5 text-[13px] text-ink-3">
             <Loader2 size={14} className="animate-spin" aria-hidden /> Yükleniyor…
           </p>
         ) : items.length === 0 ? (
-          <p className="text-ink-3">
+          <p className="panel px-5 py-8 text-[12.5px] text-ink-3">
             Henüz arşivlenmiş sayfa yok. AI araştırma okuduğu sayfaları buraya kaydeder.
           </p>
         ) : (
-          <ul className="divide-y divide-line rounded border border-line">
+          <ul className="panel divide-y divide-line">
             {items.map((row) => (
               <li key={row.id}>
                 <button
                   type="button"
                   onClick={() => void open(row.id)}
-                  aria-current={selected?.id === row.id}
-                  className="w-full px-3 py-2 text-left hover:bg-surface-2"
+                  aria-current={selected?.id === row.id ? "true" : undefined}
+                  className={`w-full px-4 py-3 text-left transition-colors hover:bg-hover ${
+                    selected?.id === row.id ? "bg-accent-soft/40" : ""
+                  }`}
                 >
-                  <p className="truncate text-[13px] font-medium">{row.title || row.url}</p>
-                  <p className="truncate text-[12px] text-ink-3">{row.url}</p>
-                  <p className="text-[11px] text-ink-3">
+                  <p className="break-words text-[13px] font-medium">{row.title || row.url}</p>
+                  <p className="break-all text-[12px] text-ink-3">{row.url}</p>
+                  <p className="text-[12px] text-ink-3">
                     {SOURCE_TR[row.source] || row.source} · {formatDate(row.fetched_at)}
                     {row.text_truncated ? " · kırpıldı" : ""}
                   </p>
@@ -124,8 +126,8 @@ export default function EvidencePage() {
 
       <section aria-label="Kanıt ayrıntısı" className="min-w-0">
         {selected ? (
-          <article className="space-y-2 rounded border border-line p-3">
-            <h3 className="text-sm font-semibold">{selected.title || selected.url}</h3>
+          <article className="panel space-y-3 p-5">
+            <h3 className="break-words text-sm font-semibold">{selected.title || selected.url}</h3>
             <a
               href={selected.url}
               target="_blank"
@@ -135,18 +137,18 @@ export default function EvidencePage() {
               {selected.url}
               <ExternalLink size={11} aria-hidden />
             </a>
-            <p className="flex items-center gap-1 text-[12px]">
-              {selected.integrity_ok ? (
-                <>
-                  <ShieldCheck size={14} aria-hidden /> Bütünlük doğrulandı
-                </>
-              ) : (
-                <>
-                  <ShieldAlert size={14} aria-hidden /> Bütünlük doğrulanamadı
-                </>
-              )}
+            <p
+              className={`status ${selected.integrity_ok ? "text-ok" : "text-danger"}`}
+            >
+              <span
+                className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                  selected.integrity_ok ? "bg-ok" : "bg-danger"
+                }`}
+                aria-hidden
+              />
+              {selected.integrity_ok ? "Bütünlük doğrulandı" : "Bütünlük doğrulanamadı"}
             </p>
-            <dl className="numeric grid grid-cols-[auto_1fr] gap-x-3 text-[11px] text-ink-3">
+            <dl className="numeric grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[12px] text-ink-3">
               <dt>içerik sha256</dt>
               <dd className="break-all">{selected.sha256}</dd>
               <dt>metin sha256</dt>
@@ -156,7 +158,7 @@ export default function EvidencePage() {
               <dt>saklama sonu</dt>
               <dd>{formatDate(selected.expires_at)}</dd>
             </dl>
-            <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap rounded bg-surface-2 p-2 text-[12px]">
+            <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap rounded-control border border-line bg-sunken p-3 text-[12px]">
               {selected.text}
             </pre>
           </article>

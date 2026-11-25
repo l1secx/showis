@@ -15,6 +15,11 @@ import {
   X,
 } from "lucide-react";
 import { api, type PivotInfo, type PoolItem } from "../../../../lib/api";
+import { PoolBulkDialog } from "./pool-bulk-dialog";
+import { buildNoiseMap } from "./pool-noise";
+import { TriStateCheckbox } from "./pool-selection";
+
+const PAGE_SIZE = 100;
 
 const KINDS = [
   "name",
@@ -104,7 +109,7 @@ function BreachDetails({ check }: { check: any }) {
   const stealers: any[] = Array.isArray(check.infostealer?.stealers) ? check.infostealer.stealers : [];
   const stealerCount = Number(check.infostealer?.count || 0);
   return (
-    <details className="mt-1.5 rounded-[4px] border border-line bg-sunken/60 px-2 py-1.5 text-[11.5px]">
+    <details className="mt-1.5 rounded-[4px] border border-line bg-sunken/60 px-2 py-1.5 text-[12px]">
       <summary className="flex cursor-pointer list-none items-center gap-1.5 marker:content-none">
         <ShieldAlert size={11} aria-hidden className={breached ? "text-danger" : "text-ok"} />
         <span className={breached ? "font-medium text-danger" : "font-medium text-ok"}>
@@ -122,7 +127,7 @@ function BreachDetails({ check }: { check: any }) {
         </p>
       )}
       {stealerCount > 0 && (
-        <div className="mt-1.5 rounded-[4px] border border-line px-2 py-1">
+        <div className="mt-1.5 border-t border-line pt-1.5">
           <p className="font-medium text-danger">
             Infostealer: {stealerCount} kayıt (yalnız özet; parola/oturum verisi gösterilmez)
           </p>
@@ -163,7 +168,7 @@ function BreachDetails({ check }: { check: any }) {
         </p>
       )}
       {(providers.length > 0 || Object.keys(providerErrors).length > 0) && (
-        <p className="mt-1.5 text-[11px] text-ink-3">
+        <p className="mt-1.5 text-[12px] text-ink-3">
           Kaynaklar: {providers.join(", ") || "-"}
           {Object.keys(providerErrors).length > 0 &&
             ` · ulaşılamayan: ${Object.keys(providerErrors).join(", ")}`}
@@ -220,11 +225,17 @@ function PivotMenu({
 
   return (
     <span className="relative inline-block">
-      <button type="button" className="btn-quiet btn-sm" onClick={toggle} title="Pivot">
+      <button
+        type="button"
+        className="btn-quiet btn-sm"
+        onClick={toggle}
+        title="Pivot"
+        aria-expanded={open}
+      >
         Pivot
       </button>
       {open && (
-        <span className="absolute right-0 z-10 mt-1 block w-64 rounded-[6px] border border-line bg-surface p-2 text-left text-[12px] shadow-lg">
+        <span className="absolute right-0 z-10 mt-1 block w-64 rounded-panel border border-line-2 bg-overlay p-2 text-left text-[12px] shadow-popover">
           {pivots === null ? (
             <Loader2 size={12} className="animate-spin" aria-hidden />
           ) : pivots.length === 0 ? (
@@ -236,7 +247,7 @@ function PivotMenu({
                 type="button"
                 disabled={busy !== null}
                 onClick={() => run(pivot)}
-                className="block w-full rounded px-2 py-1 text-left hover:bg-hover"
+                className="block w-full rounded-control px-2 py-1 text-left transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/25"
                 title={pivot.description}
               >
                 {busy === pivot.id ? "Çalışıyor…" : pivot.label}
@@ -343,6 +354,17 @@ export default function PoolPage() {
   const [kind, setKind] = useState("");
   const [source, setSource] = useState("");
   const [status, setStatus] = useState("");
+  const [offset, setOffset] = useState(0);
+
+  // Gürültü önayarı: varsayılan kapalı (düşük kaliteli adaylar gizli),
+  // tek anahtarla geri alınır. Yalnız istemci tarafında çalışır.
+  const [showNoise, setShowNoise] = useState(false);
+
+  // Toplu işlem yalnız kullanıcı eylemidir: seçim + açık onay diyaloğu.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkDialog, setBulkDialog] = useState<"confirmed" | "rejected" | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
 
   const [newKind, setNewKind] = useState("note");
   const [newLabel, setNewLabel] = useState("");
@@ -352,6 +374,25 @@ export default function PoolPage() {
   const [newEventPlace, setNewEventPlace] = useState("");
   const [newEventOrg, setNewEventOrg] = useState("");
   const [newEventSource, setNewEventSource] = useState("");
+
+  const noiseReasons = useMemo(() => buildNoiseMap(items), [items]);
+  const noiseCount = useMemo(
+    () => items.filter((item) => noiseReasons.has(item.id)).length,
+    [items, noiseReasons]
+  );
+  const visibleItems = useMemo(
+    () => (showNoise ? items : items.filter((item) => !noiseReasons.has(item.id))),
+    [items, noiseReasons, showNoise]
+  );
+
+  const selectableItems = useMemo(
+    () => visibleItems.filter((item) => item.status === "proposed" || item.status === "candidate"),
+    [visibleItems]
+  );
+  const selectedItems = useMemo(
+    () => items.filter((item) => selected.has(item.id)),
+    [items, selected]
+  );
 
   const counts = useMemo(() => {
     const map: Record<string, number> = {};
@@ -368,20 +409,39 @@ export default function PoolPage() {
         kind: kind || undefined,
         source: source || undefined,
         status: status || undefined,
-        limit: 200,
+        limit: PAGE_SIZE,
+        offset,
       });
       setItems(data.items);
       setTotal(data.total);
+      // Son sayfa boşaldıysa (ör. toplu işlem sonrası) son dolu sayfaya dön.
+      if (data.items.length === 0 && data.total > 0 && offset > 0) {
+        setOffset(Math.floor((data.total - 1) / PAGE_SIZE) * PAGE_SIZE);
+      }
+      setSelected((prev) => {
+        const pending = new Set(
+          data.items
+            .filter((item) => item.status === "proposed" || item.status === "candidate")
+            .map((item) => item.id)
+        );
+        return new Set([...prev].filter((itemId) => pending.has(itemId)));
+      });
     } catch (e: any) {
       setError(e.message || "Havuz yüklenemedi");
     } finally {
       setLoading(false);
     }
-  }, [id, appliedQuery, kind, source, status]);
+  }, [id, appliedQuery, kind, source, status, offset]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Filtre veya sayfa değişince seçim sıfırlanır: toplu işlem yalnız
+  // ekranda görünen seçili kayıtlara uygulanır.
+  useEffect(() => {
+    setSelected(new Set());
+  }, [appliedQuery, kind, source, status, offset]);
 
   const addItem = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -421,7 +481,8 @@ export default function PoolPage() {
       setNewEventOrg("");
       setNewEventSource("");
       setNotice("Havuza eklendi. Aynı değer varsa mevcut kayıtla birleştirildi.");
-      await load();
+      if (offset !== 0) setOffset(0);
+      else await load();
     } catch (err: any) {
       setError(err.message || "Kayıt eklenemedi");
     } finally {
@@ -447,6 +508,67 @@ export default function PoolPage() {
       await load();
     } catch (e: any) {
       setError(e.message || "Kayıt silinemedi");
+    }
+  };
+
+  const toggleSelected = (itemId: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(itemId)) next.delete(itemId);
+      else next.add(itemId);
+      return next;
+    });
+  };
+
+  // Gürültü filtresi kapanınca gizlenen kayıtların seçimi düşer; toplu
+  // işlem asla ekranda görünmeyen bir kaydı sessizce değiştirmez.
+  const toggleNoise = () => {
+    if (showNoise) {
+      setSelected((prev) => {
+        const filtered = new Set([...prev].filter((itemId) => !noiseReasons.has(itemId)));
+        return filtered.size === prev.size ? prev : filtered;
+      });
+    }
+    setShowNoise(!showNoise);
+  };
+
+  const allVisibleSelected =
+    selectableItems.length > 0 && selectableItems.every((item) => selected.has(item.id));
+
+  const toggleSelectAll = () => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allVisibleSelected) {
+        for (const item of selectableItems) next.delete(item.id);
+      } else {
+        for (const item of selectableItems) next.add(item.id);
+      }
+      return next;
+    });
+  };
+
+  const runBulk = async () => {
+    if (!bulkDialog || selectedItems.length === 0) return;
+    setBulkBusy(true);
+    setBulkError(null);
+    setNotice(null);
+    try {
+      const result = await api.bulkUpdatePool(
+        id,
+        selectedItems.map((item) => item.id),
+        bulkDialog
+      );
+      setBulkDialog(null);
+      setSelected(new Set());
+      setNotice(
+        `${result.updated} kayıt ${bulkDialog === "confirmed" ? "onaylandı" : "reddedildi"}` +
+          (result.skipped > 0 ? `, ${result.skipped} kayıt atlandı.` : ".")
+      );
+      await load();
+    } catch (e: any) {
+      setBulkError(e.message || "Toplu işlem başarısız");
+    } finally {
+      setBulkBusy(false);
     }
   };
 
@@ -513,7 +635,7 @@ export default function PoolPage() {
           <Link href={`/cases/${id}/scan`} className="btn-secondary btn-sm">
             Havuzla tarama
           </Link>
-          <Link href={`/cases/${id}/research`} className="btn-primary btn-sm">
+          <Link href={`/cases/${id}/research`} className="btn-secondary btn-sm">
             <Sparkles size={13} aria-hidden />
             AI araştırması
           </Link>
@@ -542,25 +664,26 @@ export default function PoolPage() {
           <div>
             <h2 className="panel-title">Kayıtlar</h2>
             <p className="mt-0.5 text-[12px] text-ink-3">
-              {total} kayıt · {counts.proposed || 0} onay bekliyor ·{" "}
+              {total} kayıt · bu sayfada {counts.proposed || 0} onay bekliyor ·{" "}
               {counts.candidate || 0} aday · {counts.confirmed || 0} onaylı
             </p>
           </div>
           <form
             onSubmit={(e) => {
               e.preventDefault();
+              setOffset(0);
               setAppliedQuery(query.trim());
             }}
-            className="flex items-center gap-2"
+            className="flex min-w-0 flex-1 items-center gap-2 sm:flex-none"
           >
-            <div className="relative">
+            <div className="relative min-w-0 flex-1 sm:flex-none">
               <Search
                 size={13}
                 aria-hidden
                 className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-3"
               />
               <input
-                className="input w-[210px] pl-8"
+                className="input w-full pl-8 sm:w-[210px]"
                 placeholder="Havuzda ara"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
@@ -576,7 +699,14 @@ export default function PoolPage() {
         <div className="flex flex-wrap items-end gap-3 border-t border-line px-5 py-3">
           <label className="block">
             <span className="label">Tür</span>
-            <select className="select w-auto" value={kind} onChange={(e) => setKind(e.target.value)}>
+            <select
+              className="select w-auto"
+              value={kind}
+              onChange={(e) => {
+                setOffset(0);
+                setKind(e.target.value);
+              }}
+            >
               <option value="">Tümü</option>
               {KINDS.map((k) => (
                 <option key={k} value={k}>
@@ -590,7 +720,10 @@ export default function PoolPage() {
             <select
               className="select w-auto"
               value={source}
-              onChange={(e) => setSource(e.target.value)}
+              onChange={(e) => {
+                setOffset(0);
+                setSource(e.target.value);
+              }}
             >
               <option value="">Tümü</option>
               {Object.entries(SOURCE_TR).map(([value, label]) => (
@@ -605,7 +738,10 @@ export default function PoolPage() {
             <select
               className="select w-auto"
               value={status}
-              onChange={(e) => setStatus(e.target.value)}
+              onChange={(e) => {
+                setOffset(0);
+                setStatus(e.target.value);
+              }}
             >
               <option value="">Tümü</option>
               {Object.entries(STATUS_TR).map(([value, label]) => (
@@ -628,6 +764,32 @@ export default function PoolPage() {
             )}
             E-postaları kontrol et
           </button>
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={toggleSelectAll}
+              disabled={selectableItems.length === 0}
+              className="btn-secondary btn-sm lg:hidden"
+              title="Görünen bekleyen kayıtların tümünü seç"
+            >
+              {allVisibleSelected ? "Seçimi kaldır" : "Bekleyenleri seç"}
+            </button>
+            <button
+              type="button"
+              onClick={toggleNoise}
+              aria-pressed={showNoise}
+              className={showNoise ? "btn-secondary btn-sm" : "btn-quiet btn-sm"}
+              title={
+                showNoise
+                  ? "Gürültü filtresini kapat: düşük kaliteli adaylar yeniden gizlenir"
+                  : "Güven eşiği altı, oturum açma/404 başlıklı ve tekrar eden alanları göster"
+              }
+            >
+              {showNoise
+                ? "Gürültüyü gizle"
+                : `Düşük kaliteli adayları göster (${noiseCount})`}
+            </button>
+          </div>
         </div>
 
         <PasswordCheck />
@@ -729,7 +891,7 @@ export default function PoolPage() {
                     onChange={(e) => setNewEventSource(e.target.value)}
                   />
                 </label>
-                <p className="text-[11.5px] leading-relaxed text-ink-3 sm:col-span-4">
+                <p className="text-[12px] leading-relaxed text-ink-3 sm:col-span-4">
                   Olay kaydı; tarih/yer/kurum kombinasyonuyla tarama sorgularına ve
                   AI araştırmasına bağlam verir. Kanıt bağlantısı varsa ekleyin.
                 </p>
@@ -752,33 +914,287 @@ export default function PoolPage() {
             </p>
           ) : items.length === 0 ? (
             <div className="px-5 py-10 text-center">
-              <p className="text-[13px] font-medium text-ink">Havuz boş</p>
+              <p className="text-[13px] font-medium text-ink">
+                {appliedQuery || kind || source || status
+                  ? "Filtreye uyan kayıt yok"
+                  : "Havuz boş"}
+              </p>
               <p className="mt-1 text-[12.5px] text-ink-3">
-                Vaka girdileri otomatik eklenir. Yukarıdan yeni kayıt ekleyebilirsiniz.
+                {appliedQuery || kind || source || status
+                  ? "Arama terimini veya filtreleri gevşetip yeniden deneyin."
+                  : "Vaka girdileri otomatik eklenir. Yukarıdan yeni kayıt ekleyebilirsiniz."}
               </p>
             </div>
           ) : (
             <>
-              {/* Masaüstü tablo */}
-              <div className="scroll-x hidden md:block">
-                <table className="data-table">
+              {visibleItems.length === 0 && (
+                <div className="px-5 py-8 text-center">
+                  <p className="text-[13px] font-medium text-ink">
+                    Bu sayfada yalnız gürültü kayıtları var
+                  </p>
+                  <p className="mt-1 text-[12.5px] text-ink-3">
+                    {noiseCount} kayıt gürültü önayarıyla gizlendi.
+                  </p>
+                  <button
+                    type="button"
+                    className="btn-secondary btn-sm mt-3"
+                    onClick={() => setShowNoise(true)}
+                  >
+                    Düşük kaliteli adayları göster
+                  </button>
+                </div>
+              )}
+
+              {/* Toplu işlem çubuğu: seçim yokken görünmez. */}
+              {selected.size > 0 && (
+                <div
+                  role="region"
+                  aria-label="Toplu işlem"
+                  className="flex flex-wrap items-center gap-2 border-b border-accent-line bg-accent-soft px-5 py-2.5"
+                >
+                  <span className="text-[12.5px] font-medium text-ink">
+                    {selected.size} kayıt seçildi
+                  </span>
+                  <span className="text-[12px] text-ink-3">yalnız sizin kararınızla uygulanır</span>
+                  <div className="ml-auto flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      className="btn-primary btn-sm"
+                      onClick={() => {
+                        setBulkError(null);
+                        setBulkDialog("confirmed");
+                      }}
+                      disabled={bulkBusy}
+                    >
+                      <Check size={12} aria-hidden />
+                      Seçilenleri onayla
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-danger btn-sm"
+                      onClick={() => {
+                        setBulkError(null);
+                        setBulkDialog("rejected");
+                      }}
+                      disabled={bulkBusy}
+                    >
+                      <X size={12} aria-hidden />
+                      Seçilenleri reddet
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-quiet btn-sm"
+                      onClick={() => setSelected(new Set())}
+                      disabled={bulkBusy}
+                    >
+                      Seçimi temizle
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Masaüstü tablo: sabit sütun düzeni, eylemler her zaman sağda. */}
+              {visibleItems.length > 0 && (
+              <div className="hidden lg:block">
+                <table className="data-table w-full table-fixed">
+                  <colgroup>
+                    <col className="w-9" />
+                    <col className="w-[20%]" />
+                    <col />
+                    <col className="w-[104px]" />
+                    <col className="w-[320px]" />
+                  </colgroup>
                   <thead>
                     <tr>
+                      <th className="px-2">
+                        <TriStateCheckbox
+                          checked={allVisibleSelected}
+                          indeterminate={selected.size > 0}
+                          disabled={selectableItems.length === 0}
+                          label="Görünen bekleyen kayıtların tümünü seç"
+                          onChange={toggleSelectAll}
+                        />
+                      </th>
                       <th>Etiket</th>
                       <th>Değer</th>
-                      <th>Tür</th>
-                      <th>Kaynak</th>
                       <th>Durum</th>
                       <th className="text-right">İşlem</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {items.map((item) => (
-                      <tr key={item.id}>
-                        <td>
-                          <p className="font-medium text-ink">{item.label}</p>
+                    {visibleItems.map((item) => {
+                      const pending =
+                        item.status === "proposed" || item.status === "candidate";
+                      const reasons = noiseReasons.get(item.id);
+                      return (
+                        <tr key={item.id}>
+                          <td className="px-2 align-top">
+                            {pending ? (
+                              <TriStateCheckbox
+                                checked={selected.has(item.id)}
+                                label={`${item.label} kaydını seç`}
+                                onChange={() => toggleSelected(item.id)}
+                              />
+                            ) : (
+                              <span className="text-ink-4" aria-hidden>
+                                —
+                              </span>
+                            )}
+                          </td>
+                          <td className="align-top">
+                            <p className="break-words font-medium text-ink">{item.label}</p>
+                            {item.kind === "event" && (
+                              <p className="mt-0.5 text-[12px] text-ink-3">
+                                {[
+                                  item.attributes?.date,
+                                  item.attributes?.place,
+                                  item.attributes?.organization,
+                                ]
+                                  .filter(Boolean)
+                                  .join(" · ") || "Tarih/yer belirtilmedi"}
+                              </p>
+                            )}
+                            {reasons && (
+                              <p className="mt-1 text-[12px] text-ink-3">
+                                Gürültü: {reasons.join(" · ")}
+                              </p>
+                            )}
+                          </td>
+                          <td className="min-w-0 align-top">
+                            {item.kind === "bio" ? (
+                              <details className="text-ink-2">
+                                <summary className="cursor-pointer text-[12px] font-medium underline">
+                                  Biyografiyi aç
+                                </summary>
+                                <div className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-[12px] leading-relaxed">
+                                  {item.value}
+                                </div>
+                              </details>
+                            ) : (
+                              <span
+                                className="line-clamp-2 break-words text-ink-2"
+                                title={item.value}
+                              >
+                                {item.value}
+                              </span>
+                            )}
+                            <p className="mt-1 text-[12px] text-ink-3">
+                              {KIND_TR[item.kind] || item.kind} ·{" "}
+                              {SOURCE_TR[item.source] || item.source}
+                            </p>
+                            {item.kind === "email" && (
+                              <BreachDetails check={item.attributes?.breach_check} />
+                            )}
+                          </td>
+                          <td className="align-top">
+                            <Status value={item.status} />
+                          </td>
+                          <td className="align-top">
+                            <div className="flex flex-wrap justify-end gap-1">
+                              {pending && (
+                                <>
+                                  <button
+                                    type="button"
+                                    className="btn-quiet btn-sm"
+                                    onClick={() => setItemStatus(item, "confirmed")}
+                                    title="Onayla"
+                                  >
+                                    <Check size={12} aria-hidden />
+                                    Onayla
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn-danger-quiet btn-sm"
+                                    onClick={() => setItemStatus(item, "rejected")}
+                                    title="Reddet"
+                                    aria-label={`${item.label} kaydını reddet`}
+                                  >
+                                    <X size={12} aria-hidden />
+                                  </button>
+                                </>
+                              )}
+                              {item.kind === "email" && (
+                                <button
+                                  type="button"
+                                  className="btn-quiet btn-sm"
+                                  onClick={() => checkBreach(item)}
+                                  disabled={breachBusy === item.id || bulkBreach}
+                                  title="HIBP veri ihlali kontrolü"
+                                  aria-label={`${item.value} için HIBP veri ihlali kontrolü`}
+                                >
+                                  {breachBusy === item.id ? (
+                                    <Loader2 size={12} className="animate-spin" aria-hidden />
+                                  ) : (
+                                    <ShieldAlert size={12} aria-hidden />
+                                  )}
+                                </button>
+                              )}
+                              <PivotMenu caseId={id} item={item} onDone={load} />
+                              <button
+                                type="button"
+                                className="btn-quiet btn-sm"
+                                onClick={() => researchItem(item)}
+                                title="Bu kayıtla AI araştırması başlat"
+                                aria-label={`${item.value} kaydıyla AI araştırması başlat`}
+                              >
+                                <Sparkles size={12} aria-hidden />
+                              </button>
+                              <button
+                                type="button"
+                                className="btn-danger-quiet btn-sm"
+                                onClick={() => removeItem(item)}
+                                title="Sil"
+                                aria-label={`${item.label} kaydını sil`}
+                              >
+                                <Trash2 size={12} aria-hidden />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              )}
+
+              {/* Mobil ve orta genişlik: tablo yerine kart düzeni. */}
+              <ul className="divide-y divide-line lg:hidden">
+                {visibleItems.map((item) => {
+                  const pending = item.status === "proposed" || item.status === "candidate";
+                  const reasons = noiseReasons.get(item.id);
+                  return (
+                    <li key={item.id} className="px-4 py-4">
+                      <div className="flex items-start gap-3">
+                        <div className="pt-0.5">
+                          {pending ? (
+                            <TriStateCheckbox
+                              checked={selected.has(item.id)}
+                              label={`${item.label} kaydını seç`}
+                              onChange={() => toggleSelected(item.id)}
+                            />
+                          ) : (
+                            <span className="text-ink-4" aria-hidden>
+                              —
+                            </span>
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="break-words text-[13px] font-medium text-ink">
+                              {item.label}
+                            </p>
+                            <Status value={item.status} />
+                          </div>
+                          <p className="mt-0.5 line-clamp-3 break-words text-[12.5px] text-ink-2">
+                            {item.value}
+                          </p>
+                          <p className="mt-1 text-[12px] text-ink-3">
+                            {KIND_TR[item.kind] || item.kind} ·{" "}
+                            {SOURCE_TR[item.source] || item.source}
+                          </p>
                           {item.kind === "event" && (
-                            <p className="mt-0.5 text-[11.5px] text-ink-3">
+                            <p className="mt-0.5 text-[12px] text-ink-3">
                               {[
                                 item.attributes?.date,
                                 item.attributes?.place,
@@ -788,54 +1204,30 @@ export default function PoolPage() {
                                 .join(" · ") || "Tarih/yer belirtilmedi"}
                             </p>
                           )}
-                        </td>
-                        <td className="max-w-[320px]">
-                          {item.kind === "bio" ? (
-                            <details className="text-ink-2">
-                              <summary className="cursor-pointer text-[12px] font-medium underline">
-                                Biyografiyi aç
-                              </summary>
-                              <div className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-[12px] leading-relaxed">
-                                {item.value}
-                              </div>
-                            </details>
-                          ) : (
-                            <span
-                              className="line-clamp-2 break-words text-ink-2"
-                              title={item.value}
-                            >
-                              {item.value}
-                            </span>
+                          {reasons && (
+                            <p className="mt-1 text-[12px] text-ink-3">
+                              Gürültü: {reasons.join(" · ")}
+                            </p>
                           )}
                           {item.kind === "email" && (
                             <BreachDetails check={item.attributes?.breach_check} />
                           )}
-                        </td>
-                        <td className="text-ink-3">{KIND_TR[item.kind] || item.kind}</td>
-                        <td className="text-ink-3">{SOURCE_TR[item.source] || item.source}</td>
-                        <td>
-                          <Status value={item.status} />
-                        </td>
-                        <td>
-                          <div className="flex justify-end gap-1">
-                            {(item.status === "proposed" || item.status === "candidate") && (
+                          <div className="mt-2 flex flex-wrap gap-1">
+                            {pending && (
                               <>
                                 <button
                                   type="button"
                                   className="btn-quiet btn-sm"
                                   onClick={() => setItemStatus(item, "confirmed")}
-                                  title="Onayla"
                                 >
-                                  <Check size={12} aria-hidden />
                                   Onayla
                                 </button>
                                 <button
                                   type="button"
                                   className="btn-danger-quiet btn-sm"
                                   onClick={() => setItemStatus(item, "rejected")}
-                                  title="Reddet"
                                 >
-                                  <X size={12} aria-hidden />
+                                  Reddet
                                 </button>
                               </>
                             )}
@@ -845,13 +1237,8 @@ export default function PoolPage() {
                                 className="btn-quiet btn-sm"
                                 onClick={() => checkBreach(item)}
                                 disabled={breachBusy === item.id || bulkBreach}
-                                title="HIBP veri ihlali kontrolü"
                               >
-                                {breachBusy === item.id ? (
-                                  <Loader2 size={12} className="animate-spin" aria-hidden />
-                                ) : (
-                                  <ShieldAlert size={12} aria-hidden />
-                                )}
+                                {breachBusy === item.id ? "Kontrol ediliyor" : "Leak kontrolü"}
                               </button>
                             )}
                             <PivotMenu caseId={id} item={item} onDone={load} />
@@ -859,107 +1246,70 @@ export default function PoolPage() {
                               type="button"
                               className="btn-quiet btn-sm"
                               onClick={() => researchItem(item)}
-                              title="Bu kayıtla AI araştırması başlat"
                             >
-                              <Sparkles size={12} aria-hidden />
+                              AI araştır
                             </button>
                             <button
                               type="button"
                               className="btn-danger-quiet btn-sm"
                               onClick={() => removeItem(item)}
-                              title="Sil"
                             >
-                              <Trash2 size={12} aria-hidden />
+                              Sil
                             </button>
                           </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              {/* Mobil kayıt listesi */}
-              <ul className="divide-y divide-line md:hidden">
-                {items.map((item) => (
-                  <li key={item.id} className="px-5 py-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="text-[13px] font-medium text-ink">{item.label}</p>
-                        <p className="mt-0.5 break-words text-[12.5px] text-ink-2">{item.value}</p>
-                        <p className="mt-1 text-[12px] text-ink-3">
-                          {KIND_TR[item.kind] || item.kind} ·{" "}
-                          {SOURCE_TR[item.source] || item.source}
-                        </p>
-                        {item.kind === "event" && (
-                          <p className="mt-0.5 text-[11.5px] text-ink-3">
-                            {[
-                              item.attributes?.date,
-                              item.attributes?.place,
-                              item.attributes?.organization,
-                            ]
-                              .filter(Boolean)
-                              .join(" · ") || "Tarih/yer belirtilmedi"}
-                          </p>
-                        )}
-                        {item.kind === "email" && (
-                          <BreachDetails check={item.attributes?.breach_check} />
-                        )}
+                        </div>
                       </div>
-                      <Status value={item.status} />
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-1">
-                      {(item.status === "proposed" || item.status === "candidate") && (
-                        <>
-                          <button
-                            type="button"
-                            className="btn-quiet btn-sm"
-                            onClick={() => setItemStatus(item, "confirmed")}
-                          >
-                            Onayla
-                          </button>
-                          <button
-                            type="button"
-                            className="btn-danger-quiet btn-sm"
-                            onClick={() => setItemStatus(item, "rejected")}
-                          >
-                            Reddet
-                          </button>
-                        </>
-                      )}
-                      {item.kind === "email" && (
-                        <button
-                          type="button"
-                          className="btn-quiet btn-sm"
-                          onClick={() => checkBreach(item)}
-                          disabled={breachBusy === item.id || bulkBreach}
-                        >
-                          {breachBusy === item.id ? "Kontrol ediliyor" : "Leak kontrolü"}
-                        </button>
-                      )}
-                      <PivotMenu caseId={id} item={item} onDone={load} />
-                      <button
-                        type="button"
-                        className="btn-quiet btn-sm"
-                        onClick={() => researchItem(item)}
-                      >
-                        AI araştır
-                      </button>
-                      <button
-                        type="button"
-                        className="btn-danger-quiet btn-sm"
-                        onClick={() => removeItem(item)}
-                      >
-                        Sil
-                      </button>
-                    </div>
-                  </li>
-                ))}
+                    </li>
+                  );
+                })}
               </ul>
+
+              {/* Sayfalama: 200+ kayıtta tablo akıcı kalır. */}
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line px-5 py-3">
+                <p className="text-[12px] text-ink-3">
+                  {total === 0
+                    ? "0 kayıt"
+                    : `${offset + 1}–${Math.min(offset + PAGE_SIZE, total)} / ${total} kayıt`}
+                  {!showNoise && noiseReasons.size > 0 && ` · ${noiseCount} gürültü gizli`}
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    className="btn-secondary btn-sm"
+                    onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
+                    disabled={offset === 0 || loading}
+                  >
+                    Önceki
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary btn-sm"
+                    onClick={() => setOffset(offset + PAGE_SIZE)}
+                    disabled={offset + PAGE_SIZE >= total || loading}
+                  >
+                    Sonraki
+                  </button>
+                </div>
+              </div>
             </>
           )}
         </div>
       </div>
+
+      <PoolBulkDialog
+        open={bulkDialog !== null}
+        status={bulkDialog ?? "confirmed"}
+        count={selectedItems.length}
+        busy={bulkBusy}
+        error={bulkError}
+        onCancel={() => {
+          if (!bulkBusy) {
+            setBulkDialog(null);
+            setBulkError(null);
+          }
+        }}
+        onConfirm={() => void runBulk()}
+      />
     </div>
   );
 }

@@ -18,7 +18,7 @@ raporlayan kişisel OSINT web uygulaması.
 - **64 Platform Site-Check:** Kullanıcı adı varlık doğrulaması (Kaggle, HackerRank,
   Root-Me, Duolingo, Replit, HackerOne, Bugcrowd, Kick, Ko-fi, SourceHut, Velog, vb.) — 64 site, sonuç önbelleği (`SHOWIS_SITECHECK_CACHE_TTL`).
 - **Kimlik Grafiği:** `SAME_PERSON` (ortak kullanıcı adı / avatar / e-posta kanıtı) ve `CROSS_LINK` (bio'daki
-  platform bağlantıları) edge'leri; `GET /cases/{id}/graph` + Cytoscape.js paneli
+  platform bağlantıları) edge'leri; `GET /cases/{id}/graph` + özel Canvas2D grafik motoru (`apps/web/lib/graph-engine`: Barnes-Hut kuvvet simülasyonu, LOD, SVG/PNG dışa aktarım)
   (güven eşiği / platform / edge tipi filtreleri, PNG·JSON·GEXF dışa aktarma).
 - **Authenticity (sahte/spam hesap) sinyalleri:** hesap yaşı (`created_at`), aktivite
   (`followers_count`, repo/post sayıları), boş bio, varsayılan avatar ve cross-link
@@ -65,7 +65,7 @@ raporlayan kişisel OSINT web uygulaması.
   rolleri ayrı modellere atanabilir; `anthropic` preseti native `/v1/messages` kullanır.
 - **Tedarik Zinciri Modülü:** Kişi kimlik grafiğinden ayrı `supply_chain_nodes` /
   `supply_chain_edges` modeli; şirket, tedarikçi, ürün ve yönlü ilişkiler,
-  Cytoscape grafiği ve AI önerisi onay akışı.
+  özel motor grafiği ve AI önerisi onay akışı.
 - **Hibrit Arama:** Brave → SerpAPI → Google CSE → DuckDuckGo fallback zinciri + URL tekilleştirme.
 - **Varyant Motoru:** Türkçe karakter normalizasyonu + akıllı kullanıcı adı adayları.
 - **Paralel Tarama:** `SHOWIS_SCAN_CONCURRENCY` (varsayılan 4) sınırlı eşzamanlılık;

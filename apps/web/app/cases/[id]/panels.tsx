@@ -229,7 +229,7 @@ export function ScanTab({
               </span>
             </div>
             <div className="flex flex-wrap items-end gap-4 p-5">
-              <label className="flex cursor-pointer items-center gap-2 text-[12.5px] text-ink-2">
+              <label className="flex cursor-pointer items-center gap-2 text-[12.5px] text-ink-2 max-sm:min-h-[40px]">
                 <input
                   type="checkbox"
                   checked={monitor.enabled}
@@ -269,7 +269,7 @@ export function ScanTab({
                   <option value="O3">O3</option>
                 </select>
               </label>
-              <p className="ml-auto text-[11.5px] text-ink-3">
+              <p className="ml-auto text-[12px] text-ink-3">
                 {monitor.last_scan_at
                   ? `Son izleme: ${new Date(monitor.last_scan_at).toLocaleString("tr-TR")}`
                   : "Henüz izleme taraması yok"}
@@ -278,7 +278,7 @@ export function ScanTab({
                 <span className="label">Webhook (scan.completed)</span>
                 <div className="flex gap-2">
                   <input
-                    className="input font-mono"
+                    className="input min-w-0 flex-1 font-mono"
                     value={webhook}
                     onChange={(e) => setWebhook(e.target.value)}
                     placeholder="https://ornek.example/webhook"
@@ -475,8 +475,8 @@ export function ScanTab({
                 </span>
               </div>
 
-              <div className="mt-4 max-h-80 overflow-y-auto rounded-[6px] border border-line">
-                <table className="data-table">
+              <div className="scroll-x mt-4 max-h-80 overflow-y-auto border-t border-line">
+                <table className="data-table min-w-[460px]">
                   <thead>
                     <tr>
                       <th scope="col">Bağlayıcı</th>
@@ -534,12 +534,12 @@ export function ScanTab({
               {events.map((ev, i) => {
                 const bad = ev.type.includes("fail") || ev.type.includes("error");
                 return (
-                  <div key={i} className="flex gap-2">
+                  <div key={i} className="flex flex-wrap gap-x-2 gap-y-0.5">
                     <span className="shrink-0 text-ink-3">{ev.at}</span>
                     <span className={`shrink-0 ${bad ? "text-danger" : "text-accent-ink"}`}>
                       {ev.type}
                     </span>
-                    <span className="truncate text-ink-3">
+                    <span className="min-w-0 break-all text-ink-3">
                       {JSON.stringify(ev.data).slice(0, 140)}
                     </span>
                   </div>
@@ -716,7 +716,7 @@ function AuthenticityChip({
           aria-expanded={open}
           aria-controls={panelId}
           onClick={() => setOpen((v) => !v)}
-          className={`inline-flex items-center gap-1 rounded text-[12px] ${tone.text} underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/25`}
+          className={`inline-flex items-center gap-1 rounded-control text-[12px] ${tone.text} underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/25 max-sm:min-h-[40px]`}
         >
           {reasons!.length} neden
           <ChevronDown
@@ -729,7 +729,7 @@ function AuthenticityChip({
       {hasReasons && open && (
         <ul
           id={panelId}
-          className="mt-1 w-full basis-full space-y-1 rounded-[6px] border border-line bg-sunken px-3 py-2 text-[12px] text-ink-3"
+          className="mt-1 w-full basis-full space-y-1 border-t border-line pt-2 text-[12px] text-ink-3"
         >
           {reasons!.map((reason) => (
             <li key={reason} className="flex items-start gap-2">
@@ -766,7 +766,7 @@ function ScoreBreakdown({
         aria-expanded={open}
         aria-controls={panelId}
         onClick={() => setOpen((v) => !v)}
-        className="inline-flex items-center gap-1.5 rounded text-[12px] text-ink-3 transition-colors hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/25"
+        className="inline-flex items-center gap-1.5 rounded-control text-[12px] text-ink-3 transition-colors hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/25 max-sm:min-h-[40px]"
       >
         <ChevronDown
           size={12}
@@ -780,7 +780,7 @@ function ScoreBreakdown({
       </button>
 
       {open && (
-        <div id={panelId} className="mt-2 rounded-[6px] border border-line bg-sunken p-3">
+        <div id={panelId} className="mt-2 border-t border-line pt-3">
           {rows.length === 0 ? (
             <p className="text-[12px] text-ink-3">Skor sinyali kaydı yok.</p>
           ) : (
@@ -791,7 +791,7 @@ function ScoreBreakdown({
                   <li key={row.key} className="grid grid-cols-[1fr_auto] items-center gap-3">
                     <span className="min-w-0">
                       <span
-                        className={`block truncate text-[12px] ${
+                        className={`block break-words text-[12px] ${
                           negative ? "text-danger" : "text-ink-2"
                         }`}
                         title={row.meta?.hint}
@@ -867,7 +867,7 @@ function FindingRecord({
       <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-            <h2 className="truncate text-[14px] font-semibold text-ink">{f.label}</h2>
+            <h2 className="break-words text-[14px] font-semibold text-ink">{f.label}</h2>
             <PlatformBadge platform={f.platform} />
             <Badge value={f.status} />
             {f.cluster && f.cluster.size > 1 && (
@@ -886,9 +886,9 @@ function FindingRecord({
               href={f.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="mt-1 inline-flex max-w-full items-center gap-1.5 font-mono text-[12px] text-ink-3 transition-colors hover:text-accent-ink"
+              className="mt-1 inline-flex max-w-full items-center gap-1.5 py-1 font-mono text-[12px] text-ink-3 transition-colors hover:text-accent-ink max-sm:min-h-[40px]"
             >
-              <span className="truncate">{f.url}</span>
+              <span className="break-all">{f.url}</span>
               <ArrowUpRight size={11} className="shrink-0 text-ink-3" aria-hidden />
             </a>
           )}
@@ -916,7 +916,7 @@ function FindingRecord({
         </div>
 
         {/* Skor: sayının kendisi önde, çubuk yalnızca destek. */}
-        <div className="flex shrink-0 flex-col items-end gap-2">
+        <div className="flex w-full shrink-0 flex-wrap items-end gap-3 sm:w-auto sm:flex-col sm:items-end sm:gap-2">
           <div className="text-right">
             <p className="tabular text-[19px] font-semibold leading-none text-ink">{pct}</p>
             <p className="mt-1 text-[12px] text-ink-3">güven puanı</p>
@@ -935,7 +935,7 @@ function FindingRecord({
           </div>
           {((f.corroboration ?? 0) > 0 || (f.evidence_count ?? f.evidence_ids.length) > 0) && (
             <p
-              className="text-right text-[11.5px] text-ink-3"
+              className="text-right text-[12px] text-ink-3"
               title={
                 (f.signals ?? [])
                   .map((key) => SIGNAL_META[key]?.label ?? key)
@@ -957,7 +957,7 @@ function FindingRecord({
           )}
 
           {(f.status === "candidate" || f.status === "lead") && (
-            <div className="mt-1 flex gap-2">
+            <div className="mt-1 flex gap-2 max-sm:ml-auto">
               <button
                 onClick={() => onVerify(f.id, "confirmed")}
                 disabled={busy}
@@ -990,7 +990,7 @@ function FindingRecord({
         aria-expanded={expanded}
         aria-controls={evidencePanelId}
         onClick={() => onToggleEvidence(f.id)}
-        className="mt-3 inline-flex items-center gap-1.5 rounded text-[12px] text-ink-3 transition-colors hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/25"
+        className="mt-3 inline-flex items-center gap-1.5 rounded-control text-[12px] text-ink-3 transition-colors hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/25 max-sm:min-h-[40px]"
       >
         <Eye size={12} aria-hidden />
         {expanded ? "Kanıtları gizle" : `Kanıtlar (${f.evidence_ids.length})`}
@@ -1000,7 +1000,7 @@ function FindingRecord({
           type="button"
           onClick={() => onCapture(f.id)}
           disabled={capturing}
-          className="ml-3 mt-3 inline-flex items-center gap-1.5 rounded text-[12px] text-ink-3 transition-colors hover:text-ink disabled:opacity-50"
+          className="ml-3 mt-3 inline-flex items-center gap-1.5 rounded-control text-[12px] text-ink-3 transition-colors hover:text-ink disabled:opacity-50 max-sm:min-h-[40px]"
           title="Sayfanın ekran görüntüsünü kanıt zincirine ekle"
         >
           {capturing ? (
@@ -1013,7 +1013,7 @@ function FindingRecord({
       )}
 
       {expanded && (
-        <div id={evidencePanelId} className="mt-3 rounded-[6px] border border-line bg-sunken p-3">
+        <div id={evidencePanelId} className="mt-3 border-t border-line pt-3">
           <p className="text-[12px] font-medium text-ink-2">Kanıt zinciri</p>
           <div className="mt-2 space-y-2.5">
             {(evidence || []).map((ev) => (
@@ -1533,7 +1533,7 @@ export function FindingsTab({ caseId }: { caseId: string }) {
                 title={f.hint}
                 onClick={() => applyFilter(f.value)}
                 onKeyDown={(e) => onTabKeyDown(e, i)}
-                className={`relative flex items-center gap-1.5 pb-2 pt-1 text-[13px] transition-colors ${
+                className={`relative flex min-h-[40px] items-center justify-center gap-1.5 pb-2 pt-1 text-[13px] transition-colors max-sm:min-w-[40px] ${
                   active
                     ? "font-medium text-ink after:absolute after:inset-x-0 after:bottom-[-1px] after:h-[2px] after:bg-accent"
                     : "text-ink-3 hover:text-ink"
@@ -1556,7 +1556,7 @@ export function FindingsTab({ caseId }: { caseId: string }) {
                 ? "Düşük güvenilirlikli hesapları tekrar göster"
                 : "Güvenilirliği 0.35 altındaki hesapları gizle"
             }
-            className={`inline-flex items-center gap-1.5 text-[12px] transition-colors ${
+            className={`inline-flex items-center gap-1.5 text-[12px] transition-colors max-sm:min-h-[40px] ${
               hideLowAuth ? "text-danger" : "text-ink-3 hover:text-ink"
             }`}
           >
@@ -1573,7 +1573,7 @@ export function FindingsTab({ caseId }: { caseId: string }) {
                 ? "Reddedilen bulguları tekrar gizle"
                 : "Reddedilen bulguları listeye ekle"
             }
-            className={`inline-flex items-center gap-1.5 text-[12px] transition-colors ${
+            className={`inline-flex items-center gap-1.5 text-[12px] transition-colors max-sm:min-h-[40px] ${
               showRejected ? "text-warn" : "text-ink-3 hover:text-ink"
             }`}
           >
@@ -1592,7 +1592,7 @@ export function FindingsTab({ caseId }: { caseId: string }) {
 
       {/* OSINT daraltma: platform, etiket/URL araması, sıralama, küme görünümü */}
       <div className="flex flex-col gap-3 border-b border-line pb-3 lg:flex-row lg:items-center">
-        <div className="relative min-w-[220px] flex-1">
+        <div className="relative w-full min-w-0 flex-1 sm:min-w-[220px]">
           <Search
             size={14}
             aria-hidden
@@ -1604,14 +1604,14 @@ export function FindingsTab({ caseId }: { caseId: string }) {
             onChange={(e) => setFindingQuery(e.target.value)}
             placeholder="Bulgu etiketi, URL veya platform ara"
             aria-label="Bulgularda ara"
-            className="input py-1.5 pl-9 text-[12.5px]"
+            className="input min-h-[44px] py-1.5 pl-9 pr-11 text-[12.5px] sm:min-h-0"
           />
           {findingQuery && (
             <button
               type="button"
               onClick={() => setFindingQuery("")}
               aria-label="Bulgu aramasını temizle"
-              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-ink-3 hover:text-ink"
+              className="absolute right-0 top-0 flex h-full w-11 items-center justify-center rounded-control text-ink-3 transition-colors hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/25"
             >
               <X size={12} aria-hidden />
             </button>
@@ -1635,7 +1635,7 @@ export function FindingsTab({ caseId }: { caseId: string }) {
                       : [...current, platform]
                   )
                 }
-                className={`inline-flex items-center gap-1.5 text-[12px] transition-colors ${
+                className={`inline-flex items-center gap-1.5 text-[12px] transition-colors max-sm:min-h-[40px] ${
                   active ? "text-ink-2" : "text-ink-3 line-through"
                 }`}
               >
@@ -1673,7 +1673,7 @@ export function FindingsTab({ caseId }: { caseId: string }) {
             aria-pressed={grouped}
             onClick={() => setGrouped((value) => !value)}
             title="Aynı kişiye bağlı hesapları tek kümede topla"
-            className={`inline-flex items-center gap-1.5 text-[12px] transition-colors ${
+            className={`inline-flex items-center gap-1.5 text-[12px] transition-colors max-sm:min-h-[40px] ${
               grouped ? "font-medium text-ink" : "text-ink-3 hover:text-ink"
             }`}
           >
@@ -1685,7 +1685,7 @@ export function FindingsTab({ caseId }: { caseId: string }) {
             onClick={() => downloadFindings("csv")}
             disabled={shown.length === 0}
             title="Filtrelenmiş bulguları CSV olarak indir"
-            className="inline-flex items-center gap-1.5 text-[12px] text-ink-3 transition-colors hover:text-ink disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 text-[12px] text-ink-3 transition-colors hover:text-ink disabled:opacity-50 max-sm:min-h-[40px] max-sm:min-w-[40px]"
           >
             <Download size={12} aria-hidden />
             CSV
@@ -1695,7 +1695,7 @@ export function FindingsTab({ caseId }: { caseId: string }) {
             onClick={() => downloadFindings("json")}
             disabled={shown.length === 0}
             title="Filtrelenmiş bulguları JSON olarak indir"
-            className="inline-flex items-center gap-1.5 text-[12px] text-ink-3 transition-colors hover:text-ink disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 text-[12px] text-ink-3 transition-colors hover:text-ink disabled:opacity-50 max-sm:min-h-[40px] max-sm:min-w-[40px]"
           >
             <Download size={12} aria-hidden />
             JSON
@@ -1786,7 +1786,7 @@ export function FindingsTab({ caseId }: { caseId: string }) {
       )}
 
       {hiddenLowAuth > 0 && (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-[6px] border border-line bg-sunken px-3 py-2 text-[12.5px] text-ink-3">
+        <div className="flex flex-wrap items-center gap-2 text-[12px] text-ink-3">
           <span>
             <span className="numeric font-medium text-ink-2">{hiddenLowAuth}</span> düşük
             güvenilirlikli hesap gizlendi (güvenilirlik 0.35 altı)
@@ -1794,7 +1794,7 @@ export function FindingsTab({ caseId }: { caseId: string }) {
           <button
             type="button"
             onClick={() => applyHideLowAuth(false)}
-            className="btn-secondary btn-sm"
+            className="btn-quiet btn-sm"
           >
             <Eye size={12} aria-hidden />
             Göster
@@ -1803,7 +1803,7 @@ export function FindingsTab({ caseId }: { caseId: string }) {
       )}
 
       {hiddenRejected > 0 && (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-[6px] border border-line bg-sunken px-3 py-2 text-[12.5px] text-ink-3">
+        <div className="flex flex-wrap items-center gap-2 text-[12px] text-ink-3">
           <span>
             <span className="numeric font-medium text-ink-2">{hiddenRejected}</span> reddedilen bulgu
             gizlendi (yalnızca zayıf sinyal içeren sonuçlar)
@@ -1811,7 +1811,7 @@ export function FindingsTab({ caseId }: { caseId: string }) {
           <button
             type="button"
             onClick={() => applyShowRejected(true)}
-            className="btn-secondary btn-sm"
+            className="btn-quiet btn-sm"
           >
             <Eye size={12} aria-hidden />
             Göster
@@ -1870,7 +1870,7 @@ export function FindingsTab({ caseId }: { caseId: string }) {
                   <span className="text-[12px] text-ink-3">
                     {cluster.evidence_count} kanıt
                   </span>
-                  <span className="flex flex-wrap items-center gap-2 text-[11.5px] text-ink-3">
+                  <span className="flex flex-wrap items-center gap-2 text-[12px] text-ink-3">
                     {cluster.platforms.slice(0, 6).map((platform) => (
                       <span key={platform} className="inline-flex items-center gap-1">
                         <span
@@ -1887,7 +1887,7 @@ export function FindingsTab({ caseId }: { caseId: string }) {
                   </span>
                   {cluster.reasons?.[0] && (
                     <span
-                      className="max-w-[320px] truncate text-[11.5px] text-ink-3"
+                      className="max-w-[320px] break-words text-[12px] text-ink-3"
                       title={cluster.reasons.join(" · ")}
                     >
                       {cluster.reasons[0]}
@@ -1906,7 +1906,7 @@ export function FindingsTab({ caseId }: { caseId: string }) {
                           : [...current, cluster.id]
                       )
                     }
-                    className="ml-auto rounded p-1 text-ink-3 transition-colors hover:text-ink"
+                    className="ml-auto flex min-h-[24px] min-w-[24px] items-center justify-center rounded-control p-1 text-ink-3 transition-colors hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/25 max-sm:min-h-[40px] max-sm:min-w-[40px]"
                   >
                     <ChevronDown
                       size={13}
@@ -1918,7 +1918,7 @@ export function FindingsTab({ caseId }: { caseId: string }) {
                   </button>
                   <Link
                     href={`/cases/${caseId}/graph?cluster=${encodeURIComponent(cluster.id)}`}
-                    className="text-[12px] text-accent-ink hover:underline"
+                    className="inline-flex items-center text-[12px] text-accent-ink hover:underline max-sm:min-h-[40px]"
                   >
                     Grafikte aç
                   </Link>
@@ -2021,7 +2021,7 @@ function ReportSummary({ data }: { data: CaseReportJson }) {
               </div>
               <div className="flex gap-2">
                 <dt className="w-20 shrink-0 text-ink-3">Vaka</dt>
-                <dd className="truncate text-ink">{summary.case_name || "—"}</dd>
+                <dd className="min-w-0 break-words text-ink">{summary.case_name || "—"}</dd>
               </div>
               <div className="flex gap-2">
                 <dt className="w-20 shrink-0 text-ink-3">Mod</dt>
@@ -2082,8 +2082,8 @@ function ReportSummary({ data }: { data: CaseReportJson }) {
           </div>
 
           {topFindings.length > 0 && (
-            <div className="border-t border-line">
-              <table className="data-table">
+            <div className="scroll-x border-t border-line">
+              <table className="data-table min-w-[560px]">
                 <caption className="px-4 py-2.5 text-left text-[12px] font-medium text-ink-2">
                   En yüksek güvenli 5 bulgu
                 </caption>
@@ -2105,14 +2105,14 @@ function ReportSummary({ data }: { data: CaseReportJson }) {
                     <tr key={`${finding.platform}-${finding.label}-${index}`}>
                       <th
                         scope="row"
-                        className="max-w-[180px] truncate text-left font-medium text-ink"
+                        className="max-w-[180px] break-words text-left font-medium text-ink"
                       >
                         {finding.url ? (
                           <a
                             href={finding.url}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="link"
+                            className="link inline-flex items-center max-sm:min-h-[40px]"
                           >
                             {finding.label}
                           </a>
@@ -2127,7 +2127,7 @@ function ReportSummary({ data }: { data: CaseReportJson }) {
                       <td className="numeric text-right text-ink-2">
                         {Math.round((finding.score ?? 0) * 100)}%
                       </td>
-                      <td className="hidden max-w-xs truncate text-[12px] text-ink-3 lg:table-cell">
+                      <td className="hidden max-w-xs break-words text-[12px] text-ink-3 lg:table-cell">
                         {finding.reason}
                       </td>
                     </tr>
@@ -2141,42 +2141,44 @@ function ReportSummary({ data }: { data: CaseReportJson }) {
 
       <div className="grid gap-5 lg:grid-cols-2">
         {platforms && (
-          <section className="panel overflow-hidden">
+          <section className="panel min-w-0 overflow-hidden">
             <div className="panel-head">
               <h2 className="panel-title">Platform dağılımı</h2>
             </div>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th scope="col">Platform</th>
-                  <th scope="col" className="text-right">
-                    Bulgu
-                  </th>
-                  <th scope="col" className="text-right">
-                    En yüksek
-                  </th>
-                  <th scope="col" className="text-right">
-                    Ortalama
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {platforms.slice(0, 12).map((row) => (
-                  <tr key={row.platform}>
-                    <th scope="row" className="text-left font-medium text-ink">
-                      {platformMeta(row.platform).label}
+            <div className="scroll-x">
+              <table className="data-table min-w-[420px]">
+                <thead>
+                  <tr>
+                    <th scope="col">Platform</th>
+                    <th scope="col" className="text-right">
+                      Bulgu
                     </th>
-                    <td className="numeric text-right text-ink-2">{row.findings}</td>
-                    <td className="numeric text-right text-ink-2">
-                      {Math.round((row.max_score ?? 0) * 100)}%
-                    </td>
-                    <td className="numeric text-right text-ink-3">
-                      {Math.round((row.avg_score ?? 0) * 100)}%
-                    </td>
+                    <th scope="col" className="text-right">
+                      En yüksek
+                    </th>
+                    <th scope="col" className="text-right">
+                      Ortalama
+                    </th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {platforms.slice(0, 12).map((row) => (
+                    <tr key={row.platform}>
+                      <th scope="row" className="text-left font-medium text-ink">
+                        {platformMeta(row.platform).label}
+                      </th>
+                      <td className="numeric text-right text-ink-2">{row.findings}</td>
+                      <td className="numeric text-right text-ink-2">
+                        {Math.round((row.max_score ?? 0) * 100)}%
+                      </td>
+                      <td className="numeric text-right text-ink-3">
+                        {Math.round((row.avg_score ?? 0) * 100)}%
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
             {platforms.length > 12 && (
               <p className="border-t border-line px-4 py-2 text-[12px] text-ink-3">
                 {platforms.length - 12} platform daha
@@ -2186,7 +2188,7 @@ function ReportSummary({ data }: { data: CaseReportJson }) {
         )}
 
         {(identityEdges.length > 0 || sharedGroups.length > 0 || identity?.confidence_note) && (
-          <section className="panel p-5">
+          <section className="panel min-w-0 p-5">
             <h2 className="section-heading">Kimlik ve çapraz bağlantı özeti</h2>
             {identity?.confidence_note && (
               <p className="mt-2 text-[12px] leading-relaxed text-ink-3">
@@ -2211,33 +2213,35 @@ function ReportSummary({ data }: { data: CaseReportJson }) {
             )}
 
             {identityEdges.length > 0 && (
-              <table className="data-table mt-4">
-                <caption className="sr-only">Çapraz bağlantılar</caption>
-                <thead>
-                  <tr>
-                    <th scope="col">Tip</th>
-                    <th scope="col" className="text-right">
-                      Güven
-                    </th>
-                    <th scope="col">Gerekçe</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {identityEdges.slice(0, 8).map((edge, index) => (
-                    <tr key={`${edge.source}-${edge.target}-${index}`}>
-                      <th scope="row" className="text-left font-normal text-ink-2" title={edge.type}>
-                        {edgeTypeLabel(edge.type)}
+              <div className="scroll-x mt-4">
+                <table className="data-table min-w-[420px]">
+                  <caption className="sr-only">Çapraz bağlantılar</caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">Tip</th>
+                      <th scope="col" className="text-right">
+                        Güven
                       </th>
-                      <td className="numeric text-right text-ink-2">
-                        {Math.round((edge.confidence ?? 0) * 100)}%
-                      </td>
-                      <td className="max-w-xs truncate text-[12px] text-ink-3">
-                        {edge.reason || "—"}
-                      </td>
+                      <th scope="col">Gerekçe</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {identityEdges.slice(0, 8).map((edge, index) => (
+                      <tr key={`${edge.source}-${edge.target}-${index}`}>
+                        <th scope="row" className="text-left font-normal text-ink-2" title={edge.type}>
+                          {edgeTypeLabel(edge.type)}
+                        </th>
+                        <td className="numeric text-right text-ink-2">
+                          {Math.round((edge.confidence ?? 0) * 100)}%
+                        </td>
+                        <td className="max-w-xs break-words text-[12px] text-ink-3">
+                          {edge.reason || "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </section>
         )}
@@ -2250,7 +2254,7 @@ function ReportSummary({ data }: { data: CaseReportJson }) {
             <span className="numeric text-ink-3">{timeline.length} kayıt</span>
           </div>
           <div className="scroll-x max-h-72 overflow-y-auto">
-            <table className="data-table">
+            <table className="data-table min-w-[520px]">
               <thead className="sticky top-0">
                 <tr>
                   <th scope="col">Tarih</th>
@@ -2268,7 +2272,7 @@ function ReportSummary({ data }: { data: CaseReportJson }) {
                       {formatDateTime(row.date)}
                     </th>
                     <td className="text-ink-3">{platformMeta(row.platform).label}</td>
-                    <td className="max-w-[220px] truncate text-ink">{row.label}</td>
+                    <td className="max-w-[220px] break-words text-ink">{row.label}</td>
                     <td className="hidden text-[12px] text-ink-3 sm:table-cell" title={row.event}>
                       {timelineEventLabel(row.event)}
                     </td>
@@ -2310,31 +2314,33 @@ function ReportSummary({ data }: { data: CaseReportJson }) {
           </dl>
 
           {evidence.by_entity && evidence.by_entity.length > 0 && (
-            <table className="data-table mt-4">
-              <caption className="pb-1 text-left text-[12px] font-medium text-ink-2">
-                En çok kanıtı olan hedef kayıtları
-              </caption>
-              <thead>
-                <tr>
-                  <th scope="col">Kayıt</th>
-                  <th scope="col">Platform</th>
-                  <th scope="col" className="text-right">
-                    Kanıt
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {evidence.by_entity.slice(0, 10).map((row) => (
-                  <tr key={row.entity_id}>
-                    <th scope="row" className="max-w-[240px] truncate text-left font-normal text-ink">
-                      {row.label}
+            <div className="scroll-x mt-4">
+              <table className="data-table min-w-[420px]">
+                <caption className="pb-1 text-left text-[12px] font-medium text-ink-2">
+                  En çok kanıtı olan hedef kayıtları
+                </caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Kayıt</th>
+                    <th scope="col">Platform</th>
+                    <th scope="col" className="text-right">
+                      Kanıt
                     </th>
-                    <td className="text-ink-3">{platformMeta(row.platform).label}</td>
-                    <td className="numeric text-right text-ink-2">{row.evidence}</td>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {evidence.by_entity.slice(0, 10).map((row) => (
+                    <tr key={row.entity_id}>
+                      <th scope="row" className="max-w-[240px] break-words text-left font-normal text-ink">
+                        {row.label}
+                      </th>
+                      <td className="text-ink-3">{platformMeta(row.platform).label}</td>
+                      <td className="numeric text-right text-ink-2">{row.evidence}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </section>
       )}
@@ -2539,7 +2545,10 @@ export function ReportTab({ caseId }: { caseId: string }) {
             <ul className="mt-2 space-y-1">
               {reports.map((r) => (
                 <li key={r.id}>
-                  <a href={r.download_url} className="link text-[12.5px]">
+                  <a
+                    href={r.download_url}
+                    className="link inline-flex items-center text-[12.5px] max-sm:min-h-[40px]"
+                  >
                     {r.format.toUpperCase()} —{" "}
                     {r.created_at ? new Date(r.created_at).toLocaleString("tr-TR") : r.id}
                   </a>
@@ -2624,7 +2633,7 @@ export function CommentsTab({ caseId }: { caseId: string }) {
       <section className="panel p-5">
         <h2 className="section-heading">Vaka sahibi</h2>
         <div className="mt-3 flex flex-wrap items-end gap-2">
-          <label className="min-w-[220px] flex-1">
+          <label className="min-w-0 flex-1">
             <span className="label">Operasyonel sahip</span>
             <input
               className="input"
@@ -2637,7 +2646,7 @@ export function CommentsTab({ caseId }: { caseId: string }) {
             Kaydet
           </button>
         </div>
-        <p className="mt-2 text-[11.5px] text-ink-3">
+        <p className="mt-2 text-[12px] text-ink-3">
           Sahip alanı operasyonel bir etikettir; tek paylaşılan API token’ı nedeniyle
           yetkilendirme sınırı değildir.
         </p>
@@ -2676,7 +2685,7 @@ export function CommentsTab({ caseId }: { caseId: string }) {
               aria-label="Yorum yazarı"
               placeholder="Yazar"
             />
-            <span className="text-[11.5px] text-ink-3 self-center">
+            <span className="text-[12px] text-ink-3 self-center">
               X-Actor başlığı varsa o kullanılır
             </span>
           </div>
@@ -2685,6 +2694,7 @@ export function CommentsTab({ caseId }: { caseId: string }) {
             value={body}
             onChange={(e) => setBody(e.target.value)}
             placeholder="Vaka notu veya inceleme yorumu"
+            aria-label="Yorum metni"
             maxLength={4000}
           />
           {error && <p className="text-[12px] text-danger">{error}</p>}
@@ -2735,7 +2745,7 @@ export function DiffTab({ caseId }: { caseId: string }) {
   const counts = diff.counts ?? {};
   return (
     <div className="space-y-5">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+      <div className="panel grid grid-cols-2 gap-x-6 gap-y-4 p-5 sm:grid-cols-5">
         {[
           ["Yeni bulgu", counts.findings_new ?? 0],
           ["Çıkan bulgu", counts.findings_removed ?? 0],
@@ -2743,14 +2753,14 @@ export function DiffTab({ caseId }: { caseId: string }) {
           ["Yeni entity", counts.entities_added ?? 0],
           ["Yeni kenar", counts.edges_added ?? 0],
         ].map(([label, value]) => (
-          <div key={String(label)} className="panel px-3 py-3">
-            <p className="text-[11.5px] text-ink-3">{label}</p>
-            <p className="numeric mt-1 text-[19px] font-semibold text-ink">{value}</p>
+          <div key={String(label)}>
+            <p className="tabular text-[20px] font-semibold leading-none text-ink">{value}</p>
+            <p className="mt-1.5 text-[12px] text-ink-3">{label}</p>
           </div>
         ))}
       </div>
 
-      <p className="numeric text-[11.5px] text-ink-3">
+      <p className="numeric text-[12px] text-ink-3">
         {diff.from_scan ? `Önceki: ${diff.from_scan.slice(0, 8)}` : "Önceki tarama yok"} →{" "}
         {diff.to_scan ? `Güncel: ${diff.to_scan.slice(0, 8)}` : "—"}
       </p>
@@ -2774,7 +2784,7 @@ export function DiffTab({ caseId }: { caseId: string }) {
                 <li key={finding.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 text-[12.5px]">
                   <Link
                     href={`/cases/${caseId}/findings?entity=${encodeURIComponent(finding.entity_id)}`}
-                    className="font-medium text-ink hover:text-accent-ink"
+                    className="min-w-0 break-words py-1 font-medium text-ink hover:text-accent-ink max-sm:inline-flex max-sm:min-h-[40px] max-sm:min-w-[40px] max-sm:items-center"
                   >
                     {finding.label}
                   </Link>
@@ -2803,7 +2813,7 @@ export function DiffTab({ caseId }: { caseId: string }) {
               <li key={id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 text-[12.5px]">
                 <Link
                   href={`/cases/${caseId}/findings?entity=${encodeURIComponent(after.entity_id)}`}
-                  className="font-medium text-ink hover:text-accent-ink"
+                  className="min-w-0 break-words py-1 font-medium text-ink hover:text-accent-ink max-sm:inline-flex max-sm:min-h-[40px] max-sm:items-center"
                 >
                   {after.label}
                 </Link>
@@ -2840,7 +2850,7 @@ export function AuditTab({ caseId }: { caseId: string }) {
   return (
     <div className="panel overflow-hidden">
       <div className="scroll-x">
-        <table className="data-table">
+        <table className="data-table min-w-[560px]">
           <thead>
             <tr>
               <th scope="col">Zaman</th>
