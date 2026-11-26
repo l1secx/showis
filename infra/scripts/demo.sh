@@ -44,7 +44,7 @@ for i in $(seq 1 60); do
 done
 
 echo "[demo] Bulgular:"
-curl -sf "${API}/cases/${CASE_ID}/findings" | python3 -m json.tool | head -80
+curl -sf "${API}/cases/${CASE_ID}/findings" | python3 -m json.tool | sed -n '1,80p'
 
 echo "[demo] Rapor uretiliyor (json)..."
 REPORT_ID=$(curl -sf -X POST "${API}/cases/${CASE_ID}/report" \

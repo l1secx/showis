@@ -1,4 +1,4 @@
-.PHONY: help bootstrap dev web-build lint typecheck test schemas docker-up docker-rebuild docker-down backup restore demo demo-smoke seed-keys eval gate
+.PHONY: help bootstrap dev web-build lint typecheck test schemas docker-up docker-rebuild docker-down backup backup-install restore demo demo-smoke eval gate
 
 PYTHON ?= .venv/bin/python
 PIP ?= .venv/bin/pip
@@ -19,16 +19,23 @@ endif
 
 help:
 	@echo "Showis OSINT Monorepo Komutları:"
-	@echo "  make bootstrap   - .venv kurar ve tüm bağımlılıkları + yerel paketleri kurar (tek komut)"
-	@echo "  make dev          - API ve Web uygulamasını geliştirme modunda başlatır"
-	@echo "  make web-build    - Web (Next.js) üretim derlemesi (apps/web)"
-	@echo "  make lint         - Kod format ve lint kontrollerini çalıştırır"
-	@echo "  make typecheck    - Mypy ile statik tip kontrollerini çalıştırır"
-	@echo "  make test         - Tüm birim ve entegrasyon testlerini çalıştırır"
-	@echo "  make schemas      - Pydantic modellerinden JSON ve TypeScript şemalarını üretir"
-	@echo "  make docker-up    - Docker compose servislerini başlatır (imajları yeniden derlemez)"
+	@echo "  make bootstrap     - .venv kurar ve tüm bağımlılıkları + yerel paketleri kurar (tek komut)"
+	@echo "  make dev           - API ve Web uygulamasını geliştirme modunda başlatır"
+	@echo "  make web-build     - Web (Next.js) üretim derlemesi (apps/web)"
+	@echo "  make lint          - Kod format ve lint kontrollerini çalıştırır"
+	@echo "  make typecheck     - Mypy ile statik tip kontrollerini çalıştırır"
+	@echo "  make test          - Tüm birim ve entegrasyon testlerini çalıştırır"
+	@echo "  make schemas       - Pydantic modellerinden JSON ve TypeScript şemalarını üretir"
+	@echo "  make gate          - Statik final kapı (ruff, mypy, pytest, web build, şema/sır)"
+	@echo "  make docker-up     - Docker compose servislerini başlatır (imajları yeniden derlemez)"
 	@echo "  make docker-rebuild - İmajları yeniden derler ve servisleri başlatır"
-	@echo "  make docker-down  - Docker compose servislerini durdurur"
+	@echo "  make docker-down   - Docker compose servislerini durdurur"
+	@echo "  make backup        - Elle PostgreSQL + rapor/kanıt yedeği alır"
+	@echo "  make backup-install - Saatlik yedek systemd user timer'ını kurar"
+	@echo "  make restore       - Yedeği (varsayılan: test DB) geri yükler"
+	@echo "  make demo          - Sentetik uçtan uca demo çalıştırır"
+	@echo "  make demo-smoke    - Demo duman testini çalıştırır"
+	@echo "  make eval          - Değerlendirme koşusunu çalıştırır"
 
 schemas:
 	PYTHONPATH=packages/contracts $(PYTHON) packages/contracts/scripts/export_schemas.py
@@ -72,6 +79,10 @@ docker-down:
 backup:
 	bash infra/scripts/backup.sh
 
+# Saatlik yedekleme systemd user timer'ini kurar (D-004).
+backup-install:
+	bash infra/scripts/install-backup-timer.sh
+
 restore:
 	bash infra/scripts/restore.sh
 
@@ -86,6 +97,3 @@ eval:
 
 gate:
 	bash scripts/final_gate.sh
-
-seed-keys:
-	bash infra/scripts/seed_keys.sh

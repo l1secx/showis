@@ -19,7 +19,6 @@ networks:
 volumes:
   postgres_data:
   redis_data:
-  minio_data:
   report_data:
   caddy_data:
 
@@ -33,7 +32,8 @@ services:
       - "127.0.0.1:8083:8083"
       - "8443:8443"
     environment:
-      # Ikinci savunma katmani (opsiyonel, env-gated). Bos ise basic_auth devre disi.
+      # DEC-008: edge kimlik dogrulamasi ZORUNLU (fail-closed). Bos ise
+      # caddy-render-config.sh container'i baslatmaz; auth'suz mod yok.
       - SHOWIS_CADDY_USER=${SHOWIS_CADDY_USER:-}
       - SHOWIS_CADDY_PASSWORD_HASH=${SHOWIS_CADDY_PASSWORD_HASH:-}
       - SHOWIS_CADDY_USERS=${SHOWIS_CADDY_USERS:-}
@@ -67,6 +67,10 @@ services:
     tmpfs:
       - /tmp
       - /config
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     networks:
       - frontend
     depends_on:
@@ -87,6 +91,10 @@ services:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - backend
+    # T-010: defense-in-depth. resmi postgres entrypoint ilk init'te root'tan
+    # postgres kullanicisina gecer; bu yuzden cap_drop uygulanmaz (init kirilir).
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-showis} -d ${POSTGRES_DB:-showis}"]
       interval: 5s
@@ -102,29 +110,14 @@ services:
       - redis_data:/data
     networks:
       - backend
+    # T-010: resmi redis imaji root entrypoint + gosu ile redis kullanicisina
+    # duser; `cap_drop: ALL` gosu'nun SETUID/SETGID yetenegini kaldirip
+    # baslatmayi bozar. Bu yuzden yalnizca no-new-privileges uygulanir.
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
-      timeout: 5s
-      retries: 5
-
-  minio:
-    # `latest` KALDIRILDI (SEC-17): digest pinli, DEVELOPMENT.2025-05-24 build'i.
-    # Not: upstream minio/minio Docker Hub'dan kaldirildi; bitnami legacy arsivi kullaniliyor.
-    image: bitnamilegacy/minio@sha256:451fe6858cb770cc9d0e77ba811ce287420f781c7c1b806a386f6896471a349c
-    container_name: showis-minio
-    restart: unless-stopped
-    command: server /bitnami/minio/data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY tanimli degil - infra/.env}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY tanimli degil - infra/.env}
-    volumes:
-      - minio_data:/bitnami/minio/data
-    networks:
-      - backend
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/live || exit 1"]
-      interval: 10s
       timeout: 5s
       retries: 5
 
@@ -143,10 +136,8 @@ services:
     environment:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-showis}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD tanimli degil - infra/.env (bkz. .env.example)}@postgres:5432/${POSTGRES_DB:-showis}
       - REDIS_URL=redis://redis:6379/0
-      - MINIO_ENDPOINT=minio:9000
-      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY tanimli degil - infra/.env}
-      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:?MINIO_SECRET_KEY tanimli degil - infra/.env}
-      - MINIO_BUCKET=${MINIO_BUCKET:-showis-evidence}
+      # DEC-009: MinIO/S3 entegrasyonu kodda referanssiz; servis ve zorunlu
+      # secret'lar kaldirildi. Kanit dosyalari report_data volume'unda tutulur.
       - MASTER_KEY=${MASTER_KEY:?MASTER_KEY tanimli degil - infra/.env}
       - BROWSER_SERVICE_URL=http://browser:8081
       - SHOWIS_REPORT_DIR=/app/data/reports
@@ -166,6 +157,9 @@ services:
       # konteynere sizmaz; API yalniz imaj/env uzerinden ayarlanabilir kalir).
       - SHOWIS_ALLOWED_ORIGINS=${SHOWIS_ALLOWED_ORIGINS:-}
       - SHOWIS_SCAN_CONCURRENCY=${SHOWIS_SCAN_CONCURRENCY:-}
+      # T-015/B-013: tek kaynak apps/api/showis/core/queues.py:scan_queue()
+      # (DEFAULT_SCAN_QUEUE="osint"). Bos env varsayilana duser.
+      - SHOWIS_SCAN_QUEUE=${SHOWIS_SCAN_QUEUE:-osint}
       - SHOWIS_HOST_MAX_CONCURRENCY=${SHOWIS_HOST_MAX_CONCURRENCY:-}
       - SHOWIS_HOST_MIN_INTERVAL=${SHOWIS_HOST_MIN_INTERVAL:-}
       - SHOWIS_MAX_BODY_BYTES=${SHOWIS_MAX_BODY_BYTES:-}
@@ -173,6 +167,13 @@ services:
       - SHOWIS_SSE_QUEUE_MAXSIZE=${SHOWIS_SSE_QUEUE_MAXSIZE:-}
       - SHOWIS_DOCS_ENABLED=${SHOWIS_DOCS_ENABLED:-}
       - SHOWIS_LLM_BASE_URL_ALLOWLIST=${SHOWIS_LLM_BASE_URL_ALLOWLIST:-}
+      # T-012/B-013: API ile worker ayni tarama/LLM ayarlarini gormeli.
+      - SHOWIS_ALLOW_INSECURE_BASE_URL=${SHOWIS_ALLOW_INSECURE_BASE_URL:-}
+      - SHOWIS_SCREENSHOT_CAPTURE=${SHOWIS_SCREENSHOT_CAPTURE:-1}
+      - SHOWIS_SCREENSHOT_USER_AGENT=${SHOWIS_SCREENSHOT_USER_AGENT:-showis-browser}
+      - SHOWIS_ESTIMATE_ROBOTS_FACTOR=${SHOWIS_ESTIMATE_ROBOTS_FACTOR:-}
+      - SHOWIS_SCAN_RETRY_BACKOFF=${SHOWIS_SCAN_RETRY_BACKOFF:-30}
+      - SHOWIS_BROKER_VISIBILITY_TIMEOUT=${SHOWIS_BROKER_VISIBILITY_TIMEOUT:-3600}
       - HIBP_API_KEY=${HIBP_API_KEY:-}
       - SHOWIS_SITECHECK_CACHE_TTL=${SHOWIS_SITECHECK_CACHE_TTL:-}
       - SHOWIS_TRUSTED_PROXIES=${SHOWIS_TRUSTED_PROXIES:-}
@@ -209,6 +210,10 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+      # T-010: entrypoint once `alembic upgrade head` calistirir; bos DB'de
+      # migration + uvicorn acilisi 25 sn'yi asabilir. Caddy `service_healthy`
+      # bekledigi icin grace period sart.
+      start_period: 60s
 
   web:
     build:
@@ -271,6 +276,22 @@ services:
       - SHOWIS_SCAN_MAX_RECOVERY_ATTEMPTS=${SHOWIS_SCAN_MAX_RECOVERY_ATTEMPTS:-2}
       - SHOWIS_SCAN_MAX_RETRIES=${SHOWIS_SCAN_MAX_RETRIES:-2}
       - SHOWIS_SCAN_RECOVERY_INTERVAL=${SHOWIS_SCAN_RECOVERY_INTERVAL:-120}
+      # T-015/B-013: API ile ayni kuyruk; tek kaynak core/queues.py:scan_queue()
+      # (DEFAULT_SCAN_QUEUE="osint"). Command'daki -Q ile ayni degere bagli.
+      - SHOWIS_SCAN_QUEUE=${SHOWIS_SCAN_QUEUE:-osint}
+      # T-012/B-013: worker taramayi yurutur; API ile ayni tarama/LLM ayarlari.
+      - SHOWIS_SCAN_CONCURRENCY=${SHOWIS_SCAN_CONCURRENCY:-}
+      - SHOWIS_HOST_MAX_CONCURRENCY=${SHOWIS_HOST_MAX_CONCURRENCY:-}
+      - SHOWIS_HOST_MIN_INTERVAL=${SHOWIS_HOST_MIN_INTERVAL:-}
+      - SHOWIS_LLM_BASE_URL_ALLOWLIST=${SHOWIS_LLM_BASE_URL_ALLOWLIST:-}
+      - SHOWIS_ALLOW_INSECURE_BASE_URL=${SHOWIS_ALLOW_INSECURE_BASE_URL:-}
+      - SHOWIS_SITECHECK_CACHE_TTL=${SHOWIS_SITECHECK_CACHE_TTL:-}
+      - SHOWIS_SCREENSHOT_CAPTURE=${SHOWIS_SCREENSHOT_CAPTURE:-1}
+      - SHOWIS_SCREENSHOT_USER_AGENT=${SHOWIS_SCREENSHOT_USER_AGENT:-showis-browser}
+      - SHOWIS_ESTIMATE_ROBOTS_FACTOR=${SHOWIS_ESTIMATE_ROBOTS_FACTOR:-}
+      - SHOWIS_SCAN_RETRY_BACKOFF=${SHOWIS_SCAN_RETRY_BACKOFF:-30}
+      - SHOWIS_RESEARCH_STALE_SECONDS=${SHOWIS_RESEARCH_STALE_SECONDS:-300}
+      - SHOWIS_BROKER_VISIBILITY_TIMEOUT=${SHOWIS_BROKER_VISIBILITY_TIMEOUT:-3600}
     volumes:
       - report_data:/app/data
     networks:
@@ -315,6 +336,9 @@ services:
       - SHOWIS_SCAN_RECOVERY_INTERVAL=${SHOWIS_SCAN_RECOVERY_INTERVAL:-120}
       - SHOWIS_STALE_SCAN_SECONDS=${SHOWIS_STALE_SCAN_SECONDS:-1800}
       - SHOWIS_SCAN_MAX_RECOVERY_ATTEMPTS=${SHOWIS_SCAN_MAX_RECOVERY_ATTEMPTS:-2}
+      # T-020/T17-05: beat, worker ile ayni kuyrugu bilmeli (retention/recovery/
+      # monitor/watch gorevleri ozel kuyrukta tuketilebilsin); tek kaynak queues.py.
+      - SHOWIS_SCAN_QUEUE=${SHOWIS_SCAN_QUEUE:-osint}
     networks:
       - backend
     depends_on:

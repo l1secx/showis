@@ -14,8 +14,10 @@
 #   3 pytest -q (tam paket; faulthandler ayari pyproject'te)
 #   4 apps/web: npx tsc --noEmit
 #   5 apps/web: npm run build
-#   6 make schemas + `git diff --exit-code apps/web/lib/types.ts` (jenerator el yazimi dosyayi bozmuyor mu)
+#   6 make schemas + `git diff --exit-code apps/web/lib/types.ts` ve
+#     `.../types.generated.ts` (jenerator el yazimi dosyayi bozmuyor mu; sozlesme drift'i)
 #   7 docker compose config -q (ortam eksikse UYARI, FAIL degil)
+#   7b docker compose config -q (dev overlay; postgres/redis loopback)
 #   8 infra/scripts/check-secrets.sh (sir taramasi; exit kodu politikasi)
 #   9 (yalniz --live) scripts/e2e_acceptance.sh --strict
 #
@@ -57,7 +59,6 @@ Cikis kodlari:
 
 Ortam:
   PYTHON, RUFF, MYPY   ikili yollarini degistirir (varsayilan: .venv/bin/...)
-  GATE_SCAN_TIMEOUT    pytest icin ek sinir YOK (faulthandler pyproject'te)
   --live icin          SHOWIS_BASIC_AUTH_USER ve SHOWIS_BASIC_AUTH_PASSWORD
                        zorunlu; yoksa E2E 3. adimda 401 ile duser.
                        Yalnizca bu iki degiskeni verin. `infra/.env` dosyasini
@@ -167,51 +168,68 @@ step "web: tsc --noEmit" \
 step "web: npm run build" \
   "cd apps/web && npm run build"
 
-# ------------------------------------- 6) schemas + types.ts drift kontrolu
-# Iki farkli sebep ayirt edilir:
-#   (a) jenerator el yazimi dosyayi YENIDEN YAZDI  -> T-334 ihlali
-#   (b) dosya commit/index ile ayni degil           -> commit edilmemis degisiklik
-# Her iki durumda da dosya calisma oncesi haline geri alinir (kapi agaci degistirmez).
+# ------------------------------------- 6) schemas + types drift kontrolu
+# Uc farkli sebep ayirt edilir:
+#   (a) jenerator el yazimi types.ts'i YENIDEN YAZDI  -> T-334 ihlali
+#   (b) types.ts commit/index ile ayni degil           -> commit edilmemis degisiklik
+#   (c) types.generated.ts HEAD ile uyusmuyor          -> sozlesme drift'i (T-010/D-014)
+# Her durumda dosyalar calisma oncesi haline geri alinir (kapi agaci degistirmez).
 STEP_N=$((STEP_N + 1))
 schemas_log="$LOG_DIR/step${STEP_N}.log"
 schemas_start=$(date +%s%N)
 types_file="apps/web/lib/types.ts"
-snapshot="$LOG_DIR/types.snapshot.ts"
-before_hash=""
+generated_file="apps/web/lib/types.generated.ts"
+types_snapshot="$LOG_DIR/types.snapshot.ts"
+generated_snapshot="$LOG_DIR/types.generated.snapshot.ts"
+types_before_hash=""
 git diff --exit-code -- "$types_file" >/dev/null 2>&1
-git_pre_rc=$?
-[[ -f "$types_file" ]] && { cp "$types_file" "$snapshot"; before_hash="$(sha256sum "$types_file" | awk '{print $1}')"; }
+types_pre_rc=$?
+[[ -f "$types_file" ]] && { cp "$types_file" "$types_snapshot"; types_before_hash="$(sha256sum "$types_file" | awk '{print $1}')"; }
+[[ -f "$generated_file" ]] && cp "$generated_file" "$generated_snapshot"
+restore_types_snapshots() {
+  [[ -f "$types_snapshot" ]] && cp "$types_snapshot" "$types_file"
+  [[ -f "$generated_snapshot" ]] && cp "$generated_snapshot" "$generated_file"
+  return 0
+}
 {
   echo "== make schemas =="
   make schemas
 } >"$schemas_log" 2>&1
 make_rc=$?
-after_hash=""
-[[ -f "$types_file" ]] && after_hash="$(sha256sum "$types_file" | awk '{print $1}')"
+types_after_hash=""
+[[ -f "$types_file" ]] && types_after_hash="$(sha256sum "$types_file" | awk '{print $1}')"
 git diff --exit-code -- "$types_file" >>"$schemas_log" 2>&1
-git_rc=$?
+types_git_rc=$?
+git diff --exit-code -- "$generated_file" >>"$schemas_log" 2>&1
+generated_git_rc=$?
 schemas_ms=$(( ($(date +%s%N) - schemas_start) / 1000000 ))
 
 if [[ "$make_rc" -ne 0 ]]; then
-  [[ -f "$snapshot" ]] && cp "$snapshot" "$types_file"
-  record "schemas + types.ts drift" "$schemas_ms" FAIL "$schemas_log" "make schemas exit=$make_rc"
-elif [[ -n "$before_hash" && "$before_hash" != "$after_hash" ]]; then
+  restore_types_snapshots
+  record "schemas + types drift" "$schemas_ms" FAIL "$schemas_log" "make schemas exit=$make_rc"
+elif [[ -n "$types_before_hash" && "$types_before_hash" != "$types_after_hash" ]]; then
   # Jenerator el yazimi dosyaya yazdi (T-334 sonrasi beklenen: yazmamali)
-  [[ -f "$snapshot" ]] && cp "$snapshot" "$types_file"
-  record "schemas + types.ts drift" "$schemas_ms" FAIL "$schemas_log" \
+  restore_types_snapshots
+  record "schemas + types drift" "$schemas_ms" FAIL "$schemas_log" \
     "jenerator types.ts'i yeniden yazdi (geri alindi)"
-elif [[ "$git_rc" -ne 0 ]]; then
-  if [[ "$git_pre_rc" -ne 0 ]]; then
+elif [[ "$generated_git_rc" -ne 0 ]]; then
+  # make schemas uretilen dosyayi HEAD/index ile uyusmaz hale getirdi
+  # (veya dosya onceden commit edilmemis degisiklik tasiyor): sozlesme drift'i.
+  restore_types_snapshots
+  record "schemas + types drift" "$schemas_ms" FAIL "$schemas_log" \
+    "types.generated.ts HEAD/index ile uyusmuyor (make schemas + commit gerekli)"
+elif [[ "$types_git_rc" -ne 0 ]]; then
+  if [[ "$types_pre_rc" -ne 0 ]]; then
     # Dosya zaten commit/index'ten farkli (calisma agacinda degisiklik var) ama
     # jenerator ona DOKUNMADI: kapiyi bloklamaz, bilgi olarak raporlanir.
-    record "schemas + types.ts drift" "$schemas_ms" UYARI "$schemas_log" \
+    record "schemas + types drift" "$schemas_ms" UYARI "$schemas_log" \
       "types.ts'de commit edilmemis degisiklik (jenerator dokunmadi)"
   else
-    record "schemas + types.ts drift" "$schemas_ms" FAIL "$schemas_log" \
+    record "schemas + types drift" "$schemas_ms" FAIL "$schemas_log" \
       "make schemas sonrasi types.ts degisti"
   fi
 else
-  record "schemas + types.ts drift" "$schemas_ms" PASS "$schemas_log"
+  record "schemas + types drift" "$schemas_ms" PASS "$schemas_log"
 fi
 
 # --------------------------------------------------- 7) compose config -q
@@ -242,6 +260,28 @@ else
     record "docker compose config" "$compose_ms" UYARI "$compose_log" "ortam eksik: $(grep -oE '[A-Z_]+' "$compose_log" | head -1)"
   else
     record "docker compose config" "$compose_ms" FAIL "$compose_log" "exit=$compose_rc"
+  fi
+fi
+
+# ------------------------------------- 7b) compose config -q (dev overlay)
+# Dev overlay (postgres/redis loopback publish) ayri dogrulanir; bozuk overlay
+# ana compose'dan bagimsiz yakalanir (T-010).
+STEP_N=$((STEP_N + 1))
+overlay_log="$LOG_DIR/step${STEP_N}.log"
+overlay_start=$(date +%s%N)
+if ! command -v docker >/dev/null 2>&1; then
+  overlay_ms=$(( ($(date +%s%N) - overlay_start) / 1000000 ))
+  record "docker compose config (dev)" "$overlay_ms" ATLANDI "-" "docker yok"
+else
+  ( cd infra && docker compose -f docker-compose.yml -f docker-compose.dev.yml config -q ) >"$overlay_log" 2>&1
+  overlay_rc=$?
+  overlay_ms=$(( ($(date +%s%N) - overlay_start) / 1000000 ))
+  if [[ "$overlay_rc" -eq 0 ]]; then
+    record "docker compose config (dev)" "$overlay_ms" PASS "$overlay_log"
+  elif grep -qE 'variable is not set|required variable|is missing a value' "$overlay_log"; then
+    record "docker compose config (dev)" "$overlay_ms" UYARI "$overlay_log" "ortam eksik (uyari)"
+  else
+    record "docker compose config (dev)" "$overlay_ms" FAIL "$overlay_log" "exit=$overlay_rc"
   fi
 fi
 

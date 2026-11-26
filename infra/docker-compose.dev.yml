@@ -1,9 +1,10 @@
 # Yerel geliştirme (make dev) için postgres/redis'i host'a yayınlar.
+# Yalnız loopback: LAN'dan DB/Redis erişimi yok (T-010/D-018).
 # Kullanım: docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml up -d postgres redis
 services:
   postgres:
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
   redis:
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"

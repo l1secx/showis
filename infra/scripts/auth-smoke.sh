@@ -7,9 +7,12 @@
 #     LAN_IP  : varsayilan `hostname -I | awk '{print $1}'` (8005 kapali olmali)
 #
 # Kimlik bilgileri (ekrana YAZILMAZ):
-#   SHOWIS_CADDY_USER          : varsayilan `showis`
+#   SHOWIS_CADDY_USER          : varsayilan `analyst` (infra/.env ile ayni)
 #   SHOWIS_CADDY_PASSWORD      : varsa dogrudan kullanilir
 #   SHOWIS_CADDY_PASSWORD_FILE : varsayilan infra/.secrets/caddy-basic-auth.txt
+#
+# Parola curl'e argv ile DEGIL, 0600 gecici `--config` dosyasiyla verilir;
+# `ps`/argv'de gorunmez (T-010/D-009).
 #
 # Erisim modeli (T-113): basic auth /health DISINDA her yolda (UI + /api/*);
 # /api/* Next proxy'sine gider ve proxy X-API-Token'i sunucu tarafinda ekler.
@@ -23,7 +26,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BASE="${1:-http://127.0.0.1:8083}"
 LAN_IP="${2:-$(hostname -I 2>/dev/null | awk '{print $1}')}"
 
-CADDY_USER="${SHOWIS_CADDY_USER:-showis}"
+CADDY_USER="${SHOWIS_CADDY_USER:-analyst}"
 CADDY_PASS="${SHOWIS_CADDY_PASSWORD:-}"
 if [ -z "$CADDY_PASS" ]; then
   PASS_FILE="${SHOWIS_CADDY_PASSWORD_FILE:-$REPO_ROOT/infra/.secrets/caddy-basic-auth.txt}"
@@ -35,8 +38,31 @@ fi
 TOKEN="${SHOWIS_API_TOKEN:-}"
 fail=0
 
+# curl --config icin tirnak/ters-bolu kacisi (parola argv'ye girmesin).
+conf_escape() { printf '%s' "$1" | sed 's/[\\"]/\\&/g'; }
+
+CREDS_DIR=""
+CONF_BASIC=()
+CONF_WRONG=()
+cleanup() { if [ -n "$CREDS_DIR" ]; then rm -rf "$CREDS_DIR"; fi; }
+trap cleanup EXIT INT TERM
+
+if [ -n "$CADDY_PASS" ]; then
+  old_umask="$(umask)"; umask 077
+  CREDS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/showis-auth-smoke.XXXXXX")"
+  umask "$old_umask"
+  printf 'user = "%s:%s"\n' \
+    "$(conf_escape "$CADDY_USER")" "$(conf_escape "$CADDY_PASS")" \
+    > "$CREDS_DIR/basic.conf"
+  printf 'user = "%s:%s"\n' \
+    "$(conf_escape "$CADDY_USER")" "$(conf_escape "yanlis-parola")" \
+    > "$CREDS_DIR/wrong.conf"
+  CONF_BASIC=(--config "$CREDS_DIR/basic.conf")
+  CONF_WRONG=(--config "$CREDS_DIR/wrong.conf")
+fi
+
 code() { curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$@"; }
-code_auth() { code -u "$CADDY_USER:$CADDY_PASS" "$@"; }
+code_auth() { code "${CONF_BASIC[@]}" "$@"; }
 
 report() { # ad, beklenen, gelen
   if [ "$2" = "$3" ]; then
@@ -63,7 +89,7 @@ report "GET / (kimlik yok)" 401 "$(code "$BASE/")"
 report "GET /api/v1/cases (kimlik yok)" 401 "$(code "$BASE/api/v1/cases")"
 if [ -n "$CADDY_PASS" ]; then
   report "GET /api/v1/cases (YANLIS parola)" 401 \
-    "$(code -u "$CADDY_USER:yanlis-parola" "$BASE/api/v1/cases")"
+    "$(code "${CONF_WRONG[@]}" "$BASE/api/v1/cases")"
 fi
 
 # --- Kimlikli istekler -----------------------------------------------------
@@ -85,7 +111,7 @@ if [ -n "$CADDY_PASS" ]; then
     # NOT: API'nin SSE keepalive araligi 20 sn (event_broadcaster/sse_event_stream).
     # Caddy/Next ilk govde baytina kadar baslik gondermedigi icin --max-time > 21 olmali.
     sse_code="$(curl -s -N -D "$sse_hdr" -o /dev/null -w "%{http_code}" --max-time 24 \
-      -u "$CADDY_USER:$CADDY_PASS" -H 'Accept: text/event-stream' \
+      "${CONF_BASIC[@]}" -H 'Accept: text/event-stream' \
       "$BASE/api/v1/scans/$SCAN_ID/events" || true)"
     if grep -qi '^content-type: *text/event-stream' "$sse_hdr"; then
       report "GET /api/v1/scans/<id>/events (SSE)" 200 "$sse_code"
@@ -103,7 +129,7 @@ fi
 check_header() { # <ad> <url> <baslik> <beklenen-deger|-> <auth?>
   local name="$1" url="$2" hdr="$3" want="$4" auth="${5:-yes}"
   local out val
-  if [ "$auth" = "yes" ]; then out="$(curl -sI --max-time 10 -u "$CADDY_USER:$CADDY_PASS" "$url")"
+  if [ "$auth" = "yes" ]; then out="$(curl -sI --max-time 10 "${CONF_BASIC[@]}" "$url")"
   else out="$(curl -sI --max-time 10 "$url")"; fi
   if [ "$want" = "-" ]; then
     if printf '%s' "$out" | grep -qi "^${hdr}:"; then

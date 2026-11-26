@@ -37,14 +37,41 @@ if [ ! -r "$SRC" ]; then
     exit 1
 fi
 
-RENDER_AUTH=0
+# TLS adresleri bos olamaz: gecersiz Caddyfile yerine anlasilir hata ver.
+if [ -z "$TLS_ADDRS" ]; then
+    echo "[caddy-render] HATA: SHOWIS_TLS_HOSTS bos/gecersiz; en az bir host gerekli" >&2
+    exit 1
+fi
+if [ -n "${SHOWIS_DEFAULT_SNI:-}" ]; then
+    if ! printf '%s\n' "$TLS_HOSTS" | tr ',' '\n' | sed 's/^ *//; s/ *$//' | grep -Fxq "$SHOWIS_DEFAULT_SNI"; then
+        echo "[caddy-render] HATA: SHOWIS_DEFAULT_SNI='$SHOWIS_DEFAULT_SNI' SHOWIS_TLS_HOSTS listesinde yok" >&2
+        exit 1
+    fi
+fi
+
+# DEC-008: edge kimlik dogrulamasi ZORUNLU ve fail-closed. Kimlik yoksa
+# auth blogu render edilmeden devam etmek yerine yapilandirma HATA verir.
 # SHOWIS_CADDY_USERS: newline/; ayrılmış "kullanici:bcrypt_hash" listesi.
 # Geriye uyum: SHOWIS_CADDY_USER + SHOWIS_CADDY_PASSWORD_HASH tek kullanıcı.
-if [ -n "${SHOWIS_CADDY_USERS:-}" ]; then
-    RENDER_AUTH=1
-elif [ -n "${SHOWIS_CADDY_USER:-}" ] && [ -n "${SHOWIS_CADDY_PASSWORD_HASH:-}" ]; then
-    RENDER_AUTH=1
+auth_user_count() {
+    if [ -n "${SHOWIS_CADDY_USERS:-}" ]; then
+        printf '%s\n' "$SHOWIS_CADDY_USERS" | tr ';' '\n' \
+            | awk -F: 'NF >= 2 && $1 != "" && $2 != "" { n++ } END { print n + 0 }'
+    elif [ -n "${SHOWIS_CADDY_USER:-}" ] && [ -n "${SHOWIS_CADDY_PASSWORD_HASH:-}" ]; then
+        echo 1
+    else
+        echo 0
+    fi
+}
+
+AUTH_USER_COUNT="$(auth_user_count)"
+if [ "$AUTH_USER_COUNT" -lt 1 ]; then
+    echo "[caddy-render] HATA: edge kimlik dogrulamasi yapilandirilmamis (DEC-008)." >&2
+    echo "  Zorunlu: SHOWIS_CADDY_USERS veya SHOWIS_CADDY_USER + SHOWIS_CADDY_PASSWORD_HASH." >&2
+    echo "  Guvenli olmayan 'auth yok' modu desteklenmiyor; container baslatilmayacak." >&2
+    exit 1
 fi
+RENDER_AUTH=1
 
 RENDER_HOSTS=0
 HOST_ARGS=""
@@ -112,18 +139,12 @@ while IFS= read -r line || [ -n "$line" ]; do
     esac
 done < "$SRC"
 
-if [ -n "${SHOWIS_CADDY_PASSWORD_HASH:-}" ] && [ -z "${SHOWIS_CADDY_USER:-}" ] && [ -z "${SHOWIS_CADDY_USERS:-}" ]; then
-    echo "[caddy-render] UYARI: SHOWIS_CADDY_PASSWORD_HASH var ama kullanici yok; basic auth DEVRE DISI" >&2
-fi
-
 if [ "$RENDER_AUTH" = "1" ]; then
     if [ "${SHOWIS_EDGE_FORWARD_AUTH:-0}" = "1" ]; then
         echo "[caddy-render] edge auth ETKIN (forward_auth -> api /api/v1/auth/edge)" >&2
     else
-    echo "[caddy-render] basic auth ETKIN (@gate: HTML/RSC + /api/*; statik ve /health muaf)" >&2
-    fi >&2
-else
-    echo "[caddy-render] UYARI: Caddy kullanıcıları tanimli degil; basic auth DEVRE DISI (edge kimlik dogrulamasi yok)" >&2
+        echo "[caddy-render] basic auth ETKIN (@gate: HTML/RSC + /api/*; statik ve /health muaf)" >&2
+    fi
 fi
 
 echo "[caddy-render] TLS (8443): ${TLS_HOSTS}" >&2

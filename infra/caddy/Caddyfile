@@ -48,7 +48,8 @@
 		not path /health /healthz /_next/static/* /icon.svg /favicon.ico
 	}
 
-	# Render edilen blok 1: basic auth (env doluysa).
+	# Render edilen blok 1: edge auth — DEC-008 geregi ZORUNLU (fail-closed).
+	# Kimlik env'leri bos ise caddy-render-config.sh container'i baslatmaz.
 	# Hash: caddy hash-password --plaintext '<parola>' — duz parola commit edilmez.
 	__BASIC_AUTH_PLACEHOLDER__
 
@@ -188,6 +189,16 @@ __TLS_HOSTS_PLACEHOLDER__ {
 	__BASIC_AUTH_PLACEHOLDER__
 	__HOST_CHECK_PLACEHOLDER__
 
+	# T-329 / T-010: /metrics yalniz yerel kaynaklardan (Prometheus host'ta calisir).
+	# HTTP sitesiyle ayni guard; TLS girisinde unutulmustu (D-007).
+	@metrics_remote_denied {
+		path /api/v1/metrics
+		not remote_ip 127.0.0.1 ::1 172.16.0.0/12
+	}
+	handle @metrics_remote_denied {
+		respond "Forbidden" 403
+	}
+
 	@api path /api/*
 	@ui not path /api/* /health /healthz
 	request_body @api {
@@ -221,6 +232,7 @@ __TLS_HOSTS_PLACEHOLDER__ {
 		header X-Content-Type-Options nosniff
 		header X-Frame-Options DENY
 		header Referrer-Policy no-referrer
+		header Permissions-Policy "geolocation=(), microphone=(), camera=()"
 		reverse_proxy web:3000 {
 			__ACTOR_HEADER_PLACEHOLDER__
 			header_up X-Forwarded-For {http.request.remote.host}

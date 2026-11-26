@@ -44,6 +44,12 @@ log() { printf '[restore] %s\n' "$*"; }
 die() { printf '[restore] HATA: %s\n' "$*" >&2; exit 1; }
 
 [ -n "$TARGET_DB" ] || die "hedef veritabani bos"
+# T-010/D-023: DB adi SQL/komut satirina giriyor; yalniz guvenli kimlik kabul et.
+for _db in "$TARGET_DB" "$LIVE_DB" "$TEST_DB"; do
+  printf '%s' "$_db" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]*$' \
+    || die "gecersiz veritabani adi (harf/rakam/alt cizgi): $_db"
+done
+unset _db
 [ "$TARGET_DB" != "$TEST_DB" ] || MODE="test"
 
 # Canli DB korumasi
@@ -98,12 +104,11 @@ elif [ "$MODE" = "named" ]; then
 fi
 
 log "pg_restore basliyor: $(basename "$SRC")"
-RESTORE_ARGS="-U $PG_USER -d $TARGET_DB --no-owner --no-acl --exit-on-error --single-transaction"
+RESTORE_ARGS=(-U "$PG_USER" -d "$TARGET_DB" --no-owner --no-acl --exit-on-error --single-transaction)
 if [ "$MODE" = "live" ]; then
-  RESTORE_ARGS="$RESTORE_ARGS --clean --if-exists"
+  RESTORE_ARGS+=(--clean --if-exists)
 fi
-# shellcheck disable=SC2086
-docker exec -i "$PG_CONTAINER" pg_restore $RESTORE_ARGS < "$SRC" || die "pg_restore basarisiz"
+docker exec -i "$PG_CONTAINER" pg_restore "${RESTORE_ARGS[@]}" < "$SRC" || die "pg_restore basarisiz"
 
 log "geri yukleme tamamlandi. Satir sayilari:"
 for t in cases targets scans tasks findings entities evidence; do

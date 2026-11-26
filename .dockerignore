@@ -10,5 +10,18 @@ apps/web/.next
 apps/web/.turbo
 data
 tests
+apps/api/tests
 *.pyc
 __pycache__
+# T-010/D-010: sırlar ve gereksiz bağlam build context'e girmesin.
+.env
+.env.*
+infra/.env
+infra/.secrets
+infra/backups
+.orchestrator
+docs
+CLAUDE.md
+PROMPT.md
+*.dump
+*.dump.sha256

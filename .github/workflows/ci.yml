@@ -63,6 +63,7 @@ jobs:
     # --strict kullanilmaz. Ignore listesi: infra/pip-audit-ignore.txt (ID'ler, satir basina).
     - name: pip-audit (runtime lock)
       run: |
+        set -euo pipefail
         python -m pip install --upgrade pip
         pip install "pip-audit==2.10.1"
         IGNORES=""
@@ -70,6 +71,8 @@ jobs:
           IGNORES="$(grep -vE '^\s*(#|$)' infra/pip-audit-ignore.txt | sed 's/^/--ignore-vuln /' | tr '\n' ' ')"
         fi
         echo "pip-audit ignore listesi: ${IGNORES:-<bos>}"
+        # pipefail YOKSA `| tee` boru hattinin cikis kodunu 0'a cevirir ve
+        # zafiyet bulgusu CI'i dusurmez (D-002). set -o pipefail bunu engeller.
         pip-audit -r "$LOCKFILE" --progress-spinner off $IGNORES | tee pip-audit.txt
 
     - name: Upload pip-audit report

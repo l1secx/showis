@@ -78,6 +78,7 @@ PATTERNS=(
   $'JWT\t\\beyJ[A-Za-z0-9_-]{10,}\\.eyJ[A-Za-z0-9_-]{10,}\\.'
   $'Credential URL\t://[^/[:space:]@\"$]+:[^/[:space:]@\"]{6,}@'
   $'Showis API token degeri\tSHOWIS_API_TOKEN[[:space:]]*=[[:space:]]*[0-9a-zA-Z_-]{24,}'
+  $'MASTER_KEY (Fernet)\tMASTER_KEY[[:space:]]*=[[:space:]]*[A-Za-z0-9+/=_-]{40,}'
   $'bcrypt hash\t\\$2[aby]\\$[0-9]{2}\\$[./A-Za-z0-9]{53}'
   $'Generic secret assignment\t([Aa][Pp][Ii][_-]?[Kk][Ee][Yy]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Tt][Oo][Kk][Ee][Nn])[[:space:]]*[:=][[:space:]]*[\"'\'']?[A-Za-z0-9+/_-]{32,}[\"'\'']?'
 )

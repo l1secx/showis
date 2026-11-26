@@ -12,7 +12,10 @@
 | browser | 8081 | Playwright render servisi (`POST /render`) |
 | postgres | 5432 | Ana veritabanı |
 | redis | 6379 | Celery broker |
-| minio | 9000/9001 | Kanıt nesne deposu (S3 API) |
+
+> Not (DEC-009): MinIO servisi kaldırıldı. Mevcut kurulumda orphan container/volume
+> kalabilir: `docker compose -f infra/docker-compose.yml up -d --remove-orphans`.
+> `minio_data` volume'u otomatik silinmez; içinde veri varsa önce yedekleyin.
 
 ## Çalıştırma
 
@@ -111,11 +114,11 @@ erişim yoksa adım `BEKLENIYOR` olur.
 | Veritabanı | `showis-YYYYmmdd-HHMM.dump` — `pg_dump -Fc` (custom format, sıkıştırmalı) |
 | Rapor/kanıt dosyaları | `showis-YYYYmmdd-HHMM.files.tar.gz` — `report_data` volume'undan `reports/` + `evidence/` |
 | Bütünlük | Her dosya için `<ad>.sha256` |
-| Sıklık | **Saatlik** — systemd user timer `showis-backup.timer` (`OnCalendar=hourly`, `Persistent=true`, `RandomizedDelaySec=120`) |
+| Sıklık | **Saatlik** — systemd user timer `showis-backup.timer` (`OnCalendar=hourly`, `Persistent=true`, `RandomizedDelaySec=120`). Kurulum: `make backup-install` |
 | Boyut sınırı | Toplam **2 GB**; aşılırsa en eski yedekler budanır (en yenisi asla silinmez) |
 
-MinIO **kullanılmıyor** (kodda referans yok); kanıt dosyaları yerel diskte / named volume'da
-tutulur, bu yüzden MinIO mirror'u yedek kapsamında değil.
+MinIO **kaldırıldı** (DEC-009): kodda referans yoktu, zorunlu servis/secret yükü
+kaldırıldı. Kanıt dosyaları yerel diskte / `report_data` named volume'unda tutulur.
 
 ### Retention politikası
 - Son **7 gün**: her gün için **en yeni** yedek (7 dosya).
@@ -124,6 +127,9 @@ tutulur, bu yüzden MinIO mirror'u yedek kapsamında değil.
 
 ### Komutlar
 ```bash
+# Timer kurulumu (bir kez; root gerekmez)
+bash infra/scripts/install-backup-timer.sh
+
 # Elle yedek (timer'ı beklemeden)
 systemctl --user start showis-backup.service
 journalctl --user -u showis-backup.service -n 30 --no-pager
@@ -170,16 +176,16 @@ işaretli olmayanlar = üretime çıkmadan kapatılmalı.
 
 | # | Madde | Neden | Komut |
 |---|---|---|---|
-| 1 | **TLS** — `:8443` internal CA | Basic auth ve kişisel anahtarlar LAN'da şifreli taşınır; HTTP `:8083` yalnız loopback | `curl -sk https://localhost:8443/health` → `200`; `docker exec showis-caddy caddy trust` ile kök sertifikayı güvenin. Üretimde gerçek ACME kullanın |
+| 1 | **TLS** — `:8443` internal CA | Basic auth ve kişisel anahtarlar LAN'da şifreli taşınır; HTTP `:8083` yalnız loopback | `curl -sk https://localhost:8443/health` → `200`; kök sertifikayı güvenmek için (read-only container'da `caddy trust` yazamaz): `docker cp showis-caddy:/data/caddy/pki/authorities/local/root.crt /tmp/showis-root.crt` + host trust store'a ekleyin. Üretimde gerçek ACME kullanın |
 | 2 | **Disk şifreleme (LUKS)** — yok | Vaka/delil PII diskte düz; cihaz kaybı/hırsızlık = veri ifşası | `lsblk -f \| grep -i crypt` (boşsa şifreli değil). Kurulum: `cryptsetup luksFormat /dev/nvme0n1pX` + `/etc/crypttab` |
 | 3 | **`MASTER_KEY` rotasyonu** | Sağlayıcı anahtarları Fernet ile şifreli; anahtar sızarsa hepsi açılır; şu an rotasyon yok | Doğrulama: `docker exec showis-api sh -lc 'echo ${#MASTER_KEY}'` (>0). Rotasyon: yeni anahtarla `settings` kayıtlarını yeniden şifrele (API `PUT /api/v1/settings/...`), eski anahtarı 24 saat paralel tut |
 | 4 | **`fail2ban` + `auditd`** — host'ta kapalı | SSH/Caddy brute-force ve sistem çağrısı denetimi yok | `systemctl is-active auditd fail2ban` → `inactive`. Kur: `sudo systemctl enable --now auditd fail2ban` |
 | 5 | **Port publish politikası** | Docker publish edilen portlar UFW'yi **atlar**; yalnız `8443` açık; `8083` sadece `127.0.0.1` | `ss -ltnp \| grep -E ':8443\|:8083\|:8005\|:5432'` → 8083 `127.0.0.1`, 8443 tüm arayüzler. Sıkılaştır: tailscale-only veya host güvenlik duvarı |
 | 6 | **`SHOWIS_ALLOWED_HOSTS`** | Host allowlist kapalıysa DNS-rebinding ile edge kontrolü aşılabilir | `docker logs showis-caddy 2>&1 \| grep "Host allowlist"`. Aç: `infra/.env` → `SHOWIS_ALLOWED_HOSTS=localhost,127.0.0.1,l1sec,<LAN-IP>` + `docker compose up -d --no-deps caddy` |
-| 7 | **`SHOWIS_ALLOWED_ORIGINS`** | CORS varsayılanı yalnız localhost; üretim alan adı eklenmezse UI kırılır | `curl -sI -u showis:*** -H 'Origin: https://showis.example.com' http://127.0.0.1:8083/api/v1/cases \| grep -i access-control` |
-| 7b | **`SHOWIS_TRUSTED_PROXIES`** (T-356) | API, `X-Forwarded-For`/`X-Real-IP`'ye **yalnız** bu CIDR'lerden gelen peer için güvenir; varsayılan docker köprülerini (`172.16/12`, `10/8`, `192.168/16`) kapsar. Üretimde yalnız Caddy/tailscale ağını bırakacak şekilde **daraltın** (ör. `SHOWIS_TRUSTED_PROXIES=127.0.0.1/32,::1/128,172.18.0.0/16`); aksi halde LAN'daki bir makine doğrudan API'ye sahte XFF gönderirse `actor_ip` yanıltılabilir. Daralttıktan sonra doğrula: `curl -sk -H 'X-Forwarded-For: 6.6.6.6' -H "X-API-Token: $TOKEN" http://127.0.0.1:8000/api/v1/cases` → audit'te `actor_ip` **127.0.0.1** olmalı (6.6.6.6 değil) |
+| 7 | **`SHOWIS_ALLOWED_ORIGINS`** | CORS varsayılanı yalnız localhost; üretim alan adı eklenmezse UI kırılır | `curl -sI -u analyst:*** -H 'Origin: https://showis.example.com' http://127.0.0.1:8083/api/v1/cases \| grep -i access-control` |
+| 7b | **`SHOWIS_TRUSTED_PROXIES`** (T-356) | API, `X-Forwarded-For`/`X-Real-IP`'ye **yalnız** bu CIDR'lerden gelen peer için güvenir; varsayılan docker köprülerini (`172.16/12`, `10/8`, `192.168/16`) kapsar. Üretimde yalnız Caddy/tailscale ağını bırakacak şekilde **daraltın** (ör. `SHOWIS_TRUSTED_PROXIES=127.0.0.1/32,::1/128,172.18.0.0/16`); aksi halde LAN'daki bir makine doğrudan API'ye sahte XFF gönderirse `actor_ip` yanıltılabilir. Daralttıktan sonra doğrula: `docker exec showis-api sh -lc 'curl -s -H "X-Forwarded-For: 6.6.6.6" -H "X-API-Token: $SHOWIS_API_TOKEN" http://localhost:8000/api/v1/cases'` → audit'te `actor_ip` **127.0.0.1** olmalı (6.6.6.6 değil) |
 | 8 | **Yedek doğrulama periyodu** | Yedek var ama geri yüklenebilirliği test edilmiyor (T-315 tatbikatı elle) | `bash infra/scripts/backup-verify.sh` (aylık): `systemctl --user list-timers \| grep backup` |
-| 9 | **Zorunlu env'ler dolu** | `POSTGRES_PASSWORD`, `MINIO_ACCESS_KEY/SECRET`, `MASTER_KEY`, `SHOWIS_API_TOKEN` boşsa compose fail-fast eder | `cd infra && docker compose config -q` (hata yoksa tamam) |
+| 9 | **Zorunlu env'ler dolu** | `POSTGRES_PASSWORD`, `MASTER_KEY`, `SHOWIS_API_TOKEN` boşsa compose fail-fast eder; `SHOWIS_CADDY_USER`/hash boşsa caddy bilerek başlamaz (DEC-008) | `cd infra && docker compose config -q` (hata yoksa tamam) |
 | 10 | **Bağımlılık/sır kapıları** | Pinli lock + CVE/sır taraması CI'da | `bash infra/scripts/check-secrets.sh` · `pip-audit -r infra/requirements.lock` |
 | 11 | **Uzak yedek kopya** | Yedekler aynı diskte (`data/backups`); disk arızası ikisini de götürür | `rclone sync data/backups remote:showis-backups` (veya harici disk) |
 
@@ -220,7 +226,12 @@ kolon/indeks migration'ı önerildi.
 
 ## Güvenlik notları
 
-- Tüm container'lar non-root, `read_only`, `cap_drop: ALL`, `no-new-privileges`
-- `egress` ağı yalnızca worker/browser'da — API dışarı çıkamaz
+- Uygulama konteynerleri (api/web/worker/beat/browser) non-root, `read_only`,
+  `cap_drop: ALL`, `no-new-privileges`. Caddy `read_only` + `cap_drop: ALL` +
+  `no-new-privileges` (imaj root kullanıcısıyla çalışır). Postgres/Redis
+  `no-new-privileges` (init/gosu nedeniyle `cap_drop` uygulanmaz).
+- `frontend`/`backend` ağlarında `internal: true` **yok**: API de dışarı
+  çıkabilir. `egress` ağı worker/browser'a ayrılmıştır; prod profilinde API
+  egress'i ayrıca kısıtlanmalı.
 - Yasak host'lar `policy.FORBIDDEN_HOSTS` ile runtime'da engellenir
 - Log'larda sırlar `SecretRedactionFilter` ile maskelenir

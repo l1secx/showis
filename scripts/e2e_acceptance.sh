@@ -356,16 +356,22 @@ else
   step_skip 2b "yalniz basic auth /cases -> 200" "basic auth verilmedi"
 fi
 
-# --------------------------- 2c) eski E2E vakalarini temizle (T-378)
+# --------------------------- 2c) eski E2E vakalarini temizle (T-378 / DEC-004)
 # Art arda kosularda onceki kosunun (yarim kalmis) vakasi/aktif taramasi
-# yenisiyle cakismasin: yalniz `purpose` icinde E2E isareti olanlar silinir.
+# yenisiyle cakismasin. SAHIPLIK: yalniz bu script'in kendi olusturdugu vakalar
+# silinir — birebir ad "E2E kabul testi" VE notes alaninda script isareti.
+# Amacinda/metninde "E2E" gecen kullanici vakalari SILINMEZ (DEC-004).
+E2E_CASE_NAME="E2E kabul testi"
+E2E_MARKER="script=e2e_acceptance.sh"
 cleanup_deadline=$(( $(date +%s) + 20 ))
 stale_ids=""
 if http_request auth GET "/api/v1/cases?q=E2E%20kabul&limit=200"; then
   if [[ "$HTTP_CODE" == "200" ]]; then
-    stale_ids="$(printf '%s' "$HTTP_BODY" | jq -r '
+    stale_ids="$(printf '%s' "$HTTP_BODY" | jq -r \
+      --arg name "$E2E_CASE_NAME" --arg marker "$E2E_MARKER" '
       (if type == "object" then (.items // []) else . end)
-      | [ .[] | select(((.purpose // "") | test("E2E"; "i"))) | .id ] | .[]' 2>/dev/null || true)"
+      | [ .[] | select((.name // "") == $name)
+              | select(((.notes // "") | contains($marker))) | .id ] | .[]' 2>/dev/null || true)"
   fi
 fi
 stale_count=0
@@ -385,11 +391,13 @@ else
 fi
 
 # ------------------------------------------------------------- 3) vaka acma
-case_payload="$(jq -n '{
+case_payload="$(jq -n \
+  --arg marker "$E2E_MARKER" \
+  --arg run "run=$(date -u +%Y%m%dT%H%M%SZ)-$$" '{
   name: "E2E kabul testi",
   purpose: "E2E — otomatik kabul testi (T-323); hedef anonim",
   legal_basis: "self_check",
-  notes: "scripts/e2e_acceptance.sh tarafindan olusturuldu",
+  notes: ($marker + "; " + $run + "; hedef anonim"),
   retention_days: 7,
   target: {first_name: "E2E", last_name: "Test", hints: {}},
   seeds: []

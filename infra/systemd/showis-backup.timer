@@ -1,0 +1,11 @@
+[Unit]
+Description=Showis saatlik yedekleme zamanlayicisi
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=120
+Unit=showis-backup.service
+
+[Install]
+WantedBy=timers.target

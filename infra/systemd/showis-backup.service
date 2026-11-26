@@ -1,0 +1,11 @@
+[Unit]
+Description=Showis yedekleme (pg_dump + rapor/kanit arsivi)
+Documentation=file://@REPO_ROOT@/docs/runbook.md
+
+[Service]
+Type=oneshot
+WorkingDirectory=@REPO_ROOT@
+ExecStart=@REPO_ROOT@/infra/scripts/backup.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
