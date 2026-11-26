@@ -20,7 +20,7 @@ from pydantic import BaseModel
 
 from showis_engine.browser import RENDER_USER_AGENT
 from showis_engine.http import HttpClient, RobotsCache
-from showis_engine.policy import SSRFViolationError, guard_url
+from showis_engine.policy import PolicyViolationError, SSRFViolationError, guard_url
 
 logger = logging.getLogger("showis.browser_service")
 
@@ -29,6 +29,8 @@ _ROBOTS = RobotsCache(BROWSER_UA)
 
 BLOCK_PATTERNS = ["checkpoint", "vercel", "access denied"]
 MIN_INTERVAL_PER_HOST = 1.0  # saniye
+#: httpx fallback'te gövde üst sınırı (P-009; streaming okuma).
+MAX_RENDER_BYTES = 5_000_000
 
 app = FastAPI(title="Showis Browser Service")
 
@@ -93,6 +95,29 @@ async def _throttle(url: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+async def _guard_route(route) -> None:  # noqa: ANN001 - Playwright Route tipi opsiyonel bagimlilik
+    """Playwright isteğini yürütmeden **önce** SSRF + robots kapısından geçirir.
+
+    DEC-003: alt kaynak istekleri (img/script/fetch/XHR) ve yönlendirmeler de
+    kapsama girer. http(s) dışı şemalar (data:, blob:, about:) olduğu gibi geçer.
+    """
+    url = route.request.url
+    scheme = urlparse(url).scheme.lower()
+    if scheme not in ("http", "https"):
+        await route.continue_()
+        return
+    try:
+        # DNS çözümü bloklayıcıdır; event loop'u meşgul etme.
+        await asyncio.to_thread(guard_url, url)
+        if not await _ROBOTS.is_allowed(url):
+            raise PolicyViolationError(f"robots.txt engelledi: {url}")
+    except PolicyViolationError as exc:
+        logger.warning("Render istegi engellendi (policy): %s", exc)
+        await route.abort("blockedbyclient")
+        return
+    await route.continue_()
+
+
 async def _render_with_playwright(url: str, timeout_ms: int) -> RenderResponse:
     """Render via Playwright and return full response including screenshot."""
     from playwright.async_api import async_playwright  # type: ignore[import]
@@ -105,10 +130,11 @@ async def _render_with_playwright(url: str, timeout_ms: int) -> RenderResponse:
                 user_agent=BROWSER_UA,
                 viewport={"width": 1366, "height": 900},
             )
+            # DEC-003: her istek (ana doküman, alt kaynak, yönlendirme) guard+robots.
+            await context.route("**/*", _guard_route)
             page = await context.new_page()
             response = await page.goto(url, timeout=timeout_ms, wait_until="networkidle")
-            # Playwright yonlendirmeleri kendi takip eder; sonuc farkli host'a
-            # gittiyse hedefi yeniden SSRF kontrolunden gecir.
+            # Savunma derinliği: route kapısına ek olarak son URL de kontrol edilir.
             if urlparse(page.url).hostname != urlparse(url).hostname:
                 guard_url(page.url)
             status_code = response.status if response else 0
@@ -136,18 +162,25 @@ async def _render_with_playwright(url: str, timeout_ms: int) -> RenderResponse:
 async def _render_with_httpx(url: str, timeout_ms: int) -> RenderResponse:
     """Render via plain httpx GET (no JS execution, no screenshot)."""
     # HttpClient: SSRF guard + robots + her yonlendirme adiminda yeniden guard.
-    # max_retries=1: 429/403 yaniti "blocked" olarak raporlanmali, yeniden denenmemeli.
+    # Tek deneme: 429/403 yaniti "blocked" olarak raporlanmali, yeniden denenmemeli.
+    # P-009: gövde streaming okunur ve MAX_RENDER_BYTES ile sınırlanır.
     client = HttpClient(user_agent=BROWSER_UA, timeout=timeout_ms / 1000.0)
-    resp = await client.get(url, follow_redirects=True, max_retries=1)
-
-    html = resp.text
-    return RenderResponse(
-        html=html,
-        screenshot_b64=None,
-        blocked=_is_blocked(resp.status_code, html),
-        status_code=resp.status_code,
-        url=str(resp.url),
-    )
+    try:
+        resp = await client.get_limited(
+            url,
+            max_bytes=MAX_RENDER_BYTES,
+            follow_redirects=True,
+        )
+        html = resp.text
+        return RenderResponse(
+            html=html,
+            screenshot_b64=None,
+            blocked=_is_blocked(resp.status_code, html),
+            status_code=resp.status_code,
+            url=str(resp.url),
+        )
+    finally:
+        await client.aclose()
 
 
 # ---------------------------------------------------------------------------

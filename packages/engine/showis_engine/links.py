@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from PIL import Image
 from showis_contracts import Edge, EdgeType, Entity, Platform, make_entity_id
 
+from .edge_ids import short_edge_id
 from .http import DEFAULT_UA, HttpClient
 from .policy import PolicyViolationError, guard_url
 
@@ -344,7 +345,9 @@ def build_cross_link_edges(entity: Entity, entities: list[Entity]) -> list[Edge]
         )
         edges.append(
             Edge(
-                id=f"edge:cross_link:{entity.id}:{link.platform.value}:{link.identifier}",
+                id=short_edge_id(
+                    "e:cl", entity.id, link.platform.value, str(link.identifier)
+                ),
                 type=EdgeType.CROSS_LINK,
                 source_entity_id=entity.id,
                 target_entity_id=target_entity_id,
@@ -354,6 +357,10 @@ def build_cross_link_edges(entity: Entity, entities: list[Entity]) -> list[Edge]
             )
         )
     return edges
+
+
+#: Görsel başına azami piksel (decompression bomb / CPU DoS koruması).
+_MAX_IMAGE_PIXELS = 40_000_000
 
 
 def compute_image_dhash(image_bytes: bytes, hash_size: int = 8) -> str | None:
@@ -368,6 +375,12 @@ def compute_image_dhash(image_bytes: bytes, hash_size: int = 8) -> str | None:
         return None
     try:
         with Image.open(io.BytesIO(image_bytes)) as raw_img:
+            width, height = raw_img.size
+            if width <= 0 or height <= 0 or width * height > _MAX_IMAGE_PIXELS:
+                logger.debug(
+                    "dHash atlandı: görsel boyutu sınırı aşıldı (%sx%s)", width, height
+                )
+                return None
             processed_img = raw_img.convert("L").resize(
                 (hash_size + 1, hash_size), Image.Resampling.LANCZOS
             )
@@ -439,7 +452,7 @@ def build_avatar_match_edges(
                 seen_pairs.add(pair)
                 edges.append(
                     Edge(
-                        id=f"edge:same_person:avatar_sha:{a.id}:{b.id}",
+                        id=short_edge_id("e:as", a.id, b.id),
                         type=EdgeType.SAME_PERSON,
                         source_entity_id=a.id,
                         target_entity_id=b.id,
@@ -478,7 +491,7 @@ def build_avatar_match_edges(
                 )
                 edges.append(
                     Edge(
-                        id=f"edge:same_person:avatar_dhash:{a.id}:{b.id}",
+                        id=short_edge_id("e:ad", a.id, b.id),
                         type=EdgeType.SAME_PERSON,
                         source_entity_id=a.id,
                         target_entity_id=b.id,
@@ -505,10 +518,14 @@ async def fetch_avatar_hashes(
     except PolicyViolationError:
         return (None, None)
 
+    owns_client = http_client is None
     client = http_client or HttpClient(enable_ssrf_guard=True)
     try:
-        resp = await client.get(
-            avatar_url, headers={"User-Agent": DEFAULT_UA}, check_robots=False
+        resp = await client.get_limited(
+            avatar_url,
+            max_bytes=max_bytes,
+            headers={"User-Agent": DEFAULT_UA},
+            check_robots=False,
         )
         if resp.status_code != 200:
             return (None, None)
@@ -519,6 +536,9 @@ async def fetch_avatar_hashes(
     except Exception as exc:  # pragma: no cover - ağ hataları
         logger.debug("Avatar hash alınamadı (%s): %s", avatar_url, exc)
         return (None, None)
+    finally:
+        if owns_client:
+            await client.aclose()
 
 
 async def fetch_avatar_sha256(

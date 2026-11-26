@@ -373,13 +373,27 @@ def _finalize_queries(queries: list[SearchQuery]) -> list[SearchQuery]:
     return finalized
 
 
-def _enforce_handle_queries(target: Target, queries: list[SearchQuery]) -> list[SearchQuery]:
+def _query_key(text: str) -> str:
+    """Sorgu tekilleştirme/anahtar biçimi (boşluklar normalize, casefold)."""
+    return " ".join(str(text or "").split()).casefold()
+
+
+def _enforce_handle_queries(
+    target: Target,
+    queries: list[SearchQuery],
+    *,
+    trusted_queries: list[SearchQuery] | None = None,
+) -> list[SearchQuery]:
     """Handle modu garantisini **kod** düzeyinde uygular (prompt'a güvenmez).
 
     ``target.kind == "handle"`` iken nick dışı her sorgu düşer: LLM tam isim
     uydursa da, isim kaynaklı varyant sorgusu karışsa da plana giremez. Nick
     normalize edilemiyorsa (boş) handle modunda aranacak bir şey yoktur → plan
     boş döner. İsim modunda filtre yok (davranış değişmez).
+
+    ``trusted_queries``: kullanıcı girdisinden deterministik üretilen havuz
+    sorguları. Muafiyet artık `rationale` metnine değil, bu listeye dayanır;
+    LLM'in gerekçe metniyle filtreyi atlaması mümkün değildir.
     """
     if target.kind != "handle":
         return queries
@@ -387,12 +401,13 @@ def _enforce_handle_queries(target: Target, queries: list[SearchQuery]) -> list[
     if not nick:
         return []
     needle = nick.casefold()
+    trusted = {_query_key(q.query) for q in trusted_queries or []}
     # Havuz sorguları kullanıcı girdisidir; handle modunda da korunur.
     # Diğer sorgular nick içermek zorundadır (isim uydurma engeli).
     kept = [
         q
         for q in queries
-        if needle in q.query.casefold() or q.rationale.startswith("Havuz kaydı")
+        if needle in q.query.casefold() or _query_key(q.query) in trusted
     ]
     if len(kept) != len(queries):
         logger.debug(
@@ -401,9 +416,18 @@ def _enforce_handle_queries(target: Target, queries: list[SearchQuery]) -> list[
     return kept
 
 
-def _finalize_plan(target: Target, queries: list[SearchQuery]) -> QueryPlan:
+def _finalize_plan(
+    target: Target,
+    queries: list[SearchQuery],
+    *,
+    trusted_queries: list[SearchQuery] | None = None,
+) -> QueryPlan:
     """Her iki yolun (şablon + LLM) paylaştığı son adım: kapı + handle filtresi."""
-    return QueryPlan(queries=_enforce_handle_queries(target, _finalize_queries(queries)))
+    return QueryPlan(
+        queries=_enforce_handle_queries(
+            target, _finalize_queries(queries), trusted_queries=trusted_queries
+        )
+    )
 
 
 def _pool_queries(pool_items: list[dict[str, Any]] | None) -> list[SearchQuery]:
@@ -483,6 +507,7 @@ def build_template_fallback_queries(
     handle_mode = target.kind == "handle" or not fullname
 
     queries: list[SearchQuery] = []
+    pool_queries = _pool_queries(pool_items)
     if target.kind in {"email", "phone", "domain", "ip"}:
         identifier = sanitize_hint(target.identifier)
         if identifier:
@@ -494,33 +519,32 @@ def build_template_fallback_queries(
                     priority=1,
                 )
             )
-        queries.extend(_pool_queries(pool_items))
-        return _finalize_plan(target, queries)
+        queries.extend(pool_queries)
+        return _finalize_plan(target, queries, trusted_queries=pool_queries)
     if handle_mode:
-        # `_site_queries` 50 satırlık tabloyu üretir; tavan tek başına dolduğu
-        # için varyantlar burada da plana giremez (isim yolundaki davranışın aynısı).
-        queries.extend(_site_queries(nick, nickname=True))
+        # Site tablosu tek başına 50 satırlık tavanı doldurabilir; tavan yalnız
+        # bu bloğa uygulanır. Varyant/nick/havuz sorguları tavan dışında kalır
+        # (T-377 sonrası; eski kod tavanı tüm listeye uygulayıp bunları siliyordu).
+        queries.extend(_site_queries(nick, nickname=True)[:_MAX_TEMPLATE_QUERIES])
         queries.extend(_variant_queries(variants))
-        queries = queries[:_MAX_TEMPLATE_QUERIES]
         # Platform-bağımsız geniş sorgu tavan dışında: tablo tavanı doldursa
         # bile handle modunun son çare kapsamı kaybolmaz. Handle modunda isim
         # alanları yok sayılır; yalnız seed kullanıcı adı kullanılır.
         queries.extend(_identity_join_queries("", "", nick))
         queries.extend(_agnostic_nick_query(nick))
-        queries.extend(_pool_queries(pool_items))
+        queries.extend(pool_queries)
     else:
-        queries.extend(_site_queries(fullname))
+        queries.extend(_site_queries(fullname)[:_MAX_TEMPLATE_QUERIES])
         queries.extend(_generic_name_queries(fullname))
         queries.extend(_combined_name_queries(ad, soyad))
         queries.extend(_profile_queries(ad))
         queries.extend(_variant_queries(variants))
-        queries = queries[:_MAX_TEMPLATE_QUERIES]
         # İsim sorguları aynen korunur; nick ve havuz sorguları sona eklenir.
         queries.extend(_identity_join_queries(ad, soyad, nick))
         queries.extend(_nickname_queries(nick))
-        queries.extend(_pool_queries(pool_items))
+        queries.extend(pool_queries)
 
-    return _finalize_plan(target, queries)
+    return _finalize_plan(target, queries, trusted_queries=pool_queries)
 
 
 # ---------------------------------------------------------------------------
@@ -683,8 +707,11 @@ class QueryPlanner:
             if isinstance(plan, QueryPlan) and plan.queries:
                 # LLM çıktısı da aynı kapıdan geçer: TEK kötü sorgu tüm planı
                 # (ve devre kesiciyi) düşürmez, yalnızca o sorgu atlanır.
+                pool_queries = _pool_queries(pool_items)
                 guarded = _finalize_plan(
-                    target, plan.queries[:max_queries] + _pool_queries(pool_items)
+                    target,
+                    plan.queries[:max_queries] + pool_queries,
+                    trusted_queries=pool_queries,
                 )
                 if guarded.queries:
                     return guarded

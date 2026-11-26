@@ -345,50 +345,11 @@ SITES: list[SiteSpec] = [
         "https://www.root-me.org/{u}",
         absent_statuses=(404, 410),
     ),
-    _json_site(
-        "duolingo",
-        "Duolingo",
-        Platform.DUOLINGO,
-        "https://www.duolingo.com/2017-06-30/users?username={u}",
-        path="users",
-        skip_robots=True,
-    ),
     SiteSpec(
         "hashnode",
         "Hashnode",
         Platform.HASHNODE,
         "https://hashnode.com/@{u}",
-        absent_statuses=(404, 410),
-    ),
-    _json_site(
-        "bluesky",
-        "Bluesky",
-        Platform.BLUESKY,
-        "https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor={u}.bsky.social",
-        path="did",
-        skip_robots=True,
-    ),
-    _json_site(
-        "huggingface",
-        "HuggingFace",
-        Platform.HUGGINGFACE,
-        "https://huggingface.co/api/users/{u}/overview",
-        path="user",
-        skip_robots=True,
-    ),
-    _json_site(
-        "kitsu",
-        "Kitsu",
-        Platform.KITSU,
-        "https://kitsu.io/api/edge/users?filter[slug]={u}",
-        path="data",
-        skip_robots=True,
-    ),
-    SiteSpec(
-        "wordpress",
-        "WordPress",
-        Platform.WORDPRESS,
-        "https://{u}.wordpress.com",
         absent_statuses=(404, 410),
     ),
     SiteSpec(
@@ -705,10 +666,22 @@ SITES: list[SiteSpec] = [
 
 # WhatsMyName veri seti (CC BY-SA 4.0) — yalnız çift işaretli/korumasız siteler.
 # Import döngüsünü önlemek için SiteSpec/SITES tanımından sonra yüklenir.
+#: publicapi/ altındaki derin connector'ların (veya kaldırılmış kırılgan
+#: uçların) kapsadığı host'lar. WMN bu host'ları tekrar eklemez; aksi halde
+#: aynı kontrol iki connector'da çift istek/entity üretir.
+PUBLICAPI_COVERED_HOSTS: tuple[str, ...] = (
+    "public.api.bsky.app",
+    "bsky.app",
+    "huggingface.co",
+    "kitsu.io",
+    "public-api.wordpress.com",
+    "www.duolingo.com",
+)
+
 _CORE_SITES = list(SITES)
 from .sites_wmn import WMN_SITES, load_wmn_sites  # noqa: E402
 
-WMN_SITES.extend(load_wmn_sites(_CORE_SITES))
+WMN_SITES.extend(load_wmn_sites(_CORE_SITES, PUBLICAPI_COVERED_HOSTS))
 SITES.extend(WMN_SITES)
 
 #: site key -> spec hizli erisim
@@ -725,7 +698,7 @@ _MODE_SITE_LIMIT = {
 def select_sites(mode: str | None) -> list[SiteSpec]:
     """Moda göre aktif site-check kapsamı.
 
-    O1 yalnız çekirdek; O2 yüksek değerli genişletme; O3 daha geniş uzun kuyruk.
+    O1 ve O2 yalnız çekirdek listeyi kullanır; O3 WMN uzun kuyruğunu da ekler.
     Tüm WMN verisi ``SITES`` içinde durur, bütçe için aktif liste sınırlanır.
     """
     normalized = str(mode or "O2").strip().upper()
@@ -736,3 +709,21 @@ def select_sites(mode: str | None) -> list[SiteSpec]:
         key=lambda spec: (spec.site_tier, spec.key),
     )
     return (core + extended)[: max(len(core), limit)]
+
+
+def _register_engine_site_counts() -> None:
+    """R-009: engine, connector paketini import etmez; sayıları burada kaydederiz.
+
+    `showis_engine.scan_modes` süre tahmini için `site_count`/`site_count_for_mode`
+    çağırır. Kayıt, paket import edildiğinde (uygulama ve testlerde olduğu gibi)
+    yapılır; engine tek başına kurulursa `_SITE_COUNT_FALLBACK` kullanılır.
+    """
+    from showis_engine.scan_modes import register_site_count_provider
+
+    register_site_count_provider(
+        lambda: len(SITES),
+        lambda mode: len(select_sites(mode)),
+    )
+
+
+_register_engine_site_counts()

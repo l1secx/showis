@@ -20,27 +20,40 @@ def strip_html(raw: str) -> str:
     return _WS_RE.sub(" ", text).strip()
 
 
-def meta_content(raw_html: str, *, prop: str | None = None, name: str | None = None) -> str | None:
-    """<meta property|name="..." content="..."> değerini döndürür."""
-    if prop:
-        pattern = re.compile(
-            r'<meta[^>]+property=["\']'
-            + re.escape(prop)
-            + r'["\'][^>]+content=["\']([^"\']+)["\']',
-            re.IGNORECASE,
-        )
-        m = pattern.search(raw_html)
-        if m:
-            return html.unescape(m.group(1)).strip()
-        # attribute order reversed
-        pattern2 = re.compile(
-            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']'
-            + re.escape(prop)
-            + r'["\']',
-            re.IGNORECASE,
-        )
-        m2 = pattern2.search(raw_html)
-        return html.unescape(m2.group(1)).strip() if m2 else None
+def _meta_patterns(attribute: str, value: str) -> tuple[re.Pattern[str], re.Pattern[str]]:
+    """`<meta attr="value" content="...">` için iki attribute sırası."""
+    forward = re.compile(
+        rf"<meta[^>]+{attribute}=[\"']{re.escape(value)}[\"'][^>]+content=[\"']([^\"']+)[\"']",
+        re.IGNORECASE,
+    )
+    reversed_ = re.compile(
+        rf"<meta[^>]+content=[\"']([^\"']+)[\"'][^>]+{attribute}=[\"']{re.escape(value)}[\"']",
+        re.IGNORECASE,
+    )
+    return forward, reversed_
+
+
+def meta_content(
+    raw_html: str,
+    *,
+    prop: str | None = None,
+    name: str | None = None,
+) -> str | None:
+    """`<meta property|name="..." content="...">` değerini döndürür.
+
+    `prop` verilirse `property=`, `name` verilirse `name=` aranır. İkisi birlikte
+    verilirse önce `prop`, bulunamazsa `name` denenir (ör. og:description →
+    description geri dönüşü).
+    """
+    if not raw_html:
+        return None
+    for attribute, value in (("property", prop), ("name", name)):
+        if not value:
+            continue
+        for pattern in _meta_patterns(attribute, value):
+            match = pattern.search(raw_html)
+            if match:
+                return html.unescape(match.group(1)).strip()
     return None
 
 

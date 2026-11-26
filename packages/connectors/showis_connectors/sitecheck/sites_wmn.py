@@ -59,8 +59,16 @@ def _host(url_template: str) -> str:
     return (match.group(1).lower().removeprefix("www.") if match else "")
 
 
-def load_wmn_sites(existing_specs: Iterable[SiteSpec]) -> list[SiteSpec]:
-    """WMN JSON'undan SiteSpec listesi üretir; mevcut hostları atlar."""
+def load_wmn_sites(
+    existing_specs: Iterable[SiteSpec],
+    extra_hosts: Iterable[str] = (),
+) -> list[SiteSpec]:
+    """WMN JSON'undan SiteSpec listesi üretir; mevcut hostları atlar.
+
+    ``extra_hosts``: publicapi/ derin connector'ların kapsadığı host'lar. Bu
+    host'lar WMN'de tekrar tanımlıysa (ör. bluesky, huggingface, wordpress)
+    atlanır; aksi halde aynı kontrol iki connector'da çift istek üretir.
+    """
     if not _DATA_PATH.is_file():
         return []
     try:
@@ -69,9 +77,13 @@ def load_wmn_sites(existing_specs: Iterable[SiteSpec]) -> list[SiteSpec]:
         return []
 
     existing_hosts = {_host(spec.url_template) for spec in existing_specs}
+    existing_hosts.update(
+        str(host).strip().lower().removeprefix("www.") for host in extra_hosts
+    )
     existing_hosts.discard("")
     result: list[SiteSpec] = []
     seen_keys: set[str] = set()
+    seen_hosts: set[str] = set()
 
     for item in payload.get("sites") or []:
         if item.get("valid") is False or item.get("protection"):
@@ -90,8 +102,9 @@ def load_wmn_sites(existing_specs: Iterable[SiteSpec]) -> list[SiteSpec]:
         if not url_template.startswith(("http://", "https://")):
             continue
         host = _host(url_template)
-        if not host or host in existing_hosts:
+        if not host or host in existing_hosts or host in seen_hosts:
             continue
+        seen_hosts.add(host)
 
         base_key = f"wmn_{_slug(name)}"
         key = base_key

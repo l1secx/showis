@@ -24,18 +24,18 @@ Kurallar:
 - Dedupe: ``(küçük_id, büyük_id, type)`` — simetrik çift bir kez üretilir.
 - Entity başına en fazla ``max_edges_per_entity`` (varsayılan 20) kenar; en
   yüksek confidence önce.
-- ``edge.id`` deterministik ve **≤ 36 karakter** (DB `edges.id` VARCHAR(36)):
+- ``edge.id`` deterministik ve **≤ 96 karakter** (DB `edges.id` VARCHAR(96)):
   ``e:<sha1[:24]>``. Uzun id'ler kırpılmaz, hash'lenir.
 """
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from typing import Any
 
 from showis_contracts import Edge, EdgeType, Entity, Platform
 
+from .edge_ids import short_edge_id
 from .links import build_cross_link_edges, hamming_distance
 
 logger = logging.getLogger("showis.identity_edges")
@@ -69,12 +69,6 @@ _GENERIC_DHASHES = {"0000000000000000", "ffffffffffffffff"}
 # ---------------------------------------------------------------------------
 # Yardımcılar
 # ---------------------------------------------------------------------------
-
-
-def short_edge_id(prefix: str, *parts: str) -> str:
-    """Deterministik ve DB'ye sığan edge id'si (prefix + 24 hex ≤ 27 karakter)."""
-    digest = hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:24]
-    return f"{prefix}:{digest}"
 
 
 def normalize_username(value: Any) -> str:

@@ -162,7 +162,10 @@ def parse_timestamp(value: Any) -> datetime | None:
     if value is None or isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
-        seconds = float(value)
+        try:
+            seconds = float(value)
+        except (OverflowError, ValueError):
+            return None
         if seconds <= 0:
             return None
         # > 1e11 -> milisaniye (reddit created_utc saniye, JS ISO ms)
@@ -177,6 +180,10 @@ def parse_timestamp(value: Any) -> datetime | None:
     if not text:
         return None
     if text.isdigit():
+        # Epoch saniye (10) / milisaniye (13) için 19 hane yeter; aşırı uzun
+        # dijit string'i int/float dönüşümünde taşma veya CPU israfı yaratır.
+        if len(text) > 19:
+            return None
         return parse_timestamp(int(text))
     try:
         parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))

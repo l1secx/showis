@@ -90,39 +90,44 @@ class DuckDuckGoSearchProvider(SearchProvider):
 
     @staticmethod
     def _parse(page: str, *, limit: int) -> list[SearchHit]:
-        """Sonuc linkleri ve snippet'lerini belge sirasiyla birlestirir."""
-        events: list[tuple[int, str, re.Match[str]]] = [
-            (m.start(), "link", m) for m in _LINK_RE.finditer(page)
-        ]
-        events += [(m.start(), "snippet", m) for m in _SNIPPET_RE.finditer(page)]
-        events.sort(key=lambda e: e[0])
+        """Geriye uyumlu sarmalayıcı (testler bu adı kullanır)."""
+        return parse_lite_results(page, limit=limit)
 
-        hits: list[SearchHit] = []
-        for _pos, kind, m in events:
-            if kind == "link":
-                anchor = m.group(0)
-                open_tag = anchor[: anchor.find(">") + 1]
-                href_m = _HREF_RE.search(open_tag)
-                href = html.unescape(href_m.group(1)) if href_m else ""
-                url = _extract_url(href)
-                if not url or _TRACKER_RE.search(url):
-                    continue
-                hits.append(
-                    SearchHit(
-                        url=url,
-                        title=_clean(m.group(1)),
-                        snippet="",
-                        rank=len(hits) + 1,
-                        provider=DuckDuckGoSearchProvider.name,
-                        raw={"href": href},
-                    )
+
+def parse_lite_results(page: str, *, limit: int) -> list[SearchHit]:
+    """DDG Lite HTML'inden sonuç linkleri ve snippet'lerini çıkarır."""
+    events: list[tuple[int, str, re.Match[str]]] = [
+        (m.start(), "link", m) for m in _LINK_RE.finditer(page)
+    ]
+    events += [(m.start(), "snippet", m) for m in _SNIPPET_RE.finditer(page)]
+    events.sort(key=lambda e: e[0])
+
+    hits: list[SearchHit] = []
+    for _pos, kind, m in events:
+        if kind == "link":
+            anchor = m.group(0)
+            open_tag = anchor[: anchor.find(">") + 1]
+            href_m = _HREF_RE.search(open_tag)
+            href = html.unescape(href_m.group(1)) if href_m else ""
+            url = _extract_url(href)
+            if not url or _TRACKER_RE.search(url):
+                continue
+            hits.append(
+                SearchHit(
+                    url=url,
+                    title=_clean(m.group(1)),
+                    snippet="",
+                    rank=len(hits) + 1,
+                    provider=DuckDuckGoSearchProvider.name,
+                    raw={"href": href},
                 )
-                if len(hits) >= limit:
-                    break
-            elif hits:
-                # snippet, kendinden once gelen sonuca aittir
-                snippet = _clean(m.group(1))
-                if snippet:
-                    hits[-1].snippet = snippet
+            )
+            if len(hits) >= limit:
+                break
+        elif hits:
+            # snippet, kendinden once gelen sonuca aittir
+            snippet = _clean(m.group(1))
+            if snippet:
+                hits[-1].snippet = snippet
 
-        return hits
+    return hits

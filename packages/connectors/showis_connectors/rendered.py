@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import re
 import uuid
 from typing import Any
 
@@ -36,14 +35,11 @@ from showis_engine.links import (
     fetch_avatar_sha256,
 )
 
+from ._util import UUID_RE
 from .websearch.base import SearchProvider
 
 logger = logging.getLogger("showis.rendered_connector")
 
-#: UUID biçimli kimlikler etiket olarak kullanılmaz (okunamaz)
-_UUID_RE = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
-)
 
 
 class RenderedProfileConnector:
@@ -133,18 +129,25 @@ class RenderedProfileConnector:
     def _search_task(self, ctx: ScanContext) -> TaskSpec | None:
         if not self.search_provider:
             return None
-        fullname = f"{ctx.target.first_name} {ctx.target.last_name}".strip()
-        # Handle hedefinde ad/soyad yoktur: sorgu nick'ten kurulur (bos `""` yok).
-        # Nick kullanici girdisidir: tirnak enjeksiyonu notralize edilir (SEC-10).
+        # Ad/soyad ve nick kullanici girdisidir: tirnak/operator enjeksiyonu
+        # notralize edilir (SEC-10); yasak desenli sorgu planlanmaz.
         from showis_engine.planner import sanitize_hint
+        from showis_engine.policy import PolicyViolationError, guard_query
 
+        fullname = sanitize_hint(f"{ctx.target.first_name} {ctx.target.last_name}")
         nick = sanitize_hint((ctx.target.nickname or "").strip().lstrip("@"))
         subject = fullname or nick
         if not subject:
             return None
+        query = f'"{subject}" site:{self.search_site}'
+        try:
+            guard_query(query)
+        except PolicyViolationError:
+            logger.debug("Yasak desenli arama sorgusu elendi: %r", query)
+            return None
         return self._make_task(
             "search",
-            {"query": f'"{subject}" site:{self.search_site}', "limit": 10},
+            {"query": query, "limit": 10},
             priority=2,
         )
 
@@ -376,7 +379,7 @@ class RenderedProfileConnector:
             # etiket aynı zamanda kullanıcı adı gruplamasında anahtar olduğu
             # için (scanner `_entity_username`) **benzersiz** olmak zorunda.
             candidate = username or display_name
-            if candidate and not _UUID_RE.match(str(candidate)):
+            if candidate and not UUID_RE.match(str(candidate)):
                 label = str(candidate)
             else:
                 digest = hashlib.sha1(str(identifier).encode("utf-8")).hexdigest()[:8]

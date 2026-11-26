@@ -34,6 +34,33 @@ class SSRFViolationError(PolicyViolationError):
     pass
 
 
+#: CGNAT / Tailscale tailnet aralığı. Python `is_private` bunu kapsamaz;
+#: `is_global` False olsa da açık reddetme savunma derinliği sağlar.
+_CGNAT_NETWORKS = (ipaddress.ip_network("100.64.0.0/10"),)
+
+
+def is_blocked_ip(ip_obj: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """SSRF için yasaklı IP sınıfları.
+
+    Kural: **yalnız global (genel internete yönlendirilebilir) adresler** geçer.
+    Böylece private/loopback/link-local/reserved/unspecified sınıflarına ek
+    olarak CGNAT/tailnet (`100.64.0.0/10`) ve dokümantasyon TEST-NET aralıkları
+    da reddedilir. IPv4-mapped IPv6 adresler (`::ffff:100.64.0.1`) IPv4 gibi
+    değerlendirilir. Çoklu yayın (multicast) `is_global` True dönebildiği için
+    ayrıca reddedilir.
+    """
+    mapped = getattr(ip_obj, "ipv4_mapped", None)
+    if mapped is not None:
+        ip_obj = mapped
+    if not ip_obj.is_global:
+        return True
+    if ip_obj.is_multicast:
+        return True
+    if ip_obj.version == 4 and any(ip_obj in network for network in _CGNAT_NETWORKS):
+        return True
+    return False
+
+
 def assert_host_not_forbidden(host_or_url: str) -> None:
     """Yasaklı host kontrolü (ör. labs.hackthebox.com, www.hackthebox.com/api)."""
     parsed = urlparse(host_or_url if "://" in host_or_url else f"http://{host_or_url}")
@@ -74,10 +101,8 @@ def guard_url(url: str) -> str:
     try:
         # Doğrudan IP adresi kontrolü
         ip_obj = ipaddress.ip_address(hostname)
-        if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_reserved:
+        if is_blocked_ip(ip_obj):
             raise SSRFViolationError(f"Özel/dahili IP adresine erişim engellendi: {hostname}")
-        if str(ip_obj) == "169.254.169.254":  # AWS metadata
-            raise SSRFViolationError("Metadata IP adresine erişim engellendi.")
     except ValueError:
         # Alan adı - DNS çözümü ile IP kontrolü
         try:
@@ -85,18 +110,13 @@ def guard_url(url: str) -> str:
             for addr in addr_info:
                 ip_str = addr[4][0]
                 ip_obj = ipaddress.ip_address(ip_str)
-                if (
-                    ip_obj.is_private
-                    or ip_obj.is_loopback
-                    or ip_obj.is_link_local
-                    or ip_obj.is_reserved
-                    or str(ip_obj) == "169.254.169.254"
-                ):
+                if is_blocked_ip(ip_obj):
                     raise SSRFViolationError(
                         f"Alan adı dahili IP'ye çözümlendi: {hostname} -> {ip_str}"
                     )
         except socket.gaierror:
-            # DNS çözümlenemedi (mock ortamlarında pass edebilir)
+            # DNS çözümlenemedi (mock ortamlarında pass edebilir). Bağlantı
+            # anındaki pinli backend (`netguard`) hatayı fail-closed kapatır.
             pass
 
     return url

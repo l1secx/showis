@@ -65,6 +65,7 @@ class OpenAlexConnector(PublicProfileConnector):
         if not query:
             return [self._obs("", error="arama sorgusu eksik")]
         params = f"?search={quote(query, safe='')}&per_page=5"
+        evidence_url = f"{OPENALEX_BASE}/authors{params}"
         mailto = os.getenv("SHOWIS_CONTACT_EMAIL", "").strip()
         if mailto:
             params += f"&mailto={quote(mailto, safe='')}"
@@ -88,12 +89,12 @@ class OpenAlexConnector(PublicProfileConnector):
         if not results:
             return [self._obs(query, data={"exists": False, "authors": []})]
         ev = self.evidence_store.store_bytes(
-            resp.content, source_url=url, kind="json", http_status=resp.status_code
+            resp.content, source_url=evidence_url, kind="json", http_status=resp.status_code
         )
         return [
             self._obs(
                 query,
-                url=url,
+                url=evidence_url,
                 data={"exists": True, "query": query, "authors": results[:5]},
                 evidence=[ev],
             )

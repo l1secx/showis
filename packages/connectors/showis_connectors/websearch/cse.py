@@ -19,12 +19,15 @@ class GoogleCseSearchProvider(SearchProvider):
         site: str | None = None,
     ) -> list[SearchHit]:
         full_query = f"site:{site} {query}" if site else query
-        url = (
-            f"https://www.googleapis.com/customsearch/v1"
-            f"?q={full_query}&key={self.api_key}&cx={self.cx}&num={min(limit, 10)}"
-        )
+        url = "https://www.googleapis.com/customsearch/v1"
+        params = {
+            "q": full_query,
+            "key": self.api_key,
+            "cx": self.cx,
+            "num": str(min(limit, 10)),
+        }
 
-        resp = await self.http_client.get(url, check_robots=False)
+        resp = await self.http_client.get(url, params=params, check_robots=False)
         resp.raise_for_status()
         data = resp.json()
 

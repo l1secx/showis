@@ -230,12 +230,14 @@ class UsernameCheckEngine:
             )
         async with self._sem:
             try:
-                resp = await self.http.get(
+                # P-009: gövde okuma sırasında `_SCAN_LIMIT` ile sınırlanır;
+                # saldırgan kontrollü büyük sayfa worker belleğini şişirmez.
+                resp = await self.http.get_limited(
                     url,
+                    max_bytes=_SCAN_LIMIT,
                     headers=spec.headers or None,
                     check_robots=not spec.skip_robots,
                     follow_redirects=True,
-                    max_retries=1,
                 )
             except PermissionError:
                 return CheckResult(

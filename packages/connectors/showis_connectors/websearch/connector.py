@@ -11,6 +11,7 @@ Tier C kurali: yalnizca arama indeksi sorgulanir, sonuc sayfasi cekilmez.
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import uuid
 from typing import Any
@@ -30,6 +31,8 @@ from showis_engine.http import EvidenceStore
 
 from .base import SearchHit, SearchProvider
 from .ranking import rank_hits
+
+logger = logging.getLogger("showis.websearch.connector")
 
 _MAX_TITLE = 120
 
@@ -64,9 +67,12 @@ class WebSearchConnector:
 
     def _queries(self, ctx: ScanContext) -> list[str]:
         from showis_engine.planner import sanitize_hint
+        from showis_engine.policy import PolicyViolationError, guard_query
 
         target = ctx.target
-        fullname = f"{target.first_name} {target.last_name}".strip()
+        # Ad/soyad kullanici girdisidir: tirnak/operator enjeksiyonu notralize
+        # edilir (SEC-10). Onceden yalniz nick sanitize ediliyordu.
+        fullname = sanitize_hint(f"{target.first_name} {target.last_name}")
         # Handle hedefi: ad/soyad yok, yalniz nick var. Bos tirnakli sorgu
         # (`""`) arama motorunda anlamsizdir; nick'ten kurulur. Nick de
         # kullanici girdisidir: tirnak/operator enjeksiyonu notralize edilir.
@@ -81,14 +87,24 @@ class WebSearchConnector:
         else:
             return []
         hints = target.hints or {}
-        queries = [subject]
+        candidates = [subject]
         # Okul/sehir ipucu ayni isimli kisileri ayiklar.
         # T-377 (SEC-10): ipucu metni guvenilmez — operatorler notralize edilir,
         # uzunluk kirpilir, kontrol karakteri iceren deger atlanir.
         for key in ("school", "city", "company"):
             value = sanitize_hint(hints.get(key))
             if value:
-                queries.append(f"{subject} {value}")
+                candidates.append(f"{subject} {value}")
+        # Connector'in kendi planladigi sorgular da planner kapisindan gecer:
+        # yasak desenli sorgu arama motoruna gitmez (politika tek kaynaktan).
+        queries: list[str] = []
+        for query in candidates:
+            try:
+                guard_query(query)
+            except PolicyViolationError:
+                logger.debug("Yasak desenli arama sorgusu elendi: %r", query)
+                continue
+            queries.append(query)
         return queries
 
     async def plan(self, ctx: ScanContext) -> list[TaskSpec]:

@@ -1,5 +1,6 @@
 import uuid
 from typing import Any
+from urllib.parse import quote
 
 from showis_contracts import (
     Edge,
@@ -103,11 +104,12 @@ class GitHubConnector:
             )
 
         # 2. Identity query search (ad-soyad veya nick)
-        # T-377 (SEC-10): ipucu metni guvenilmez; tirnak/operator enjeksiyonu
-        # `sanitize_hint` ile notralize edilir (tek kaynak: showis_engine.planner).
+        # T-377 (SEC-10): kullanici girdisi guvenilmez; tirnak/operator
+        # enjeksiyonu `sanitize_hint`, yasak desen `guard_query` ile engellenir.
         from showis_engine.planner import sanitize_hint
+        from showis_engine.policy import PolicyViolationError, guard_query
 
-        fullname = f"{target.first_name} {target.last_name}".strip()
+        fullname = sanitize_hint(f"{target.first_name} {target.last_name}")
         # Nick de kullanici girdisidir: tirnak/operator enjeksiyonu ayni
         # `sanitize_hint` ile notralize edilir (SEC-10).
         nick = sanitize_hint((target.nickname or "").strip().lstrip("@"))
@@ -127,6 +129,10 @@ class GitHubConnector:
                 q_parts.append(f'company:"{company}"')
 
             query_str = " ".join(q_parts)
+            try:
+                guard_query(query_str)
+            except PolicyViolationError:
+                return tasks
             tasks.append(
                 TaskSpec(
                     id=str(uuid.uuid4()),
@@ -205,14 +211,19 @@ class GitHubConnector:
         try:
             if kind == "search_users":
                 query = params.get("query", "")
-                url = f"{GITHUB_API_BASE}/search/users?q={query}&per_page=30"
-                resp = await self.http_client.get(url, headers=headers, check_robots=False)
+                url = f"{GITHUB_API_BASE}/search/users"
+                resp = await self.http_client.get(
+                    url,
+                    params={"q": query, "per_page": "30"},
+                    headers=headers,
+                    check_robots=False,
+                )
 
                 if resp.status_code == 200:
                     data = resp.json()
                     ev = self.evidence_store.store_bytes(
                         resp.content,
-                        source_url=url,
+                        source_url=str(resp.request.url),
                         kind="json",
                         http_status=resp.status_code,
                     )
@@ -247,7 +258,7 @@ class GitHubConnector:
 
             elif kind == "get_user":
                 username = params.get("username", "")
-                url = f"{GITHUB_API_BASE}/users/{username}"
+                url = f"{GITHUB_API_BASE}/users/{quote(str(username), safe='')}"
                 resp = await self.http_client.get(url, headers=headers, check_robots=False)
 
                 if resp.status_code == 200:
@@ -297,7 +308,10 @@ class GitHubConnector:
 
             elif kind == "list_repos":
                 username = params.get("username", "")
-                url = f"{GITHUB_API_BASE}/users/{username}/repos?per_page=100&type=owner"
+                url = (
+                    f"{GITHUB_API_BASE}/users/{quote(str(username), safe='')}"
+                    "/repos?per_page=100&type=owner"
+                )
                 resp = await self.http_client.get(url, headers=headers, check_robots=False)
                 if resp.status_code == 200:
                     data = resp.json()
@@ -320,12 +334,20 @@ class GitHubConnector:
 
             elif kind == "search_commits":
                 email = params.get("email", "")
-                url = f"{GITHUB_API_BASE}/search/commits?q=author-email:{email}"
-                resp = await self.http_client.get(url, headers=headers, check_robots=False)
+                url = f"{GITHUB_API_BASE}/search/commits"
+                resp = await self.http_client.get(
+                    url,
+                    params={"q": f"author-email:{email}"},
+                    headers=headers,
+                    check_robots=False,
+                )
                 if resp.status_code == 200:
                     data = resp.json()
                     ev = self.evidence_store.store_bytes(
-                        resp.content, source_url=url, kind="json", http_status=resp.status_code
+                        resp.content,
+                        source_url=str(resp.request.url),
+                        kind="json",
+                        http_status=resp.status_code,
                     )
                     observations.append(
                         Observation(
@@ -344,7 +366,10 @@ class GitHubConnector:
             else:
                 # Other kinds (events, orgs, gists, gpg, followers) follow sub-resources
                 username = params.get("username", "")
-                url = f"{GITHUB_API_BASE}/users/{username}/{kind.replace('list_', '')}"
+                url = (
+                    f"{GITHUB_API_BASE}/users/{quote(str(username), safe='')}"
+                    f"/{kind.replace('list_', '')}"
+                )
                 resp = await self.http_client.get(url, headers=headers, check_robots=False)
                 if resp.status_code == 200:
                     ev = self.evidence_store.store_bytes(

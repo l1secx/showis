@@ -15,15 +15,12 @@ from showis_contracts import Platform, ScanContext, TaskSpec
 from showis_engine.browser import BrowserClient
 from showis_engine.http import EvidenceStore, HttpClient
 
+from ._util import UUID_RE, first_int
 from .rendered import RenderedProfileConnector
 from .websearch.base import SearchProvider
 
 THM_PROFILE_RE = re.compile(r"tryhackme\.com/p/([A-Za-z0-9_.-]+)", re.IGNORECASE)
 
-#: UUID bicimli platform kimlikleri kullanici adi sayilmaz (T-347)
-_UUID_RE = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
-)
 
 # TryHackMe profil metninden alan cikarimi icin regex'ler
 _RANK_RE = re.compile(r"rank[^\d]{0,15}(?:#\s*)?([\d,]{1,10})", re.IGNORECASE)
@@ -32,17 +29,6 @@ _ROOMS_DONE_RE = re.compile(r"rooms?\s*(?:completed|done)[^\d]{0,15}(\d{1,5})", 
 _ROOMS_NUM_RE = re.compile(r"(\d{1,5})\s*rooms?\b", re.IGNORECASE)
 
 
-def _first_int(pattern: re.Pattern[str], text: str) -> int | None:
-    m = pattern.search(text)
-    if not m:
-        return None
-    for group in m.groups():
-        if group:
-            try:
-                return int(group.replace(",", ""))
-            except ValueError:
-                continue
-    return None
 
 
 class TryHackMeConnector(RenderedProfileConnector):
@@ -111,15 +97,15 @@ class TryHackMeConnector(RenderedProfileConnector):
         # THM'e ozgu alanlar
         # T-347: URL'den gelen kimlik normalde kullanici adidir; uuid ise
         # kullanici adi sayilmaz, `platform_user_id` olarak saklanir.
-        if _UUID_RE.match(str(identifier or "")):
+        if UUID_RE.match(str(identifier or "")):
             data["platform_user_id"] = identifier
             data.pop("username", None)
         else:
             data["username"] = identifier
             data["platform_user_id"] = identifier
-        data["rank"] = _first_int(_RANK_RE, text)
-        data["streak"] = _first_int(_STREAK_RE, text)
-        data["rooms_completed"] = _first_int(_ROOMS_DONE_RE, text) or _first_int(
+        data["rank"] = first_int(_RANK_RE, text)
+        data["streak"] = first_int(_STREAK_RE, text)
+        data["rooms_completed"] = first_int(_ROOMS_DONE_RE, text) or first_int(
             _ROOMS_NUM_RE, text
         )
 

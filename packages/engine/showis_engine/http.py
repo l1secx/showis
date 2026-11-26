@@ -7,6 +7,7 @@ import logging
 import os
 import random
 import re
+import time
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -18,6 +19,7 @@ from urllib.robotparser import RobotFileParser
 import httpx
 from showis_contracts import Evidence
 
+from .netguard import pinned_async_transport
 from .policy import SSRFViolationError, guard_url
 from .ratelimit import HostLimiter, default_host_limiter, limiter_enabled
 
@@ -240,29 +242,78 @@ def _redact_error(error: object | None) -> str:
 
 
 class RobotsCache:
-    def __init__(self, user_agent: str = DEFAULT_UA):
+    #: robots.txt alınamadığında (5xx/429/ağ hatası) yeniden deneme aralığı (sn).
+    #: RFC 9309 §2.3.1.4: erişilemeyen robots.txt "tamamen yasak" sayılır.
+    DEFAULT_FAILURE_RETRY_SECONDS = 300.0
+
+    def __init__(
+        self,
+        user_agent: str = DEFAULT_UA,
+        *,
+        failure_retry_seconds: float = DEFAULT_FAILURE_RETRY_SECONDS,
+    ):
         self.user_agent = user_agent
+        self.failure_retry_seconds = max(1.0, float(failure_retry_seconds))
         self._parsers: dict[str, RobotFileParser] = {}
+        #: origin -> fail-closed kararının geçerlilik sonu (monotonic).
+        self._blocked_until: dict[str, float] = {}
+
+    async def _fetch_parser(self, origin: str) -> RobotFileParser:
+        """robots.txt getirir; hata durumunda **fail-closed** parser döndürür."""
+        robots_url = f"{origin}/robots.txt"
+        parser = RobotFileParser()
+        current = robots_url
+        try:
+            async with httpx.AsyncClient(
+                timeout=5.0,
+                headers={"User-Agent": self.user_agent},
+                transport=pinned_async_transport(),
+            ) as client:
+                for _hop in range(MAX_REDIRECTS + 1):
+                    # Yönlendirme hedefi de SSRF kapısından geçer.
+                    await asyncio.to_thread(guard_url, current)
+                    resp = await client.get(current)
+                    location = resp.headers.get("location")
+                    if resp.is_redirect and location:
+                        current = str(resp.url.join(location))
+                        continue
+                    if resp.status_code == 200:
+                        parser.parse(resp.text.splitlines())
+                        return parser
+                    if 400 <= resp.status_code < 500 and resp.status_code != 429:
+                        # RFC 9309 §2.3.1.3: kaynak yok -> erişim serbest.
+                        parser.parse(["User-agent: *", "Allow: /"])
+                        return parser
+                    break
+        except Exception as exc:
+            logger.warning(
+                "robots.txt alinamadi (%s): %s — fail-closed",
+                redact_url(robots_url),
+                type(exc).__name__,
+            )
+
+        # 429, 5xx, çok fazla yönlendirme veya ağ hatası: tamamen yasak.
+        parser.parse(["User-agent: *", "Disallow: /"])
+        self._blocked_until[origin] = time.monotonic() + self.failure_retry_seconds
+        logger.warning(
+            "robots.txt erisilemedi (%s) — %ss boyunca fail-closed",
+            redact_url(robots_url),
+            int(self.failure_retry_seconds),
+        )
+        return parser
 
     async def is_allowed(self, url: str) -> bool:
         parsed = urlparse(url)
         origin = f"{parsed.scheme}://{parsed.netloc}"
+        blocked_until = self._blocked_until.get(origin)
+        if blocked_until is not None:
+            if time.monotonic() < blocked_until:
+                return False
+            # Süre doldu: yeniden dene.
+            self._blocked_until.pop(origin, None)
+            self._parsers.pop(origin, None)
         if origin not in self._parsers:
-            robots_url = f"{origin}/robots.txt"
-            rp = RobotFileParser()
-            try:
-                async with httpx.AsyncClient(
-                    timeout=5.0, headers={"User-Agent": self.user_agent}
-                ) as client:
-                    resp = await client.get(robots_url)
-                    if resp.status_code == 200:
-                        rp.parse(resp.text.splitlines())
-                    else:
-                        rp.parse(["User-agent: *", "Allow: /"])
-            except Exception:
-                rp.parse(["User-agent: *", "Allow: /"])
-            self._parsers[origin] = rp
-
+            self._parsers[origin] = await self._fetch_parser(origin)
         parser = self._parsers[origin]
         return parser.can_fetch(self.user_agent, url)
 
@@ -280,6 +331,10 @@ class HttpClient:
         self.timeout = timeout
         self.enable_ssrf_guard = enable_ssrf_guard
         self.robots_cache = RobotsCache(user_agent)
+        #: Paylaşılan client (R-005): bağlantı havuzu korunur. Client event loop'a
+        #: bağlıdır; loop değişirse (Celery `asyncio.run`, test) yenisi kurulur.
+        self._http_client: httpx.AsyncClient | None = None
+        self._http_client_loop: object | None = None
         # Host bazli limiter: paralel gorevlerde ayni host'a yigilmayi engeller.
         # Varsayilan acik; SHOWIS_HOST_LIMITER=0 ile kapatilir.
         if limiter is not None:
@@ -287,6 +342,33 @@ class HttpClient:
         else:
             enabled = limiter_enabled() if use_host_limiter is None else use_host_limiter
             self.limiter = default_host_limiter() if enabled else None
+
+    def _client(self) -> httpx.AsyncClient:
+        """Süreç/loop başına paylaşılan client (guard açıksa DNS-pinli)."""
+        try:
+            loop: object | None = asyncio.get_running_loop()
+        except RuntimeError:  # pragma: no cover - loop dışı çağrı
+            loop = None
+        if self._http_client is None or self._http_client_loop is not loop:
+            # Eski loop'un client'ı kapatılamaz (await gerekir); referans bırakılır.
+            self._http_client = self._build_client()
+            self._http_client_loop = loop
+        return self._http_client
+
+    def _build_client(self) -> httpx.AsyncClient:
+        if self.enable_ssrf_guard:
+            return httpx.AsyncClient(
+                timeout=self.timeout, transport=pinned_async_transport()
+            )
+        return httpx.AsyncClient(timeout=self.timeout)
+
+    async def aclose(self) -> None:
+        """Paylaşılan client'ı kapat (servis kapanışı / test temizliği)."""
+        client = self._http_client
+        self._http_client = None
+        self._http_client_loop = None
+        if client is not None:
+            await client.aclose()
 
     async def request(
         self,
@@ -306,69 +388,73 @@ class HttpClient:
             merged_headers.update(headers)
 
         last_error = None
+        last_response: httpx.Response | None = None
         for attempt in range(max_retries):
             try:
-                async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    current = url
-                    for _hop in range(MAX_REDIRECTS + 1):
-                        if self.enable_ssrf_guard:
-                            # guard_url DNS cozumu bloklayicidir; loop'u bogmamak icin thread'e al
-                            await asyncio.to_thread(guard_url, current)
-                        if check_robots and not await self.robots_cache.is_allowed(current):
-                            raise PermissionError(
-                                f"robots.txt uyarınca erişim engellendi: {current}"
-                            )
+                client = self._client()
+                current = url
+                for _hop in range(MAX_REDIRECTS + 1):
+                    if self.enable_ssrf_guard:
+                        # guard_url DNS cozumu bloklayicidir; loop'u bogmamak icin thread'e al
+                        await asyncio.to_thread(guard_url, current)
+                    if check_robots and not await self.robots_cache.is_allowed(current):
+                        raise PermissionError(
+                            f"robots.txt uyarınca erişim engellendi: {current}"
+                        )
 
-                        _consume_request_budget()
-                        _record_request()
-                        if self.limiter is not None:
-                            async with self.limiter.slot(current):
-                                resp = await client.request(
-                                    method, current, headers=merged_headers, **kwargs
-                                )
-                        else:
+                    _consume_request_budget()
+                    _record_request()
+                    if self.limiter is not None:
+                        async with self.limiter.slot(current):
                             resp = await client.request(
                                 method, current, headers=merged_headers, **kwargs
                             )
-
-                        location = resp.headers.get("location")
-                        if not (follow and resp.is_redirect and location):
-                            break
-                        current = str(resp.url.join(location))
-                        logger.info(
-                            "Yonlendirme izleniyor: %s -> %s",
-                            redact_url(url),
-                            redact_url(current),
-                        )
                     else:
-                        raise RuntimeError(
-                            f"Cok fazla yonlendirme ({MAX_REDIRECTS}): {redact_url(url)}"
+                        resp = await client.request(
+                            method, current, headers=merged_headers, **kwargs
                         )
 
-                    # Handle GitHub and generic rate limits (tek denemede retry anlamsiz)
-                    if attempt + 1 < max_retries and (
-                        resp.status_code == 429
-                        or (resp.status_code == 403 and "rate limit" in resp.text.lower())
-                    ):
-                        retry_after = resp.headers.get("Retry-After")
-                        wait_sec = (
-                            float(retry_after)
-                            if retry_after
-                            else (2**attempt + random.uniform(0.1, 0.5))
-                        )
-                        logger.warning(
-                            "Hız limiti aşıldı (%s), %s saniye bekleniyor...",
-                            redact_url(url),
-                            wait_sec,
-                        )
-                        await asyncio.sleep(min(wait_sec, 60.0))
-                        continue
+                    location = resp.headers.get("location")
+                    if not (follow and resp.is_redirect and location):
+                        break
+                    current = str(resp.url.join(location))
+                    logger.info(
+                        "Yonlendirme izleniyor: %s -> %s",
+                        redact_url(url),
+                        redact_url(current),
+                    )
+                else:
+                    raise RuntimeError(
+                        f"Cok fazla yonlendirme ({MAX_REDIRECTS}): {redact_url(url)}"
+                    )
 
-                    if resp.status_code >= 500:
-                        await asyncio.sleep(1.0 + random.uniform(0.1, 0.3))
-                        continue
+                # Handle GitHub and generic rate limits (tek denemede retry anlamsiz)
+                if attempt + 1 < max_retries and (
+                    resp.status_code == 429
+                    or (resp.status_code == 403 and "rate limit" in resp.text.lower())
+                ):
+                    retry_after = resp.headers.get("Retry-After")
+                    wait_sec = (
+                        float(retry_after)
+                        if retry_after
+                        else (2**attempt + random.uniform(0.1, 0.5))
+                    )
+                    logger.warning(
+                        "Hız limiti aşıldı (%s), %s saniye bekleniyor...",
+                        redact_url(url),
+                        wait_sec,
+                    )
+                    await asyncio.sleep(min(wait_sec, 60.0))
+                    continue
 
-                    return resp
+                if resp.status_code >= 500:
+                    # Son denemede yanıtı çağırana döndür: 5xx'i sınıflayan
+                    # katmanlar (sitecheck absent_statuses, recon) karar verebilsin.
+                    last_response = resp
+                    await asyncio.sleep(1.0 + random.uniform(0.1, 0.3))
+                    continue
+
+                return resp
 
             except (PermissionError, SSRFViolationError, BudgetExceededError):
                 # Fail-closed: butce asimi/robot/SSRF tekrar denenmez, istek atilmaz
@@ -376,6 +462,9 @@ class HttpClient:
             except Exception as e:
                 last_error = e
                 await asyncio.sleep(1.0)
+
+        if last_response is not None:
+            return last_response
 
         # Hata metni URL/anahtar tasiyabilir: redakte edilerek yukseltilir
         raise RuntimeError(
@@ -388,6 +477,118 @@ class HttpClient:
 
     async def post(self, url: str, **kwargs) -> httpx.Response:
         return await self.request("POST", url, **kwargs)
+
+    async def get_limited(
+        self,
+        url: str,
+        *,
+        max_bytes: int,
+        headers: dict[str, str] | None = None,
+        check_robots: bool = True,
+        follow_redirects: bool = False,
+        max_redirects: int = MAX_REDIRECTS,
+    ) -> httpx.Response:
+        """GET; gövde `max_bytes` ile **okuma sırasında** sınırlanır (P-009).
+
+        `HttpClient.get` yanıtı tamamen belleğe alır; saldırgan kontrollü bir
+        URL (avatar, profil sayfası) büyük gövde döndürerek worker belleğini
+        tüketebilirdi. Bu varyant `client.stream` kullanır, sınırı aşınca
+        bağlantıyı bırakır ve kısaltılmış içerikle sentetik bir `Response`
+        döndürür (`extensions["showis_truncated"]`).
+
+        Yönlendirmeler guard + robots kapısından geçer; tek deneme yapılır
+        (retry çağıranın sorumluluğunda). `Content-Length`/`Content-Encoding`
+        başlıkları kırpılmış gövdeyle tutarsız olacağı için kaldırılır.
+        """
+        if max_bytes <= 0:
+            raise ValueError("max_bytes pozitif olmali")
+        merged_headers = {"User-Agent": self.user_agent}
+        if headers:
+            merged_headers.update(headers)
+        client = self._client()
+        current = url
+        for _hop in range(max_redirects + 1):
+            if self.enable_ssrf_guard:
+                await asyncio.to_thread(guard_url, current)
+            if check_robots and not await self.robots_cache.is_allowed(current):
+                raise PermissionError(
+                    f"robots.txt uyarınca erişim engellendi: {current}"
+                )
+            _consume_request_budget()
+            _record_request()
+            if self.limiter is not None:
+                async with self.limiter.slot(current):
+                    redirect_to, response = await self._stream_capped(
+                        client,
+                        current,
+                        merged_headers,
+                        max_bytes,
+                        follow_redirects=follow_redirects,
+                    )
+            else:
+                redirect_to, response = await self._stream_capped(
+                    client,
+                    current,
+                    merged_headers,
+                    max_bytes,
+                    follow_redirects=follow_redirects,
+                )
+            if redirect_to is not None:
+                current = redirect_to
+                logger.info(
+                    "Yonlendirme izleniyor: %s -> %s",
+                    redact_url(url),
+                    redact_url(current),
+                )
+                continue
+            assert response is not None
+            return response
+        raise RuntimeError(
+            f"Cok fazla yonlendirme ({max_redirects}): {redact_url(url)}"
+        )
+
+    async def _stream_capped(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        headers: dict[str, str],
+        max_bytes: int,
+        *,
+        follow_redirects: bool,
+    ) -> tuple[str | None, httpx.Response | None]:
+        """Tek hop: gövdeyi `max_bytes` ile okur; yönlendirme varsa hedefi döndürür."""
+        async with client.stream("GET", url, headers=headers) as resp:
+            location = resp.headers.get("location")
+            if follow_redirects and resp.is_redirect and location:
+                return str(resp.url.join(location)), None
+            chunks: list[bytes] = []
+            total = 0
+            truncated = False
+            async for chunk in resp.aiter_bytes():
+                remaining = max_bytes - total
+                if len(chunk) > remaining:
+                    chunks.append(chunk[:remaining])
+                    total = max_bytes
+                    truncated = True
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+                if total >= max_bytes:
+                    truncated = True
+                    break
+            safe_headers = {
+                key: value
+                for key, value in resp.headers.items()
+                if key.lower() not in ("content-length", "content-encoding")
+            }
+            response = httpx.Response(
+                status_code=resp.status_code,
+                headers=safe_headers,
+                content=b"".join(chunks),
+                request=resp.request,
+                extensions={**resp.extensions, "showis_truncated": truncated},
+            )
+            return None, response
 
 
 class EvidenceStore:

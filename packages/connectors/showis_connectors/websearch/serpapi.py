@@ -18,9 +18,15 @@ class SerpApiSearchProvider(SearchProvider):
         site: str | None = None,
     ) -> list[SearchHit]:
         full_query = f"site:{site} {query}" if site else query
-        url = f"https://serpapi.com/search?q={full_query}&api_key={self.api_key}&num={limit}&engine=google"
+        url = "https://serpapi.com/search"
+        params = {
+            "q": full_query,
+            "api_key": self.api_key,
+            "num": str(limit),
+            "engine": "google",
+        }
 
-        resp = await self.http_client.get(url, check_robots=False)
+        resp = await self.http_client.get(url, params=params, check_robots=False)
         resp.raise_for_status()
         data = resp.json()
 

@@ -19,6 +19,7 @@ from showis_contracts import Observation, ObservationKind, Platform, ScanContext
 from showis_engine.browser import BrowserClient
 from showis_engine.http import EvidenceStore, HttpClient
 
+from ._util import UUID_RE, first_int
 from .rendered import RenderedProfileConnector
 from .websearch.base import SearchProvider
 
@@ -28,10 +29,6 @@ HTB_PROFILE_RE = re.compile(
 
 # HTB profil metninden alan cikarimi
 _RANK_RE = re.compile(r"rank[^\w]{0,15}(captures?|root|pro|user|scriptkiddie)", re.IGNORECASE)
-# T-347: SPA HTML'inde gomulu JSON'da kullanici adi / katilim tarihi / puan
-_UUID_RE = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
-)
 _JSON_USERNAME_RE = re.compile(r'"username"\s*:\s*"([A-Za-z0-9_.-]{1,64})"')
 _JSON_JOINED_RE = re.compile(r'"(?:joinedAt|joinDate|createdAt)"\s*:\s*"([0-9T:\-Z.]+)"')
 _POINTS_RE = re.compile(r"(?:points|puan)[^\d]{0,12}(\d{1,7})", re.IGNORECASE)
@@ -46,14 +43,6 @@ _COUNTRY_RE = re.compile(r"[Cc]ountry[^\w]{0,10}([A-Z][a-z]+(?: [A-Z][a-z]+){0,2
 _SPA_SHELL_THRESHOLD = 80  # karakterin altindaki metin = JS'siz shell
 
 
-def _first_int(pattern: re.Pattern[str], text: str) -> int | None:
-    m = pattern.search(text)
-    if not m:
-        return None
-    for group in m.groups():
-        if group and group.isdigit():
-            return int(group)
-    return None
 
 
 class HackTheBoxConnector(RenderedProfileConnector):
@@ -170,7 +159,29 @@ class HackTheBoxConnector(RenderedProfileConnector):
                 )
             ]
 
-        query = f'"{username}" site:hackthebox.com/profile'
+        from showis_engine.planner import sanitize_hint
+        from showis_engine.policy import PolicyViolationError, guard_query
+
+        safe_username = sanitize_hint(username, max_length=64) or ""
+        if not safe_username:
+            return [
+                self._base_observation(
+                    ObservationKind.SEARCH_RESULT,
+                    username,
+                    error="HTB cozumu icin gecerli kullanici adi yok.",
+                )
+            ]
+        query = f'"{safe_username}" site:hackthebox.com/profile'
+        try:
+            guard_query(query)
+        except PolicyViolationError:
+            return [
+                self._base_observation(
+                    ObservationKind.SEARCH_RESULT,
+                    username,
+                    error="Arama sorgusu politika nedeniyle engellendi.",
+                )
+            ]
         try:
             hits = await self.search_provider.search(query, limit=10)
         except Exception as exc:
@@ -249,11 +260,11 @@ class HackTheBoxConnector(RenderedProfileConnector):
         else:
             joined_text = _JOINED_TEXT_RE.search(text)
             data["joined_at"] = joined_text.group(1) if joined_text else None
-        data["points"] = _first_int(_POINTS_RE, text)
+        data["points"] = first_int(_POINTS_RE, text)
 
         rank_m = _RANK_RE.search(text)
         data["rank"] = rank_m.group(1).strip().title() if rank_m else None
-        data["machines_completed"] = _first_int(_MACHINES_RE, text)
+        data["machines_completed"] = first_int(_MACHINES_RE, text)
 
         country_m = _COUNTRY_RE.search(text)
         data["country"] = country_m.group(1).strip() if country_m else None
@@ -286,14 +297,14 @@ class HackTheBoxConnector(RenderedProfileConnector):
             match = _JSON_USERNAME_RE.search(html)
             if match:
                 candidate = match.group(1).strip()
-                if candidate and not _UUID_RE.match(candidate):
+                if candidate and not UUID_RE.match(candidate):
                     return candidate
         candidates = (
             str(data.get("display_name") or "").strip(),
             str(identifier or "").strip(),
         )
         for candidate in candidates:
-            if candidate and not _UUID_RE.match(candidate) and " " not in candidate:
+            if candidate and not UUID_RE.match(candidate) and " " not in candidate:
                 return candidate
         return None
 

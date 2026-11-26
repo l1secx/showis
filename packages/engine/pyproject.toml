@@ -10,6 +10,7 @@ dependencies = [
     "httpx>=0.27.0",
     "pillow>=10.0.0",
     "showis-contracts",
+    "showis-llm",
 ]
 
 [tool.setuptools.packages.find]

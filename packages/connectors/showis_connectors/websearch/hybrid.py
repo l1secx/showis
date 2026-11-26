@@ -55,10 +55,12 @@ class HybridSearchProvider:
                 if len(all_hits) >= self.min_results_before_fallback:
                     break
             except Exception as exc:
+                # Ham istisna metni URL/anahtar taşıyabilir (CSE `key=`,
+                # SerpAPI `api_key=`); yalnız tip loglanır (SEC-08).
                 logger.warning(
-                    "Arama sağlayıcısı (%s) başarısız oldu, sonrakine geçiliyor: %s",
+                    "Arama sağlayıcısı (%s) başarısız oldu (%s), sonrakine geçiliyor",
                     provider.name,
-                    exc,
+                    type(exc).__name__,
                 )
 
         # Sağlayıcı sırası yerine hedefe uygunluk: tekilleştir, puanla, sırala.

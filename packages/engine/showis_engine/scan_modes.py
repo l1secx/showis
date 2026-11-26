@@ -22,6 +22,7 @@ import json
 import logging
 import math
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -33,7 +34,15 @@ from .variants import generate_variants
 logger = logging.getLogger("showis.scan_modes")
 
 #: Sadece site-check / render gibi yavas connector'lar mod ile elenir.
-SLOW_CONNECTORS = {"sitecheck", "sitecheck_search", "rendered", "tryhackme", "hackthebox"}
+#: `linkfollow` sayfa çeker (agir); O1'de planlanmaz.
+SLOW_CONNECTORS = {
+    "sitecheck",
+    "sitecheck_search",
+    "rendered",
+    "linkfollow",
+    "tryhackme",
+    "hackthebox",
+}
 
 #: Mod basina butce ve site-check kullanici adi sayisi.
 MODE_PROFILES: dict[str, dict[str, int]] = {
@@ -79,8 +88,9 @@ _COST = {
 }
 #: Site-check kapsamı: gerçek `SITES` listesinden türetilir (T-357).
 #: Engine, connector paketine bağımlı olmadığı için tembel (çağrı anında) import
-#: yapılır; connector yoksa tahmin için son bilinen sayı kullanılır.
-_SITE_COUNT_FALLBACK = 52
+#: yapılır; connector yoksa tahmin için son bilinen çekirdek sayı kullanılır.
+#: (Çekirdek liste: 78 site — publicapi ile çakışan 5 kayıt çıkarıldıktan sonra.)
+_SITE_COUNT_FALLBACK = 78
 #: T-371: gerçek O2 taramasından (8287e0d7) türetilen görev katsayıları:
 #: 22 profil-connector × 6 kullanıcı adı = 132, sitecheck 6 + sitecheck_search 10 = 16,
 #: yavaş connector 6×2 + 2 arama = 14, arama 1, kimlik doğrulama 1 → toplam 164.
@@ -311,24 +321,36 @@ def site_request_factor() -> float:
     return min(3.0, max(1.0, value))
 
 
-def site_count() -> int:
-    """Aktif site-check kapsamı (``SITES`` uzunluğu; yoksa son bilinen sayı)."""
-    try:
-        from showis_connectors.sitecheck.sites import SITES  # tembel: dongusel import yok
+#: Connector paketi kendi site sayımlarını buraya kaydeder; engine artık
+#: `showis_connectors`'ı import etmez (R-009 — bağımlılık yönü tek yönlü).
+_site_count_provider: Callable[[], int] | None = None
+_site_count_for_mode_provider: Callable[[str | None], int] | None = None
 
-        return len(SITES)
-    except Exception:  # pragma: no cover - connector paketi yoksa
-        return _SITE_COUNT_FALLBACK
+
+def register_site_count_provider(
+    count: Callable[[], int] | None = None,
+    for_mode: Callable[[str | None], int] | None = None,
+) -> None:
+    """Site-check kapsam sayılarını sağlayan geri çağrıları kaydeder."""
+    global _site_count_provider, _site_count_for_mode_provider
+    if count is not None:
+        _site_count_provider = count
+    if for_mode is not None:
+        _site_count_for_mode_provider = for_mode
+
+
+def site_count() -> int:
+    """Aktif site-check kapsamı (connector kaydı yoksa son bilinen çekirdek sayı)."""
+    if _site_count_provider is not None:
+        return _site_count_provider()
+    return _SITE_COUNT_FALLBACK
 
 
 def site_count_for_mode(mode: str | None) -> int:
     """Moda göre gerçek site-check kapsamı (O3 geniş WMN kümesini içerir)."""
-    try:
-        from showis_connectors.sitecheck.sites import select_sites
-
-        return len(select_sites(mode))
-    except Exception:  # pragma: no cover - connector paketi yoksa
-        return _SITE_COUNT_FALLBACK
+    if _site_count_for_mode_provider is not None:
+        return _site_count_for_mode_provider(mode)
+    return _SITE_COUNT_FALLBACK
 
 
 def norm_mode(mode: str | None) -> str:
@@ -354,7 +376,7 @@ def variant_cap(mode: str | None) -> int:
 
 
 def planner_cap(mode: str | None) -> int:
-    """Moda göre planner sorgu tavanı (O1=0, O2=8, O3=20)."""
+    """Moda göre planner sorgu tavanı (O1=0, O2=14, O3=32)."""
     return PLANNER_CAP[norm_mode(mode)]
 
 

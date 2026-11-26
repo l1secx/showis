@@ -292,3 +292,78 @@ def test_edge_id_siniri_96():
     hashed = db_safe_edge_id(long_id)
     assert len(hashed) <= EDGE_ID_MAX_LENGTH
     assert db_safe_edge_id(long_id) == hashed  # deterministik
+
+
+# ---------------------------------------------------------------------------
+# (g) DEC-010: case kapsamlı kimlik yardımcıları (varsayılan None eski davranış)
+# ---------------------------------------------------------------------------
+
+
+def test_case_kapsamli_entity_id_ayri_ve_deterministik():
+    import hashlib
+
+    a = make_entity_id("github", "ada", case_id="case-a")
+    b = make_entity_id("github", "ada", case_id="case-b")
+    assert a != b
+    assert a == make_entity_id("github", "ada", case_id="case-a")
+    assert len(a) <= IDENTITY_ID_MAX_LENGTH
+    # Scanner (`scoped_entity_id`) ve migration 0026 ile birebir aynı şema:
+    # `<platform>:<identifier>~c<sha1(case_id)[:8]>`, `#` YOK (URL fragment).
+    expected = f"github:ada~c{hashlib.sha1(b'case-a').hexdigest()[:8]}"
+    assert a == expected
+    assert "#" not in a
+    # T17-01: girdideki `~c` sonekine güvenilmez; case_id varsa yeniden hesaplanır.
+    digest = hashlib.sha1(b"case-a").hexdigest()[:8]
+    injected = "ada~cdeadbeef"
+    assert make_entity_id("github", injected, case_id="case-a") == (
+        f"github:ada~cdeadbeef~c{digest}"
+    )
+    assert make_entity_id("github", injected, case_id="case-b") != make_entity_id(
+        "github", injected, case_id="case-a"
+    )
+    # Varsayılan davranış (case_id yok) değişmez.
+    assert make_entity_id("github", "ada") == "github:ada"
+
+
+def test_case_kapsamli_entity_id_uzun_kimlikte_de_sinirda():
+    long_identifier = "x" * 200
+    a = make_entity_id("hackthebox", long_identifier, case_id="case-a")
+    b = make_entity_id("hackthebox", long_identifier, case_id="case-b")
+    assert a != b
+    assert len(a) <= IDENTITY_ID_MAX_LENGTH
+    assert len(b) <= IDENTITY_ID_MAX_LENGTH
+
+
+def test_case_kapsamli_finding_id_ayri_ve_sinirda():
+    import hashlib
+
+    a = make_finding_id("github:ada", case_id="case-a")
+    b = make_finding_id("github:ada", case_id="case-b")
+    assert a != b
+    assert a.startswith(FINDING_ID_PREFIX)
+    assert len(a) <= IDENTITY_ID_MAX_LENGTH
+    assert "#" not in a
+    digest = hashlib.sha1(b"case-a").hexdigest()[:8]
+    assert a == f"finding:github:ada~c{digest}"
+    # T17-01: girdide hazır `~c` soneki olsa da case_id varsa yeniden hesaplanır.
+    assert make_finding_id(f"github:ada~c{digest}", case_id="case-a") == (
+        f"finding:github:ada~c{digest}~c{digest}"
+    )
+    # Scanner `scoped_finding_id` entity'yi zaten kapsamlı geçirir ve case_id
+    # vermez; davranış değişmez (SEC-15 kararları korunur).
+    assert make_finding_id(f"github:ada~c{digest}") == f"finding:github:ada~c{digest}"
+    assert make_finding_id("github:ada") == "finding:github:ada"
+
+
+def test_case_scope_sonek_enjeksiyonu_izolasyonu_atlatamaz():
+    """T17-01: dışarıdan gelen `~c<8hex>` soneki case izolasyonunu atlatamaz."""
+    injected_identifier = "https://ornek.example/~cdeadbeef"
+    a = make_entity_id("web", injected_identifier, case_id="case-a")
+    b = make_entity_id("web", injected_identifier, case_id="case-b")
+    assert a != b
+    assert "~cdeadbeef" in a  # girdi korunur ama yeniden kapsanır
+    assert a != f"web:{injected_identifier}"
+    fa = make_finding_id("github:ada~cdeadbeef", case_id="case-a")
+    fb = make_finding_id("github:ada~cdeadbeef", case_id="case-b")
+    assert fa != fb
+    assert "#" not in a and "#" not in fa

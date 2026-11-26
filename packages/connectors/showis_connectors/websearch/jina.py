@@ -16,7 +16,7 @@ from urllib.parse import quote_plus
 from showis_engine.http import HttpClient
 
 from .base import SearchHit, SearchProvider
-from .duckduckgo import DuckDuckGoSearchProvider
+from .duckduckgo import parse_lite_results
 
 _READER_URL = "https://r.jina.ai/http://lite.duckduckgo.com/lite/"
 
@@ -54,7 +54,7 @@ class JinaDuckDuckGoSearchProvider(SearchProvider):
         if not body or body.lstrip().startswith("{"):
             # Jina hata gövdesi (JSON) döndürdüyse sonuç yoktur.
             return []
-        hits = DuckDuckGoSearchProvider._parse(body, limit=limit)
+        hits = parse_lite_results(body, limit=limit)
         for hit in hits:
             hit.provider = self.name
         return hits

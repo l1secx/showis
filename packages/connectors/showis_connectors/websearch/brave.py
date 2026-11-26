@@ -18,14 +18,17 @@ class BraveSearchProvider(SearchProvider):
         site: str | None = None,
     ) -> list[SearchHit]:
         full_query = f"site:{site} {query}" if site else query
-        url = f"https://api.search.brave.com/res/v1/web/search?q={full_query}&count={limit}"
+        url = "https://api.search.brave.com/res/v1/web/search"
+        params = {"q": full_query, "count": str(limit)}
         headers = {
             "X-Subscription-Token": self.api_key,
             "Accept": "application/json",
             "User-Agent": DEFAULT_UA,
         }
 
-        resp = await self.http_client.get(url, headers=headers, check_robots=False)
+        resp = await self.http_client.get(
+            url, params=params, headers=headers, check_robots=False
+        )
         resp.raise_for_status()
         data = resp.json()
 

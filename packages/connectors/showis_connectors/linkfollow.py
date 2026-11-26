@@ -30,6 +30,7 @@ from showis_contracts import (
     TaskSpec,
     make_entity_id,
 )
+from showis_engine.edge_ids import short_edge_id
 from showis_engine.htmlutil import meta_content, og_title, strip_html
 from showis_engine.http import EvidenceStore, HttpClient
 from showis_engine.policy import PolicyViolationError, guard_url
@@ -297,9 +298,12 @@ class LinkFollowConnector:
     # ------------------------------------------------------------------
     # Plan
     # ------------------------------------------------------------------
-    def plan(self, ctx: ScanContext) -> list[TaskSpec]:
+    async def plan(self, ctx: ScanContext) -> list[TaskSpec]:
         # O1 hızlı kalmalı: sayfa çekme yalnızca O2/O3'te planlanır.
-        if str(ctx.mode or "").upper() == "O1":
+        # `norm_mode` alias'ları da ("FAST"/"HIZLI"/"O1-...") O1'e indirger.
+        from showis_engine.scan_modes import norm_mode
+
+        if norm_mode(ctx.mode) == "O1":
             return []
         urls: list[str] = []
         for seed in ctx.seeds:
@@ -587,7 +591,7 @@ class LinkFollowConnector:
                 )
             edges.append(
                 Edge(
-                    id=f"edge:cross_link:{page_id}:{platform_value}:{username}",
+                    id=short_edge_id("e:cl", page_id, platform_value, username),
                     type=EdgeType.CROSS_LINK,
                     source_entity_id=page_id,
                     target_entity_id=entity_id,
