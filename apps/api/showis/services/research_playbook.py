@@ -546,6 +546,9 @@ class PageIntel:
     profiles: list[ProfileRef] = field(default_factory=list)
     emails: list[str] = field(default_factory=list)
     phones: list[str] = field(default_factory=list)
+    #: `rel="me"` bağlantıları: sayfa sahibinin "bu hesap da benim" beyanı
+    #: (IndieWeb/Mastodon doğrulaması). Kimlik zincirinde güçlü kanıttır.
+    rel_me: list[str] = field(default_factory=list)
 
 
 class _IntelParser(HTMLParser):
@@ -577,6 +580,7 @@ class _IntelParser(HTMLParser):
         self.title_parts: list[str] = []
         self.description = ""
         self.anchors: list[LinkRef] = []
+        self.rel_me: list[str] = []
         self._skip = 0
         self._in_title = False
         self._href: str | None = None
@@ -596,6 +600,10 @@ class _IntelParser(HTMLParser):
             if name in {"description", "og:description", "twitter:description"} and content:
                 if not self.description:
                     self.description = content[:500]
+        if tag in {"a", "link"} and attr.get("href"):
+            rels = (attr.get("rel") or "").lower().split()
+            if "me" in rels:
+                self.rel_me.append(str(attr["href"]))
         if tag == "a" and attr.get("href"):
             self._href = attr["href"]
             self._anchor_text = []
@@ -870,6 +878,11 @@ def parse_page_intel(url: str, markup: str, *, max_text: int = 12000) -> PageInt
     # Bir toplayıcı sayfasının kendi "keşfet/şablon" önerileri aynı ailenin
     # başka profilleridir; hedefin hesapları değildir. Aynı ailedeki
     # profilleri ele, dış platformları koru.
+    for href in parser.rel_me[:40]:
+        absolute = urljoin(url, href.strip())
+        if absolute.lower().startswith(("http://", "https://")) and absolute not in intel.rel_me:
+            intel.rel_me.append(absolute)
+
     page_aggregator = aggregator_domain(url)
     if page_aggregator:
         intel.profiles = [

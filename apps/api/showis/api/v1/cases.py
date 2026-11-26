@@ -29,6 +29,7 @@ from showis.db.models import (
     Evidence,
     Finding,
     PoolItem,
+    PoolRelation,
     Report,
     ResearchMessage,
     ResearchSession,
@@ -2130,11 +2131,157 @@ async def get_case_graph(case_id: str, db: AsyncSession = Depends(get_db)):
         }
         for ed in edges
     ]
+    for node in nodes:
+        node["data"]["origin"] = "scan"
+    pool_nodes, pool_edges = await _pool_graph(db, case_id, entities)
     return {
-        "nodes": nodes,
-        "edges": graph_edges,
+        "nodes": nodes + pool_nodes,
+        "edges": graph_edges + pool_edges,
         "clusters": [cluster.as_dict() for cluster in clusters],
     }
+
+
+#: Grafikte düğüm olarak gösterilen havuz türleri (not/biyografi metindir, düğüm değil).
+_GRAPH_POOL_KINDS = frozenset(
+    {
+        "name",
+        "username",
+        "email",
+        "phone",
+        "domain",
+        "ip",
+        "url",
+        "person",
+        "organization",
+        "location",
+        "identifier",
+        "product",
+    }
+)
+_MAX_GRAPH_POOL_ITEMS = 600
+
+
+def _url_key(value: str) -> str:
+    text = str(value or "").strip().lower().split("#", 1)[0].rstrip("/")
+    return re.sub(r"^https?://(www\.)?", "", text)
+
+
+async def _pool_graph(
+    db: AsyncSession, case_id: str, entities: Any
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Havuz kayıtları + tipli ilişkiler; tarama varlığıyla aynı URL "same_as" bağlanır.
+
+    Böylece araştırma/zincir bulguları ve analist onayları tarama grafiğiyle
+    tek tuvalde görünür. Reddedilen kayıt ve ilişkiler gösterilmez.
+    """
+    items = (
+        (
+            await db.execute(
+                select(PoolItem)
+                .where(
+                    PoolItem.case_id == case_id,
+                    PoolItem.status != "rejected",
+                    PoolItem.kind.in_(_GRAPH_POOL_KINDS),
+                )
+                .order_by(PoolItem.confidence.desc(), PoolItem.created_at.asc())
+                .limit(_MAX_GRAPH_POOL_ITEMS)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not items:
+        return [], []
+    ids = {item.id for item in items}
+    relations = (
+        (
+            await db.execute(
+                select(PoolRelation).where(
+                    PoolRelation.case_id == case_id, PoolRelation.status != "rejected"
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    nodes: list[dict[str, Any]] = []
+    for item in items:
+        attrs = item.attributes if isinstance(item.attributes, dict) else {}
+        url = attrs.get("profile_url") or (
+            item.value if str(item.value).startswith(("http://", "https://")) else None
+        )
+        score = 1.0 if item.status == "confirmed" else float(item.confidence or 0.0)
+        nodes.append(
+            {
+                "data": {
+                    "id": item.id,
+                    "label": item.label[:120],
+                    "type": item.kind,
+                    "platform": str(attrs.get("platform") or "havuz"),
+                    "url": url,
+                    "score": round(score, 4),
+                    "attributes": {
+                        "value": item.value[:500],
+                        "status": item.status,
+                        "source": item.source,
+                        "chain": (item.provenance or {}).get("chain")
+                        if isinstance(item.provenance, dict)
+                        else None,
+                    },
+                    "origin": "pool",
+                    "status": item.status,
+                    "cluster_id": None,
+                    "cluster_size": 1,
+                    "cluster_confidence": 0.0,
+                    "cluster_platforms": [],
+                }
+            }
+        )
+    edges: list[dict[str, Any]] = []
+    for rel in relations:
+        if rel.src_item_id not in ids or rel.dst_item_id not in ids:
+            continue
+        notes = [str(e.get("note") or "") for e in (rel.evidence or []) if isinstance(e, dict)]
+        edges.append(
+            {
+                "data": {
+                    "id": f"rel:{rel.id}",
+                    "source": rel.src_item_id,
+                    "target": rel.dst_item_id,
+                    "label": rel.type,
+                    "type": rel.type,
+                    "confidence": float(rel.confidence or 0.0),
+                    "reason": "; ".join(note for note in notes if note)[:300],
+                    "status": rel.status,
+                }
+            }
+        )
+    by_url: dict[str, str] = {}
+    for item in items:
+        attrs = item.attributes if isinstance(item.attributes, dict) else {}
+        for candidate in (item.value, attrs.get("profile_url")):
+            if isinstance(candidate, str) and candidate.startswith(("http://", "https://")):
+                by_url.setdefault(_url_key(candidate), item.id)
+    for entity in entities:
+        if not entity.url:
+            continue
+        item_id = by_url.get(_url_key(entity.url))
+        if item_id is None:
+            continue
+        edges.append(
+            {
+                "data": {
+                    "id": f"same:{entity.id}:{item_id}",
+                    "source": entity.id,
+                    "target": item_id,
+                    "label": "same_as",
+                    "type": "same_as",
+                    "confidence": 0.9,
+                    "reason": "tarama varlığı ile havuz kaydı aynı adres",
+                }
+            }
+        )
+    return nodes, edges
 
 
 @router.get("/{case_id}/audit")

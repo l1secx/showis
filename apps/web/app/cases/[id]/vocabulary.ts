@@ -14,6 +14,14 @@ export const EDGE_TYPE_LABELS: Record<string, string> = {
   has_account: "Hesap",
   mentions: "Bahsetme",
   owned_domain: "Alan adı",
+  linked_from: "Bağlantı verir",
+  owns_account: "Hesap sahibi",
+  uses_email: "E-posta kullanır",
+  same_as: "Aynı kayıt",
+  located_in: "Konum",
+  works_at: "Çalışır",
+  alias_of: "Takma ad",
+  contradicts: "Çelişki",
 };
 
 export const edgeTypeLabel = (type: string): string =>

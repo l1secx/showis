@@ -51,10 +51,10 @@ async def test_case_crud_and_export(client):
     assert res.status_code == 200
     assert res.json()["case"]["id"] == case_id
 
-    # Graph (bos)
+    # Graph: tarama varlığı yok; yalnız vaka havuzu (hedef tohumları) görünür.
     res = await client.get(f"/api/v1/cases/{case_id}/graph")
     assert res.status_code == 200
-    assert res.json()["nodes"] == []
+    assert all(node["data"]["origin"] == "pool" for node in res.json()["nodes"])
 
     # Audit
     res = await client.get(f"/api/v1/cases/{case_id}/audit")

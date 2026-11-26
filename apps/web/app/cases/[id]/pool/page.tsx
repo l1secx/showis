@@ -15,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import { api, type PivotInfo, type PoolItem } from "../../../../lib/api";
+import { ChainPanel } from "./chain-panel";
 import { PoolBulkDialog } from "./pool-bulk-dialog";
 import { buildNoiseMap } from "./pool-noise";
 import { TriStateCheckbox } from "./pool-selection";
@@ -658,6 +659,8 @@ export default function PoolPage() {
           {notice}
         </div>
       )}
+
+      <ChainPanel caseId={id} onDone={() => void load()} />
 
       <div className="panel">
         <div className="panel-head flex-wrap">

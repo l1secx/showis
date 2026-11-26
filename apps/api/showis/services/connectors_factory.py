@@ -302,6 +302,14 @@ async def build_search_provider(db: AsyncSession) -> SearchProviderSanitizer:
     return _pick_search_provider(settings)
 
 
+async def github_token(db: AsyncSession) -> str:
+    """Ayarlarda etkin GitHub belirteci (yoksa ""); hız sınırını yükseltir."""
+    setting = (
+        await db.execute(select(Setting).where(Setting.provider == "github"))
+    ).scalar_one_or_none()
+    return _secret(setting) if setting and setting.enabled else ""
+
+
 async def build_connectors(db: AsyncSession) -> list[Any]:
     res = await db.execute(select(Setting))
     settings = {s.provider: s for s in res.scalars().all()}

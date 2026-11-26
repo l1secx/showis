@@ -548,6 +548,7 @@ class FetchResult:
     status_code: int = 200
     digest: str = ""
     raw: bytes = b""
+    rel_me: list[str] = field(default_factory=list)
 
 
 def _safe_citation(raw: AgentCitation) -> dict[str, Any] | None:
@@ -589,8 +590,11 @@ async def _fetch_public_page(
     """
     client = HttpClient(timeout=min(timeout, 20.0))
     try:
+        # Yönlendirmeler (http->https, kısa alan adı) her adımda SSRF/robots
+        # kapısından geçerek izlenir; aksi halde kişisel siteler 301'de kalır.
         response = await asyncio.wait_for(
-            client.get(url, check_robots=respect_robots), timeout=timeout
+            client.get(url, check_robots=respect_robots, follow_redirects=True),
+            timeout=timeout,
         )
     except (PermissionError, SSRFViolationError, BudgetExceededError) as exc:
         raise ToolError("sayfa politikası erişimi engelledi") from exc
@@ -626,6 +630,7 @@ async def _fetch_public_page(
         status_code=response.status_code,
         digest=hashlib.sha256(raw).hexdigest(),
         raw=raw,
+        rel_me=intel.rel_me[:40],
     )
 
 
@@ -1155,6 +1160,9 @@ class ResearchRuntime:
         self.steer_cursor = 0
         self.current_wave = 1
         self.snapshot_ids: dict[str, str] = {}
+        # Kimlik zinciri motoru dalgalar arasında korunur: okunan hesap tekrar okunmaz.
+        self.chain_engine: Any = None
+        self.chain_text = ""
 
     def absorb_steering(self) -> list[str]:
         """Bekleyen analist yönlendirmelerini alır ve not listesine ekler."""
@@ -1669,6 +1677,150 @@ class ResearchRuntime:
                 and int(stats.get("findings", 0)) >= self.depth.min_findings
             ),
         }
+
+#: Kimlik zinciri aşamalarının HTTP istek tavanı (derinliğe göre).
+_CHAIN_FETCHES: dict[str, int] = {"quick": 12, "standard": 28, "deep": 48}
+#: Dalga sonrası doğrulama aşamasının ek istek hakkı.
+_CHAIN_WAVE_FETCHES: dict[str, int] = {"quick": 6, "standard": 12, "deep": 18}
+#: Zincirde yüksek güvenli sayılan eşik (ipucu/kimlik tohumu olur).
+CHAIN_LEAD_TRUST = 0.85
+
+
+async def _run_chain_phase(runtime: ResearchRuntime, *, verify_leads: bool = False) -> int:
+    """Onaylı bulgulardan kimlik zincirini kurar; yeni kayıt sayısını döndürür.
+
+    İlk çağrıda çapalar (hedef, seed'ler, onaylı havuz kayıtları) eklenir.
+    `verify_leads` ile araştırmanın bu oturumda bulduğu onaysız profiller de
+    doğrulanmak üzere zincire girer: sahibine geri bağlanan hesabın güveni
+    yükselir, var olmayan hesabın güveni düşer.
+    """
+    from dataclasses import replace
+
+    from showis.services.chain import add_case_anchors, build_engine, persist_chain
+
+    name = runtime.depth.name
+    budget = (_CHAIN_WAVE_FETCHES if runtime.chain_engine else _CHAIN_FETCHES).get(name, 12)
+    if budget <= 0 or runtime.gate.wall_left < 30:
+        return 0
+    try:
+        if runtime.chain_engine is None:
+            engine = await build_engine(runtime.db, max_fetches=budget)
+            await add_case_anchors(engine, runtime.db, runtime.case)
+            if runtime.identity.full_name:
+                engine.add_name(runtime.identity.full_name)
+            runtime.chain_engine = engine
+        else:
+            engine = runtime.chain_engine
+            engine.extend_budget(budget)
+        if verify_leads:
+            rows = (
+                await runtime.db.execute(
+                    select(PoolItem)
+                    .where(
+                        PoolItem.case_id == runtime.case.id,
+                        PoolItem.kind == "url",
+                        PoolItem.source == "ai",
+                        PoolItem.status.in_(("proposed", "candidate")),
+                        PoolItem.confidence >= 0.3,
+                    )
+                    .order_by(PoolItem.confidence.desc())
+                    .limit(60)
+                )
+            ).scalars().all()
+            for row in rows:
+                provenance = row.provenance if isinstance(row.provenance, dict) else {}
+                if provenance.get("method") == "chain":
+                    continue
+                engine.add_lead(row.value, float(row.confidence or 0.0), note=row.label)
+        if not engine.nodes:
+            return 0
+        await _set_activity(
+            runtime.db,
+            runtime.session,
+            runtime.stats,
+            "Kimlik zinciri: onaylı hesapların sahip bağlantıları izleniyor",
+        )
+        before = set(engine.result.created_item_ids)
+        try:
+            result = await asyncio.wait_for(
+                engine.run(), timeout=max(20.0, min(300.0, runtime.gate.wall_left - 20))
+            )
+        except asyncio.TimeoutError:
+            result = engine.finish()
+            runtime.errors.append("kimlik zinciri: süre sınırı")
+        status = "candidate" if runtime.session.mode == "agent" else "proposed"
+        await persist_chain(
+            runtime.db,
+            case=runtime.case,
+            result=result,
+            status=status,
+            actor=f"ai:{runtime.session.created_by or 'agent'}",
+            session_id=runtime.session.id,
+        )
+        await runtime.db.commit()
+    except Exception as exc:  # noqa: BLE001 - zincir hatası araştırmayı düşürmesin
+        runtime.errors.append(f"kimlik zinciri: {type(exc).__name__}")
+        logger.info("Kimlik zinciri basarisiz: %s", type(exc).__name__, exc_info=True)
+        return 0
+
+    new_ids = [item_id for item_id in result.created_item_ids if item_id not in before]
+    runtime.stats["writes"] = int(runtime.stats.get("writes", 0)) + len(new_ids)
+    if new_ids:
+        created_rows = (
+            await runtime.db.execute(select(PoolItem).where(PoolItem.id.in_(new_ids)))
+        ).scalars()
+        for row in created_rows:
+            await emit_proposal(runtime.session.id, row)
+    summary = result.summary()
+    runtime.stats["chain"] = {
+        **{k: v for k, v in summary.items() if k not in {"nodes", "notes"}},
+        "top": [
+            {
+                "label": f"{n['network']}:{n['value']}" if n["network"] else n["value"],
+                "trust": n["trust"],
+            }
+            for n in summary["nodes"][:12]
+        ],
+    }
+    runtime.chain_text = result.context_text()
+
+    identity = runtime.identity
+    handles = list(identity.handles)
+    emails = list(identity.emails)
+    urls = list(identity.urls)
+    discovered = list(runtime.stats.get("discovered_handles", []))
+    for node in sorted(result.discovered(min_trust=CHAIN_LEAD_TRUST), key=lambda n: -n.trust):
+        if node.url:
+            # Zincir sayfayı zaten okudu; aynı sayfa bütçe harcamasın.
+            runtime.page_seen.add(node.url)
+            runtime.add_source(node.url, title=node.label, kind="profile")
+        reason = f"kimlik zinciri ({node.network or node.kind}) güven {node.trust:.2f}"
+        if node.kind == "profile":
+            runtime.add_lead("username", node.value, reason, url=node.url)
+            handle = clean_handle(node.value)
+            if handle and handle not in handles:
+                handles.append(handle)
+            if handle and handle not in discovered:
+                discovered.append(handle)
+            if node.display_name and not identity.full_name:
+                identity = replace(identity, full_name=node.display_name[:120])
+        elif node.kind == "email":
+            runtime.add_lead("email", node.value, reason)
+            if node.value not in emails:
+                emails.append(node.value)
+        else:
+            runtime.add_lead("url", node.url, reason, url=node.url)
+            if node.url not in urls:
+                urls.append(node.url)
+    runtime.identity = replace(
+        identity,
+        handles=tuple(handles[:12]),
+        emails=tuple(emails[:12]),
+        urls=tuple(urls[:24]),
+    )
+    runtime.stats["discovered_handles"] = discovered[:40]
+    return len(new_ids)
+
 
 async def _run_query_plan(
     runtime: ResearchRuntime,
@@ -2599,10 +2751,16 @@ KAPSAMA
 
 AÇIK İPUÇLARI
 {lead_text}
+DOĞRULANMIŞ KİMLİK ZİNCİRİ (onaylı hesaplardan sahip beyanlı bağlantılar; güven 0-1)
+{runtime.chain_text or '(zincir yok)'}
 TEDARİK ZİNCİRİ (onaylı/öneri kayıtlar; reddedilenler hariç)
 {runtime.supply_chain_text or '(kayıt yok)'}
 {_steering_block(runtime.steering_notes)}
-Görevin: bir sonraki dalgayı planla. İsim + kullanıcı adı kombinasyonlarını,
+Görevin: bir sonraki dalgayı planla. Önce doğrulanmış zincirden yürü: zincirdeki
+her yüksek güvenli kullanıcı adını, e-postayı ve kişisel alan adını tek başına ve
+tam isimle birlikte ara; aynı kullanıcı adını henüz bakılmamış platformlarda dene.
+Zincir dışı, yalnız isim benzerliğine dayanan hesapları identity_verifier'a doğrulat.
+İsim + kullanıcı adı kombinasyonlarını,
 linktree/about.me/beacons gibi toplayıcıları, sayfa içi profil linklerini ve
 henüz denenmemiş platformları hedefle. Aynı sorguyu tekrarlama. Alt ajanlara
 net görev, en fazla 5 sorgu ve en fazla 3 URL ver. Roller: web_scout,
@@ -3521,8 +3679,12 @@ async def _run_loop(
     # Oturum başlamadan önce gelen yönlendirmeler de dikkate alınır.
     runtime.absorb_steering()
 
+    chain_fetches = _CHAIN_FETCHES.get(depth.name, 12)
+    chain_fetches += _CHAIN_WAVE_FETCHES.get(depth.name, 6) * depth.max_waves
+    # GitHub hesabı başına en çok 4 istek (profil, sosyal, README, olaylar).
+    chain_requests = 4 * chain_fetches
     budget_token = set_request_budget(
-        depth.max_searches + depth.max_pages + depth.max_subagents * 8 + 60
+        depth.max_searches + depth.max_pages + depth.max_subagents * 8 + 60 + chain_requests
     )
     stop_reason = "bütçe doldu"
     stalled = 0
@@ -3542,6 +3704,11 @@ async def _run_loop(
             for url in identity.urls[:6]:
                 await runtime.fetch(url, reason="Seed/havuz URL'si", trusted=True)
             await runtime.persist()
+            # Onaylı hesaplardan sahip beyanlı bağlantı zinciri: arama motoruna
+            # gerek kalmadan diğer hesapları bulur; doğrulanan kullanıcı adları
+            # ve e-postalar temel sorgulara kimlik tohumu olarak girer.
+            await _run_chain_phase(runtime)
+            identity = runtime.identity
             baseline = build_baseline_queries(identity)
             baseline_cap = {
                 "quick": 7,
@@ -3638,6 +3805,9 @@ async def _run_loop(
             await runtime.persist()
             await runtime.drain_pages()
             await runtime.persist()
+            # Dalganın bulduğu profiller zincirle doğrulanır ve genişletilir.
+            await _run_chain_phase(runtime, verify_leads=True)
+            identity = runtime.identity
             await _run_breach_checks(runtime)
             if runtime.interrupted():
                 stats["wave"] = wave

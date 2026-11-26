@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from showis.db.models import Case, Hypothesis, PoolItem, PoolRelation
 from showis.db.session import get_db
 from showis.services.audit import record_request_audit
+from showis.services.chain import DEFAULT_MAX_FETCHES, run_case_chain
 from showis.services.connectors_factory import build_llm_client
 from showis.services.reasoning.avatars import hash_pool_avatars
 from showis.services.reasoning.correlate import (
@@ -59,6 +60,13 @@ class HypothesisCreate(BaseModel):
     relation_ids: list[str] = Field(default_factory=list, max_length=40)
     item_ids: list[str] = Field(default_factory=list, max_length=60)
     next_checks: list[str] = Field(default_factory=list, max_length=6)
+
+
+class ChainRequest(BaseModel):
+    #: Boşsa vakanın tüm çapaları (hedef, seed'ler, onaylı kayıtlar) kullanılır.
+    item_ids: list[str] = Field(default_factory=list, max_length=40)
+    max_fetches: int = Field(default=DEFAULT_MAX_FETCHES, ge=1, le=80)
+    max_depth: int = Field(default=3, ge=0, le=5)
 
 
 class HypothesisPatch(BaseModel):
@@ -330,6 +338,44 @@ async def execute_pivot(
         details={"pivot": pivot_id, "items": len(result.items), "relations": len(result.relations)},
     )
     return result.to_dict()
+
+
+# --- Kimlik zinciri -------------------------------------------------------------
+@router.post("/{case_id}/reasoning/chain")
+async def run_chain(
+    case_id: str,
+    request: Request,
+    body: ChainRequest | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Onaylı bulgulardan sahip beyanlı bağlantı zincirini kurar (öneri yazar)."""
+    case = await _require_case(db, case_id)
+    params = body or ChainRequest()
+    items = None
+    if params.item_ids:
+        items = [await _require_item(db, case_id, item_id) for item_id in params.item_ids]
+        if any(item.status == "rejected" for item in items):
+            raise HTTPException(status_code=422, detail="reddedilmiş kayıttan zincir kurulamaz")
+    result = await run_case_chain(
+        db,
+        case=case,
+        items=items,
+        status="proposed",
+        actor=f"chain:{_actor(request)}",
+        max_fetches=params.max_fetches,
+        max_depth=params.max_depth,
+    )
+    await db.commit()
+    summary = result.summary()
+    await record_request_audit(
+        db=db,
+        request=request,
+        action="reasoning.chain",
+        case_id=case_id,
+        target=f"Case: {case_id}",
+        details={k: v for k, v in summary.items() if k not in {"nodes", "notes"}},
+    )
+    return summary
 
 
 # --- Hipotezler -----------------------------------------------------------------

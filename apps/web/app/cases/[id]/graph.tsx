@@ -70,6 +70,14 @@ const EDGE_TYPE_COLORS: Record<string, string> = {
   has_account: "#8d96a2",
   mentions: "#d9a441",
   owned_domain: "#b79ce0",
+  linked_from: "#9fb6cc",
+  owns_account: "#8d96a2",
+  uses_email: "#c9b37a",
+  same_as: "#6f8fa8",
+  located_in: "#a3a3a3",
+  works_at: "#b79ce0",
+  alias_of: "#6fbf8e",
+  contradicts: "#d46a6a",
 };
 
 const EDGE_TYPE_FALLBACK = "#8d96a2";
@@ -103,6 +111,10 @@ interface GNode {
   clusterSize: number;
   clusterConfidence: number;
   clusterPlatforms: string[];
+  /** "scan" tarama varlığı, "pool" araştırma havuzu kaydı. */
+  origin: string;
+  /** Havuz kaydı durumu; onaysız öneriler kesikli çizilir. */
+  status: string | null;
 }
 
 interface GCluster {
@@ -367,6 +379,8 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
           clusterPlatforms: Array.isArray(n.data.cluster_platforms)
             ? n.data.cluster_platforms.map(String)
             : [],
+          origin: String(n.data.origin ?? "scan"),
+          status: n.data.status ? String(n.data.status) : null,
         }));
         const gEdges: GEdge[] = (payload.edges ?? []).map((e) => ({
           id: String(e.data.id),
@@ -483,6 +497,8 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
         // Cytoscape'teki 20-44 px çapa denk gelir.
         weight: 4 + Math.min(1, Math.max(0, node.score)) * 40,
         cluster: node.clusterId,
+        // Analistin onaylamadığı havuz önerisi: kesikli kontur.
+        dashed: node.origin === "pool" && node.status !== "confirmed",
       })),
     [nodes]
   );

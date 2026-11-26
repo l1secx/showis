@@ -33,6 +33,7 @@ from showis_connectors.domain_intel import (
 )
 from showis_engine.http import HttpClient
 from showis_engine.variants import generate_variants
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 FREE_MAIL_DOMAINS: frozenset[str] = frozenset(
@@ -67,6 +68,8 @@ PROFILE_TEMPLATES: tuple[tuple[str, str], ...] = (
 )
 _HANDLE_OK = re.compile(r"^[a-z0-9][a-z0-9._-]{2,38}$")
 MAX_PIVOT_ITEMS = 12
+#: Tek "Kimlik zinciri" pivotunun HTTP isteği tavanı.
+CHAIN_PIVOT_FETCHES = 24
 PHONE_QUERY_LIMIT = 2
 
 
@@ -168,6 +171,14 @@ PIVOTS: tuple[Pivot, ...] = (
         "Arşiv geçmişi (Wayback)",
         ("domain",),
         "Arşivde ilk/son görülme ve örnek URL'ler.",
+        True,
+    ),
+    Pivot(
+        "chain_expand",
+        "Kimlik zinciri",
+        ("username", "url", "email", "domain"),
+        "Sahibin kendi yazdığı bağlantıları (GitHub/GitLab/Keybase/Gravatar/rel=me/"
+        "linktree) izleyerek diğer hesapları bulur; karşılıklı bağlantıyla doğrular.",
         True,
     ),
     Pivot(
@@ -787,6 +798,45 @@ async def _url_fetch(ctx: _Ctx) -> None:
     ctx.result.notes.append(f"Sayfa özeti saklandı (sha256 {page.digest[:12]}…).")
 
 
+async def _chain_expand(ctx: _Ctx) -> None:
+    from showis.services.chain import run_case_chain
+
+    result = await run_case_chain(
+        ctx.db,
+        case=ctx.case,
+        items=[ctx.item],
+        status=ctx.status,
+        actor=ctx.actor,
+        max_fetches=CHAIN_PIVOT_FETCHES,
+    )
+    created = set(result.created_item_ids)
+    by_value = {node.url or node.value: node for node in result.discovered()}
+    rows: list[PoolItem] = []
+    if created:
+        rows = list(
+            (await ctx.db.execute(select(PoolItem).where(PoolItem.id.in_(created)))).scalars()
+        )
+    for row in rows:
+        node = by_value.get(row.value)
+        ctx.result.items.append(
+            {
+                "id": row.id,
+                "kind": row.kind,
+                "value": row.value[:300],
+                "status": row.status,
+                "created": True,
+                "trust": node.trust if node else row.confidence,
+            }
+        )
+    ctx.result.relations.extend({"id": "", "type": "chain"} for _ in range(result.relations))
+    summary = result.summary()
+    ctx.result.notes.append(
+        f"Zincir: {summary['discovered']} hesap/sayfa ({summary['high_confidence']} yüksek "
+        f"güven), {summary['fetches']} istek, {summary['relations']} ilişki."
+    )
+    ctx.result.notes.extend(result.notes[-5:])
+
+
 _HANDLERS: dict[str, Callable[[_Ctx], Awaitable[None]]] = {
     "email_username": _email_username,
     "email_domain": _email_domain,
@@ -803,6 +853,7 @@ _HANDLERS: dict[str, Callable[[_Ctx], Awaitable[None]]] = {
     "domain_rdap": _domain_rdap,
     "domain_archive": _domain_archive,
     "url_fetch": _url_fetch,
+    "chain_expand": _chain_expand,
 }
 
 

@@ -185,6 +185,9 @@ export interface GraphData {
       cluster_size?: number;
       cluster_confidence?: number;
       cluster_platforms?: string[];
+      /** "scan" tarama varlığı, "pool" araştırma havuzu kaydı. */
+      origin?: string;
+      status?: string | null;
     };
   }[];
   edges: { data: { id: string; source: string; target: string; label?: string; type?: string; confidence?: number; reason?: string } }[];
@@ -336,6 +339,40 @@ export interface PivotInfo {
   kinds: string[];
   description: string;
   network: boolean;
+}
+
+/** Kimlik zinciri: onaylı bulgulardan sahip beyanlı bağlantılarla bulunan düğüm. */
+export interface ChainEvidence {
+  relation: string;
+  weight: number;
+  from: string;
+  source_url: string;
+  note: string;
+}
+
+export interface ChainNode {
+  key: string;
+  kind: "profile" | "page" | "email";
+  value: string;
+  network: string;
+  url: string;
+  depth: number;
+  anchor: boolean;
+  trust: number;
+  evidence: ChainEvidence[];
+  display_name: string;
+}
+
+export interface ChainSummary {
+  anchors: number;
+  discovered: number;
+  high_confidence: number;
+  fetches: number;
+  created: number;
+  updated: number;
+  relations: number;
+  nodes: ChainNode[];
+  notes: string[];
 }
 
 export interface PivotResult {
@@ -669,6 +706,12 @@ export const api = {
   runPivot: (caseId: string, itemId: string, pivotId: string) =>
     req<PivotResult>(`/cases/${caseId}/reasoning/items/${itemId}/pivots/${pivotId}`, {
       method: "POST",
+    }),
+  /** Onaylı bulgulardan kimlik zinciri; çıktı `proposed` öneri olarak havuza girer. */
+  runChain: (caseId: string, body: { item_ids?: string[]; max_fetches?: number } = {}) =>
+    req<ChainSummary>(`/cases/${caseId}/reasoning/chain`, {
+      method: "POST",
+      body: JSON.stringify(body),
     }),
   runCorrelation: (caseId: string) =>
     req<{
