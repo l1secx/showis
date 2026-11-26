@@ -124,6 +124,106 @@ export function seedPositions(nodes: readonly GNode[], seed = 1, radius = 0): vo
   }
 }
 
+/**
+ * Artımlı veri yüklemesi: konumu olmayan (yeni) düğümleri konumlu
+ * komşularının ağırlık merkezine, küçük deterministik bir halka sapmasıyla
+ * yerleştirir. Komşusu olmayan yeni düğümler mevcut çizimin dış çeperine
+ * konur. Böylece yeniden yükleme eski düğümleri yerinden oynatmaz.
+ * Dönen değer yerleştirilen düğüm sayısıdır.
+ */
+export function placeNewNodes(nodes: readonly GNode[], edges: readonly GEdge[]): number {
+  const placed = new Map<string, GNode>();
+  const pending: GNode[] = [];
+  for (const node of nodes) {
+    if (Number.isFinite(node.x) && Number.isFinite(node.y)) placed.set(node.id, node);
+    else pending.push(node);
+  }
+  if (pending.length === 0 || placed.size === 0) return 0;
+
+  const neighbors = new Map<string, string[]>();
+  for (const edge of edges) {
+    (neighbors.get(edge.source) ?? neighbors.set(edge.source, []).get(edge.source)!).push(edge.target);
+    (neighbors.get(edge.target) ?? neighbors.set(edge.target, []).get(edge.target)!).push(edge.source);
+  }
+
+  let cx = 0;
+  let cy = 0;
+  let outer = 0;
+  for (const node of placed.values()) {
+    cx += node.x;
+    cy += node.y;
+  }
+  cx /= placed.size;
+  cy /= placed.size;
+  for (const node of placed.values()) {
+    outer = Math.max(outer, Math.hypot(node.x - cx, node.y - cy));
+  }
+
+  const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+  let orphanIndex = 0;
+  let total = 0;
+  // Zincir halinde gelen yeni düğümler (A-B-C) için birkaç geçiş: her geçişte
+  // bir önceki geçişte yerleşenler komşu olarak kullanılabilir.
+  for (let pass = 0; pass < 4 && pending.length > 0; pass += 1) {
+    for (let index = pending.length - 1; index >= 0; index -= 1) {
+      const node = pending[index];
+      const anchors = (neighbors.get(node.id) ?? [])
+        .map((id) => placed.get(id))
+        .filter((item): item is GNode => item !== undefined);
+      if (anchors.length === 0) continue;
+      let ax = 0;
+      let ay = 0;
+      for (const anchor of anchors) {
+        ax += anchor.x;
+        ay += anchor.y;
+      }
+      ax /= anchors.length;
+      ay /= anchors.length;
+      const angle = (hashString(node.id) % 3600) / 3600 * Math.PI * 2;
+      const distance = 40 + nodeRadius(node) * 2;
+      node.x = ax + Math.cos(angle) * distance;
+      node.y = ay + Math.sin(angle) * distance;
+      node.vx = 0;
+      node.vy = 0;
+      placed.set(node.id, node);
+      pending.splice(index, 1);
+      total += 1;
+    }
+  }
+  for (const node of pending) {
+    const angle = orphanIndex * goldenAngle + (hashString(node.id) % 360) / 360;
+    const radius = outer + 80 + 12 * Math.sqrt(orphanIndex);
+    node.x = cx + Math.cos(angle) * radius;
+    node.y = cy + Math.sin(angle) * radius;
+    node.vx = 0;
+    node.vy = 0;
+    orphanIndex += 1;
+    total += 1;
+  }
+  return total;
+}
+
+/** Kararlı 32 bit FNV-1a özeti (deterministik açı/sapma için). */
+export function hashString(value: string): number {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+}
+
+/**
+ * Artımlı güncellemede simülasyonun başlangıç sıcaklığı. Yapı değişmediyse
+ * 0 (hiç kıpırdamaz); az sayıda yeni düğümde düşük, çoğunluk yeniyse yüksek.
+ */
+export function incrementalAlpha(reused: number, total: number, structureChanged: boolean): number {
+  if (total === 0 || !structureChanged) return 0;
+  if (reused === 0) return 1;
+  const fresh = (total - reused) / total;
+  return clamp(0.12 + fresh * 0.9, 0.12, 1);
+}
+
 /** Küme kimliklerinden deterministik çapa noktaları üretir. */
 export function clusterAnchors(nodes: readonly GNode[], radius: number): Map<string, Point> {
   const anchors = new Map<string, Point>();

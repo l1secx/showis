@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 // @ts-ignore -- Node `--test` ESM için .ts uzantısı zorunlu; apps/web/tsconfig.json allowImportingTsExtensions olmadan reddediyor.
-import { Simulation, seedPositions } from "./simulation.ts";
+import { Simulation, incrementalAlpha, placeNewNodes, seedPositions } from "./simulation.ts";
 // @ts-ignore -- Aynı gerekçe.
 import type { GEdge, GNode } from "./types.ts";
 
@@ -136,4 +136,34 @@ test("simulation: 2000 düğüm / 6000 kenar kaba süre testi", (context) => {
   for (const node of nodes) {
     assert.ok(Number.isFinite(node.x) && Number.isFinite(node.y));
   }
+});
+
+test("placeNewNodes yeni düğümü komşusunun yanına koyar, eskileri oynatmaz", () => {
+  const nodes: GNode[] = [
+    { id: "a", label: "a", kind: "entity", weight: 1, cluster: null, x: 500, y: 500, vx: 0, vy: 0 },
+    { id: "b", label: "b", kind: "entity", weight: 1, cluster: null, x: 600, y: 500, vx: 0, vy: 0 },
+    { id: "c", label: "c", kind: "entity", weight: 1, cluster: null, x: Number.NaN, y: Number.NaN, vx: 0, vy: 0 },
+    { id: "d", label: "d", kind: "entity", weight: 1, cluster: null, x: Number.NaN, y: Number.NaN, vx: 0, vy: 0 },
+    { id: "e", label: "e", kind: "entity", weight: 1, cluster: null, x: Number.NaN, y: Number.NaN, vx: 0, vy: 0 },
+  ];
+  const edges: GEdge[] = [
+    { id: "ac", source: "a", target: "c", type: "related", weight: 1, directed: false },
+    { id: "cd", source: "c", target: "d", type: "related", weight: 1, directed: false },
+  ];
+  assert.equal(placeNewNodes(nodes, edges), 3);
+  assert.equal(nodes[0].x, 500);
+  assert.equal(nodes[1].x, 600);
+  const c = nodes[2];
+  assert.ok(Math.hypot(c.x - 500, c.y - 500) < 120, "c, a'nın yakınında");
+  const d = nodes[3];
+  assert.ok(Math.hypot(d.x - c.x, d.y - c.y) < 120, "d zincirle c'nin yakınında");
+  const e = nodes[4];
+  assert.ok(Number.isFinite(e.x) && Math.hypot(e.x - 550, e.y - 500) > 80, "yetim dış çeperde");
+});
+
+test("incrementalAlpha yapı değişmezse simülasyonu ısıtmaz", () => {
+  assert.equal(incrementalAlpha(10, 10, false), 0);
+  assert.equal(incrementalAlpha(0, 10, true), 1);
+  const small = incrementalAlpha(19, 20, true);
+  assert.ok(small > 0 && small < 0.25);
 });

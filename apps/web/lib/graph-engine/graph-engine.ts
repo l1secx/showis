@@ -21,7 +21,7 @@ import { InteractionController, type InteractionHost } from "./interaction.ts";
 // @ts-ignore -- Aynı gerekçe.
 import { computeLayout, type LayoutName, type LayoutTargets } from "./layouts.ts";
 // @ts-ignore -- Aynı gerekçe.
-import { Simulation, type SimulationOptions } from "./simulation.ts";
+import { Simulation, incrementalAlpha, placeNewNodes, type SimulationOptions } from "./simulation.ts";
 // @ts-ignore -- Aynı gerekçe.
 import { SpatialIndex } from "./spatial-index.ts";
 // @ts-ignore -- Aynı gerekçe.
@@ -75,9 +75,16 @@ function now(): number {
   return typeof performance !== "undefined" ? performance.now() : Date.now();
 }
 
+/** Düğüm/kenar kimlik kümesinin sıra bağımsız imzası (yapı değişti mi?). */
+export function structureSignature(nodes: readonly GNode[], edges: readonly GEdge[]): string {
+  const nodeIds = nodes.map((node) => node.id).sort();
+  const edgeIds = edges.map((edge) => `${edge.source}>${edge.target}`).sort();
+  return `${nodeIds.join("|")}#${edgeIds.join("|")}`;
+}
+
 function normalizeData(
   data: GraphData,
-  previous: Map<string, { x: number; y: number }>
+  previous: Map<string, { x: number; y: number; fixed?: boolean }>
 ): { nodes: GNode[]; edges: GEdge[] } {
   const nodes: GNode[] = [];
   const seen = new Set<string>();
@@ -98,7 +105,8 @@ function normalizeData(
       y,
       vx: Number.isFinite(input.vx) ? (input.vx as number) : 0,
       vy: Number.isFinite(input.vy) ? (input.vy as number) : 0,
-      fixed: input.fixed,
+      // Kullanıcının sürükleyip sabitlediği düğüm yenilemede serbest kalmaz.
+      fixed: input.fixed ?? old?.fixed,
       color: input.color,
       dashed: input.dashed,
       faded: input.faded,
@@ -167,6 +175,7 @@ export class GraphEngine {
   private raf = 0;
   private running = false;
   private settleEmitted = true;
+  private structureSignature = "";
   private destroyed = false;
   /** Veri yüklendiğinde veya simülasyon oturunca otomatik sığdırma bekliyor. */
   private pendingFit = true;
@@ -219,14 +228,35 @@ export class GraphEngine {
 
   setData(data: GraphData, options: { preserveView?: boolean } = {}): void {
     if (this.destroyed) return;
-    const previous = new Map<string, { x: number; y: number }>();
-    for (const node of this.nodes) previous.set(node.id, { x: node.x, y: node.y });
+    const previous = new Map<string, { x: number; y: number; fixed?: boolean }>();
+    for (const node of this.nodes) {
+      previous.set(node.id, { x: node.x, y: node.y, fixed: node.fixed });
+    }
     const preserveView = options.preserveView === true && this.nodes.length > 0;
 
+    const previousSignature = this.structureSignature;
     const normalized = normalizeData(data, previous);
     this.nodes = normalized.nodes;
     this.edges = normalized.edges;
+    this.structureSignature = structureSignature(this.nodes, this.edges);
+    // Artımlı yükleme: eski düğümler yerinde kalır, yeniler komşularının
+    // yanına konur ve simülasyon yalnız değişim oranında ısıtılır. Aksi halde
+    // her yenilemede (ör. araştırma sırasında yoklama) tüm çizim patlar.
+    let warmAlpha = 1;
+    if (preserveView) {
+      const reused = this.nodes.filter((node) => previous.has(node.id)).length;
+      placeNewNodes(this.nodes, this.edges);
+      warmAlpha = incrementalAlpha(
+        reused,
+        this.nodes.length,
+        previousSignature !== this.structureSignature
+      );
+    }
     this.sim = new Simulation(this.nodes, this.edges, this.options.simulation);
+    if (warmAlpha < 1) {
+      if (warmAlpha <= 0) this.sim.freeze();
+      else this.sim.reheat(warmAlpha);
+    }
     this.indexDirty = true;
     this.selectionRect = null;
     this.hoveredId = null;
