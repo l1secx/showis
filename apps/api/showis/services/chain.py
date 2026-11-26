@@ -810,7 +810,7 @@ class ChainEngine:
         relation = "aggregator" if aggregator else "site"
         # Platformda barındırılan profil sayfası (tangled.org/ali, medium.com/@ali):
         # gövdedeki platformun kendi hesapları/e-postaları (alt bilgi) sahibin değildir.
-        brand = "" if aggregator or self._own_site(node) else _brand(host_of(node.url))
+        brand = "" if aggregator or self.is_own_site(node) else _brand(host_of(node.url))
         added = 0
         for url in page.links:
             if added >= MAX_CHILDREN or url in rel_me:
@@ -830,7 +830,7 @@ class ChainEngine:
                 continue
             self.add_email(node, email, "owner" if aggregator else "site", note="sayfada")
 
-    def _own_site(self, node: ChainNode) -> bool:
+    def is_own_site(self, node: ChainNode) -> bool:
         """Kök yolda kişisel alan adı mı (ali.dev), yoksa platformdaki bir sayfa mı?"""
         if node.kind != "page":
             return False

@@ -790,6 +790,19 @@ function ResearchPageInner() {
                     {typeof session.stats?.writes === "number" && (
                       <span>{session.stats.writes} yazma</span>
                     )}
+                    {typeof session.stats?.chain?.discovered === "number" && (
+                      <span
+                        title={(session.stats.chain.top ?? [])
+                          .map(
+                            (row: { label: string; trust: number }) =>
+                              `%${Math.round(row.trust * 100)} ${row.label}`
+                          )
+                          .join("\n")}
+                      >
+                        Zincir: {session.stats.chain.discovered} hesap (
+                        {session.stats.chain.high_confidence ?? 0} yüksek güven)
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="flex flex-wrap shrink-0 items-center gap-1">

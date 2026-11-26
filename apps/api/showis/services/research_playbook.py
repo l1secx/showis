@@ -521,6 +521,45 @@ def build_followup_queries(
     return unique
 
 
+def build_chain_queries(
+    *,
+    full_name: str,
+    handles: Iterable[str],
+    emails: Iterable[str],
+    domains: Iterable[str],
+    known: Iterable[str] = (),
+    limit: int = 12,
+) -> list[ResearchQuery]:
+    """Kimlik zinciriyle doğrulanmış tohumlardan öncelikli sorgular.
+
+    Zincir hesapları sahibin kendi beyanıyla bağlıdır; bunlardan yürüyen
+    sorgular (kullanıcı adı, isim + kullanıcı adı, e-posta, kişisel alan adı)
+    tahmine dayalı varyantlardan önce çalışır.
+    """
+    seen = {str(q).casefold() for q in known}
+    queries: list[ResearchQuery] = []
+
+    def add(text: str, reason: str) -> None:
+        query = _q(text, reason, 1)
+        key = query.text.casefold()
+        if len(query.text) >= 3 and key not in seen:
+            seen.add(key)
+            queries.append(query)
+
+    full = _quote(full_name)
+    for handle in list(dict.fromkeys(clean_handle(h) for h in handles if h))[:5]:
+        if not handle or len(handle) < 3:
+            continue
+        add(f'"{_quote(handle)}"', "Zincirle doğrulanmış kullanıcı adı")
+        if full:
+            add(f'"{_quote(handle)}" "{full}"', "Zincir hesabı ve tam isim")
+    for email in list(dict.fromkeys(e for e in emails if e))[:3]:
+        add(f'"{_quote(email)}"', "Zincirle doğrulanmış e-posta")
+    for domain in list(dict.fromkeys(d for d in domains if d))[:3]:
+        add(f'"{_quote(domain)}"', "Zincirle doğrulanmış kişisel alan adı")
+    return queries[:limit]
+
+
 @dataclass(frozen=True)
 class LinkRef:
     url: str

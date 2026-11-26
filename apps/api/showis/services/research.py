@@ -72,11 +72,13 @@ from showis.services.research_playbook import (
     ProfileRef,
     ResearchQuery,
     build_baseline_queries,
+    build_chain_queries,
     build_followup_queries,
     build_identity_profile,
     canonical_profile,
     clean_handle,
     fallback_bio,
+    host_of,
     is_aggregator_url,
     parse_page_intel,
     render_bio_markdown,
@@ -1163,6 +1165,7 @@ class ResearchRuntime:
         # Kimlik zinciri motoru dalgalar arasında korunur: okunan hesap tekrar okunmaz.
         self.chain_engine: Any = None
         self.chain_text = ""
+        self.chain_queries: list[ResearchQuery] = []
 
     def absorb_steering(self) -> list[str]:
         """Bekleyen analist yönlendirmelerini alır ve not listesine ekler."""
@@ -1712,6 +1715,8 @@ async def _run_chain_phase(runtime: ResearchRuntime, *, verify_leads: bool = Fal
         else:
             engine = runtime.chain_engine
             engine.extend_budget(budget)
+            # Oturum sırasında analistin onayladığı kayıtlar yeni çapa olur.
+            await add_case_anchors(engine, runtime.db, runtime.case)
         if verify_leads:
             rows = (
                 await runtime.db.execute(
@@ -1789,7 +1794,8 @@ async def _run_chain_phase(runtime: ResearchRuntime, *, verify_leads: bool = Fal
     emails = list(identity.emails)
     urls = list(identity.urls)
     discovered = list(runtime.stats.get("discovered_handles", []))
-    for node in sorted(result.discovered(min_trust=CHAIN_LEAD_TRUST), key=lambda n: -n.trust):
+    verified = sorted(result.discovered(min_trust=CHAIN_LEAD_TRUST), key=lambda n: -n.trust)
+    for node in verified:
         if node.url:
             # Zincir sayfayı zaten okudu; aynı sayfa bütçe harcamasın.
             runtime.page_seen.add(node.url)
@@ -1812,6 +1818,15 @@ async def _run_chain_phase(runtime: ResearchRuntime, *, verify_leads: bool = Fal
             runtime.add_lead("url", node.url, reason, url=node.url)
             if node.url not in urls:
                 urls.append(node.url)
+    runtime.chain_queries = build_chain_queries(
+        full_name=identity.full_name,
+        handles=[n.value for n in verified if n.kind == "profile"],
+        emails=[n.value for n in verified if n.kind == "email"],
+        domains=[
+            host_of(n.url) for n in verified if n.kind == "page" and engine.is_own_site(n)
+        ],
+        known=runtime.query_seen.keys(),
+    )
     runtime.identity = replace(
         identity,
         handles=tuple(handles[:12]),
@@ -3709,7 +3724,8 @@ async def _run_loop(
             # ve e-postalar temel sorgulara kimlik tohumu olarak girer.
             await _run_chain_phase(runtime)
             identity = runtime.identity
-            baseline = build_baseline_queries(identity)
+            # Zincirle doğrulanan hesap/e-posta/alan adı sorguları önce koşar.
+            baseline = [*runtime.chain_queries, *build_baseline_queries(identity)]
             baseline_cap = {
                 "quick": 7,
                 "standard": 14,
@@ -3808,6 +3824,13 @@ async def _run_loop(
             # Dalganın bulduğu profiller zincirle doğrulanır ve genişletilir.
             await _run_chain_phase(runtime, verify_leads=True)
             identity = runtime.identity
+            if runtime.chain_queries:
+                await _run_query_plan(
+                    runtime,
+                    runtime.chain_queries,
+                    phase=f"zincir dalga {wave}",
+                    limit=4,
+                )
             await _run_breach_checks(runtime)
             if runtime.interrupted():
                 stats["wave"] = wave
@@ -3878,6 +3901,12 @@ async def _run_loop(
                 pool_text = f"İLİŞKİ GRAFI (önem sıralı)\n{graph_text}\n\n{pool_text}"
         except Exception:  # noqa: BLE001 - graf özeti sentezi düşürmesin
             logger.debug("Graf ozeti eklenemedi", exc_info=True)
+        if runtime.chain_text:
+            pool_text = (
+                "DOĞRULANMIŞ KİMLİK ZİNCİRİ (sahip beyanlı bağlantılar; güven 0-1, "
+                "zincir=bulunduğu yol)\n"
+                f"{runtime.chain_text}\n\n{pool_text}"
+            )
         if runtime.supply_chain_text:
             pool_text = (
                 "TEDARİK ZİNCİRİ (onaylı/öneri; reddedilenler hariç)\n"

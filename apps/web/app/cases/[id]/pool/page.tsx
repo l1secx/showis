@@ -179,6 +179,40 @@ function BreachDetails({ check }: { check: any }) {
   );
 }
 
+const CHAIN_RELATION_TR: Record<string, string> = {
+  proof: "doğrulanmış kanıt",
+  owner: "sahip alanı",
+  rel_me: "rel=me",
+  readme: "profil README",
+  aggregator: "bağlantı sayfası",
+  commit: "commit e-postası",
+  bio: "biyografi",
+  site: "kişisel site",
+  backlink: "karşılıklı bağlantı",
+  name: "isim eşleşmesi",
+  handle_probe: "aynı kullanıcı adı",
+  search: "arama sonucu",
+};
+
+// Kimlik zinciri kaydı: hangi onaylı hesaptan, hangi kanıtla bulunduğu.
+function ChainTrail({ provenance }: { provenance: PoolItem["provenance"] }) {
+  const data = provenance as Record<string, unknown> | null | undefined;
+  if (!data || data.method !== "chain") return null;
+  const path = Array.isArray(data.chain) ? data.chain.map(String) : [];
+  const evidence = Array.isArray(data.evidence)
+    ? (data.evidence as { relation?: string; from?: string }[])
+    : [];
+  const relations = Array.from(
+    new Set(evidence.map((row) => CHAIN_RELATION_TR[row.relation ?? ""] ?? row.relation ?? ""))
+  ).filter(Boolean);
+  return (
+    <p className="mt-1 text-[12px] text-ink-3">
+      Zincir: {path.length ? path.join(" → ") : "çapa"}
+      {relations.length > 0 && <> · {relations.join(", ")}</>}
+    </p>
+  );
+}
+
 // Pivot menüsü: seçili öğeden deterministik türetme (çıktılar `proposed` olarak havuza girer).
 function PivotMenu({
   caseId,
@@ -1084,7 +1118,11 @@ export default function PoolPage() {
                             <p className="mt-1 text-[12px] text-ink-3">
                               {KIND_TR[item.kind] || item.kind} ·{" "}
                               {SOURCE_TR[item.source] || item.source}
+                              {item.status !== "confirmed" && item.confidence > 0 && (
+                                <> · güven %{Math.round(item.confidence * 100)}</>
+                              )}
                             </p>
+                            <ChainTrail provenance={item.provenance} />
                             {item.kind === "email" && (
                               <BreachDetails check={item.attributes?.breach_check} />
                             )}

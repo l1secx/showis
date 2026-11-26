@@ -160,3 +160,18 @@ def test_linkfollow_normalizes_aggregator_links_to_entities_and_edges():
     assert by_platform[Platform.WEB].attributes["social"]["instagram"] == "kboz"
     assert len(edges) == 2
     assert all(edge.type.value == "cross_link" for edge in edges)
+
+
+def test_build_chain_queries_prioritises_verified_seeds_and_skips_known():
+    from showis.services.research_playbook import build_chain_queries
+
+    queries = build_chain_queries(
+        full_name="Ali Yılmaz",
+        handles=["ali_dev", "ali_dev", "x"],
+        emails=["ali@ali.dev"],
+        domains=["ali.dev"],
+        known=['"ali.dev"'],
+    )
+    texts = [q.text for q in queries]
+    assert texts == ['"ali_dev"', '"ali_dev" "Ali Yılmaz"', '"ali@ali.dev"']
+    assert all(q.priority == 1 for q in queries)

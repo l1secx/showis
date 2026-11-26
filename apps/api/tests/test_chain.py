@@ -335,6 +335,11 @@ async def test_research_chain_phase_seeds_identity_and_verifies_leads(db_factory
         assert "https://linktr.ee/l1sec" in runtime.page_seen
         assert "linktr.ee:l1sec" in runtime.chain_text
         assert runtime.stats["chain"]["high_confidence"] >= 4
+        # Zincir tohumlarından öncelikli deterministik sorgular.
+        texts = [q.text for q in runtime.chain_queries]
+        assert '"l1sec_tw"' in texts
+        assert '"l1sec_tw" "Kerem Demir"' in texts
+        assert '"kerem@l1sec.dev"' in texts
 
         # Dalga sonrası: araştırmanın bulduğu GitLab profili zincirle doğrulanır.
         lead, _ = await create_item(
