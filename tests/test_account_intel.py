@@ -214,3 +214,52 @@ async def test_gravatar_missing_falls_back_and_returns_none():
         router.get(f"https://api.gravatar.com/v3/profiles/{sha}").respond(404)
         router.get(f"https://en.gravatar.com/{md5}.json").respond(404)
         assert await fetch_gravatar(_client(), email) is None
+
+
+@pytest.mark.asyncio
+async def test_github_head_commit_email_when_push_payload_has_no_commits():
+    user = {"login": "ali", "html_url": "https://github.com/ali", "name": "Ali"}
+    events = [
+        {
+            "type": "PushEvent",
+            "repo": {"name": "acme/app"},
+            "payload": {"head": "a" * 40},
+        },
+        {
+            "type": "PushEvent",
+            "repo": {"name": "ali/site"},
+            "payload": {"head": "b" * 40},
+        },
+    ]
+    with respx.mock() as router:
+        router.get("https://api.github.com/users/ali").respond(200, json=user)
+        router.get("https://api.github.com/users/ali/social_accounts").respond(200, json=[])
+        router.get("https://raw.githubusercontent.com/ali/ali/HEAD/README.md").respond(404)
+        router.get("https://api.github.com/users/ali/events/public").respond(200, json=events)
+        # Başkasının commit'i (author.login farklı) alınmaz.
+        router.get(f"https://api.github.com/repos/acme/app/commits/{'a' * 40}").respond(
+            200,
+            json={"author": {"login": "bob"}, "commit": {"author": {"email": "bob@acme.com"}}},
+        )
+        router.get(f"https://api.github.com/repos/ali/site/commits/{'b' * 40}").respond(
+            200,
+            json={
+                "author": {"login": "ali"},
+                "commit": {"author": {"email": "ali@ali.dev", "name": "Ali"}},
+            },
+        )
+        intel = await fetch_github(_client(), "ali")
+    assert intel is not None
+    assert intel.emails == [("ali@ali.dev", "github-commit")]
+
+
+@pytest.mark.asyncio
+async def test_gitlab_detail_forbidden_falls_back_to_list_row():
+    with respx.mock() as router:
+        router.get("https://gitlab.com/api/v4/users").respond(
+            200, json=[{"id": 1, "username": "ali", "name": "Ali", "web_url": "https://gitlab.com/ali"}]
+        )
+        router.get("https://gitlab.com/api/v4/users/1").respond(403, json={})
+        intel = await fetch_gitlab(_client(), "ali")
+    assert intel is not None and intel.display_name == "Ali"
+    assert any("403" in note for note in intel.notes)

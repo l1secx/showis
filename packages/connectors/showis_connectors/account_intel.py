@@ -363,11 +363,59 @@ async def fetch_github(
         except AccountIntelError as exc:
             intel.notes.append(str(exc))
             events = None
-        for email, name in _commit_emails(events, login=login, display=intel.display_name):
+        found = _commit_emails(events, login=login, display=intel.display_name)
+        if not found:
+            # 2025'ten beri PushEvent commit listesi taşımıyor: kullanıcının
+            # kendi push'larının baş commit'i API'den okunur; yalnız GitHub'ın
+            # commit'i bu hesaba bağladığı (author.login) e-postalar alınır.
+            found = await _head_commit_emails(client, events, login=login, headers=headers)
+        for email, name in found:
             intel.add_email(email, "github-commit")
             if name:
                 intel.notes.append(f"commit yazar adı: {name[:80]}")
     return intel
+
+
+MAX_HEAD_COMMITS = 3
+
+
+async def _head_commit_emails(
+    client: HttpClient, events: Any, *, login: str, headers: dict[str, str]
+) -> list[tuple[str, str]]:
+    if not isinstance(events, list):
+        return []
+    targets: list[tuple[str, str]] = []
+    seen_repos: set[str] = set()
+    for event in events[:100]:
+        if not isinstance(event, dict) or event.get("type") != "PushEvent":
+            continue
+        repo = str((event.get("repo") or {}).get("name") or "")
+        head = str((event.get("payload") or {}).get("head") or "")
+        if not repo or not re.fullmatch(r"[0-9a-f]{40}", head) or repo in seen_repos:
+            continue
+        seen_repos.add(repo)
+        targets.append((repo, head))
+        if len(targets) >= MAX_HEAD_COMMITS:
+            break
+    found: list[tuple[str, str]] = []
+    for repo, sha in targets:
+        try:
+            data = await _get_json(
+                client, f"{GITHUB_API}/repos/{repo}/commits/{sha}", label="GitHub commit",
+                headers=headers,
+            )
+        except AccountIntelError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        linked = str((data.get("author") or {}).get("login") or "")
+        author = (data.get("commit") or {}).get("author") or {}
+        email = str(author.get("email") or "").strip().lower()
+        if linked.casefold() != login.casefold() or not email or is_noreply(email):
+            continue
+        if _EMAIL_RE.fullmatch(email) and all(email != e for e, _ in found):
+            found.append((email, str(author.get("name") or "")))
+    return found
 
 
 def _is_badge_or_asset(url: str) -> bool:
@@ -440,7 +488,14 @@ async def fetch_gitlab(client: HttpClient, handle: str) -> AccountIntel | None:
     if not isinstance(rows, list) or not rows or not isinstance(rows[0], dict):
         return None
     user_id = rows[0].get("id")
-    detail = await _get_json(client, f"{GITLAB_API}/users/{user_id}", label="GitLab")
+    # Ayrıntı ucu (web sitesi/sosyal alanlar) gitlab.com'da artık kimlik
+    # doğrulaması isteyebilir (403); o durumda liste kaydıyla devam edilir.
+    notes: list[str] = []
+    try:
+        detail = await _get_json(client, f"{GITLAB_API}/users/{user_id}", label="GitLab")
+    except AccountIntelError as exc:
+        detail = None
+        notes.append(str(exc))
     data = detail if isinstance(detail, dict) else rows[0]
     username = str(data.get("username") or login)
     intel = AccountIntel(
@@ -454,6 +509,7 @@ async def fetch_gitlab(client: HttpClient, handle: str) -> AccountIntel | None:
         avatar_url=str(data.get("avatar_url") or ""),
         created_at=str(data.get("created_at") or ""),
         sources=[f"{GITLAB_API}/users/{user_id}"],
+        notes=notes,
     )
     if data.get("website_url"):
         intel.add_link(data["website_url"], "owner", "GitLab web sitesi alanı")

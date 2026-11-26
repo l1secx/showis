@@ -96,6 +96,7 @@ def test_profile_identity_maps_social_hosts():
     assert profile_identity("https://www.linkedin.com/in/kerem")[:2] == ("linkedin", "kerem")
     assert profile_identity("https://linktr.ee/l1sec")[:2] == ("linktr.ee", "l1sec")
     assert profile_identity("https://github.com/l1sec/repo") is None
+    assert profile_identity("https://news.ycombinator.com/user?id=pg")[:2] == ("hackernews", "pg")
 
 
 @pytest.mark.asyncio
@@ -363,3 +364,11 @@ async def test_research_chain_phase_seeds_identity_and_verifies_leads(db_factory
         assert lead.confidence >= 0.9
         assert dead.confidence <= 0.1
         assert dead.attributes.get("chain_missing") is True
+
+
+def test_name_tokens_keep_word_boundaries_and_fold_turkish():
+    from showis.services.chain import _fold, _name_tokens
+
+    assert _name_tokens("Kerem Demir") == {"kerem", "demir"}
+    assert _name_tokens("Çağrı Öztürk") == {"cagri", "ozturk"}
+    assert _fold("Ali-Veli  YILMAZ") == "ali veli yilmaz"

@@ -36,7 +36,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Iterable, Sequence
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from showis.db.models import Case, PoolItem, Seed, Target
 from showis.services.pool import PoolValidationError, create_item
@@ -269,7 +269,15 @@ class ChainResult:
     relations: int = 0
 
     def discovered(self, *, min_trust: float = PERSIST_MIN_TRUST) -> list[ChainNode]:
-        return [n for n in self.nodes if not n.anchor and n.trust >= min_trust]
+        # Yalnız kullanıcı adı aynı olan (isimle de doğrulanmamış) tahminler
+        # öneri değildir; havuzu gürültüyle doldurmaz.
+        return [
+            n
+            for n in self.nodes
+            if not n.anchor
+            and n.trust >= min_trust
+            and not (n._probe_only() and n.name_match is not True)
+        ]
 
     def summary(self) -> dict[str, Any]:
         found = sorted(self.discovered(), key=lambda n: -n.trust)
@@ -309,15 +317,23 @@ class ChainResult:
 
 
 def _fold(text: str) -> str:
-    return normalize_turkish(" ".join(str(text or "").split())).casefold()
+    # normalize_turkish boşlukları da siler; parça parça uygulanır.
+    words = str(text or "").replace("-", " ").replace("_", " ").split()
+    return " ".join(normalize_turkish(word).casefold() for word in words if word)
 
 
 def _name_tokens(text: str) -> set[str]:
-    return {token for token in _fold(text).replace("-", " ").split() if len(token) >= 3}
+    return {token for token in _fold(text).split() if len(token) >= 3}
 
 
 def profile_identity(url: str) -> tuple[str, str, str] | None:
     """URL -> (ağ, kimlik, kanonik URL); profil değilse None."""
+    parsed = urlparse(url)
+    if host_of(url) == "news.ycombinator.com" and parsed.path.rstrip("/") == "/user":
+        ident = parse_qs(parsed.query).get("id", [""])[0].strip()
+        if ident and clean_handle(ident) == ident.lower():
+            return "hackernews", ident.lower(), f"https://news.ycombinator.com/user?id={ident}"
+        return None
     ref: ProfileRef | None = canonical_profile(url)
     if ref is None:
         return None
@@ -338,6 +354,16 @@ def _page_key(url: str) -> str:
     host = (parsed.netloc or "").lower().removeprefix("www.")
     path = parsed.path.rstrip("/")
     return f"page:{host}{path}"
+
+
+def _brand(host: str) -> str:
+    """Kayıtlı alan adının marka etiketi: tangled.org -> tangled, x.co.uk -> x."""
+    parts = [part for part in host.lower().removeprefix("www.").split(".") if part]
+    if len(parts) < 2:
+        return host.lower()
+    if len(parts) >= 3 and parts[-2] in {"co", "com", "org", "net", "gov", "edu", "ac"}:
+        return parts[-3]
+    return parts[-2]
 
 
 def _is_personal_site(url: str) -> bool:
@@ -652,9 +678,11 @@ class ChainEngine:
         tokens = _name_tokens(display_name)
         if not tokens:
             return
-        # Tek ortak ad (ör. yalnız "Ali") yetmez: görünen ad birden çok
-        # parçalıysa en az iki parça bilinen isimle örtüşmeli.
-        if len(tokens & self.name_tokens) >= min(2, len(tokens)):
+        overlap = tokens & self.name_tokens
+        # Tek ortak ad (ör. yalnız "Ali") yetmez: en az iki parça örtüşmeli ya da
+        # görünen ad bilinen tam isimle birebir aynı olmalı. Tek parçalı ve
+        # örtüşen ad (ör. "dan") nötrdür; ad aynı soyad farklıysa uyuşmazlıktır.
+        if len(overlap) >= 2 or _fold(display_name) in self.names:
             node.name_match = True
             self._add_evidence(
                 node,
@@ -667,6 +695,8 @@ class ChainEngine:
                     note=f"görünen ad '{display_name[:80]}' bilinen isimle eşleşiyor",
                 ),
             )
+        elif overlap and len(tokens) == 1:
+            return
         else:
             node.name_match = False
             node.recompute()
@@ -698,8 +728,12 @@ class ChainEngine:
         if not self._can_fetch():
             return
         self.result.fetches += 1
+        handle = node.value
+        if node.network == "hackernews" and node.url:
+            # HN kullanıcı adları büyük/küçük harf duyarlıdır; özgün yazım URL'de.
+            handle = parse_qs(urlparse(node.url).query).get("id", [handle])[0]
         try:
-            intel = await self.intel_fetcher(node.network, node.value)
+            intel = await self.intel_fetcher(node.network, handle)
         except AccountIntelError as exc:
             self.result.notes.append(f"{node.label}: {exc}")
             return
@@ -774,17 +808,34 @@ class ChainEngine:
         for url in page.rel_me[:MAX_CHILDREN]:
             self.link(node, url, "rel_me", label="rel=me", source_url=node.url)
         relation = "aggregator" if aggregator else "site"
+        # Platformda barındırılan profil sayfası (tangled.org/ali, medium.com/@ali):
+        # gövdedeki platformun kendi hesapları/e-postaları (alt bilgi) sahibin değildir.
+        brand = "" if aggregator or self._own_site(node) else _brand(host_of(node.url))
         added = 0
         for url in page.links:
             if added >= MAX_CHILDREN or url in rel_me:
                 continue
-            if profile_identity(url) is None and not aggregator:
+            identity = profile_identity(url)
+            if identity is None and not aggregator:
                 # Kişisel sitedeki profil dışı bağlantılar (blog yazıları) zincir değildir.
+                continue
+            if brand and (
+                _brand(host_of(url)) == brand or (identity is not None and brand in identity[1])
+            ):
                 continue
             if self.link(node, url, relation, source_url=node.url) is not None:
                 added += 1
         for email in page.emails[:4]:
+            if brand and _brand(email.rpartition("@")[2]) == brand:
+                continue
             self.add_email(node, email, "owner" if aggregator else "site", note="sayfada")
+
+    def _own_site(self, node: ChainNode) -> bool:
+        """Kök yolda kişisel alan adı mı (ali.dev), yoksa platformdaki bir sayfa mı?"""
+        if node.kind != "page":
+            return False
+        path = urlparse(node.url).path.strip("/")
+        return not path or self._plausible_site(node.url)
 
     async def _expand_email(self, node: ChainNode) -> None:
         if not self._can_fetch() or self.email_fetcher is None:
