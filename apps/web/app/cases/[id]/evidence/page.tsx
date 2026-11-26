@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { AlertTriangle, ExternalLink, Loader2 } from "lucide-react";
 import { api, type EvidenceSnapshotRow } from "../../../../lib/api";
+import { externalUrl } from "../../../../lib/safe-url";
 
 const SOURCE_TR: Record<string, string> = {
   research: "araştırma",
@@ -24,13 +25,20 @@ export default function EvidencePage() {
   const [selected, setSelected] = useState<EvidenceSnapshotRow | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const openSeqRef = useRef(0);
 
   const open = useCallback(
     async (snapshotId: string) => {
+      const requestSeq = ++openSeqRef.current;
       try {
-        setSelected(await api.getSnapshot(id, snapshotId));
+        const snapshot = await api.getSnapshot(id, snapshotId);
+        if (requestSeq !== openSeqRef.current) return;
+        setSelected(snapshot);
+        setError(null);
       } catch (e: any) {
-        setError(e.message || "Kanıt kopyası açılamadı");
+        if (requestSeq === openSeqRef.current) {
+          setError(e.message || "Kanıt kopyası açılamadı");
+        }
       }
     },
     [id]
@@ -59,6 +67,7 @@ export default function EvidencePage() {
   useEffect(() => {
     if (requested) void open(requested);
   }, [requested, open]);
+  const selectedUrl = selected ? externalUrl(selected.url) : null;
 
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
@@ -128,15 +137,21 @@ export default function EvidencePage() {
         {selected ? (
           <article className="panel space-y-3 p-5">
             <h3 className="break-words text-sm font-semibold">{selected.title || selected.url}</h3>
-            <a
-              href={selected.url}
-              target="_blank"
-              rel="noreferrer noopener"
-              className="inline-flex items-center gap-1 break-all text-[12px] text-accent-ink hover:underline"
-            >
-              {selected.url}
-              <ExternalLink size={11} aria-hidden />
-            </a>
+            {selectedUrl ? (
+              <a
+                href={selectedUrl}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="inline-flex items-center gap-1 break-all text-[12px] text-accent-ink hover:underline"
+              >
+                {selected.url}
+                <ExternalLink size={11} aria-hidden />
+              </a>
+            ) : (
+              <p className="break-all text-[12px] text-ink-3">
+                {selected.url} <span className="text-warn">(güvenli olmayan bağlantı)</span>
+              </p>
+            )}
             <p
               className={`status ${selected.integrity_ok ? "text-ok" : "text-danger"}`}
             >

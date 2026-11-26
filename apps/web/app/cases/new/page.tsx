@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Check, ChevronDown, Loader2 } from "lucide-react";
 import { api, type TargetKind } from "../../../lib/api";
+import { SCAN_MODES } from "../../../lib/scan-modes";
+import type { Platform } from "../../../lib/types";
 
 interface SeedRow {
   platform: string;
@@ -18,10 +20,10 @@ const PLATFORMS = [
   "instagram", "tiktok", "youtube", "medium", "telegram", "tryhackme",
   "hackthebox", "bitbucket", "codeberg", "codepen", "codewars", "leetcode",
   "stackoverflow", "bluesky", "mastodon", "huggingface", "kaggle", "twitch",
-  "kick", "discord", "behance", "dribbble", "pinterest", "tumblr", "linktr.ee",
+  "kick", "behance", "dribbble", "pinterest", "tumblr", "linktr.ee",
   "about.me", "substack", "soundcloud", "duolingo", "lichess", "patreon",
-  "kofi", "buymeacoffee", "gumroad", "hackerone", "bugcrowd", "web", "unknown",
-];
+  "ko-fi", "buymeacoffee", "gumroad", "hackerone", "bugcrowd", "web", "unknown",
+] as const satisfies readonly Platform[];
 
 const DRAFT_KEY = "showis:new-case-draft";
 /** Handle modunda `Ad`/`Soyad` alanlarını açıklayan ipucu metninin kimliği. */
@@ -37,7 +39,7 @@ const EMPTY = {
   purpose: "",
   legal_basis: "self_check",
   notes: "",
-  retention_days: 30,
+  retention_days: "30",
   first_name: "",
   last_name: "",
   nickname: "",
@@ -67,12 +69,6 @@ function nickError(raw: string, required: boolean): string | null {
 
 const NICK_RULE_HINT = "en az 3 karakter, en az 1 harf veya rakam";
 
-const SCAN_MODES = [
-  { value: "O1", label: "Hızlı", hint: "Arama ve API çağrıları, site kontrolü yok" },
-  { value: "O2", label: "Standart", hint: "Arama, API ve 6 kullanıcı adı site kontrolü" },
-  { value: "O3", label: "Derin", hint: "Standart mod ve tarayıcı ile 10 kullanıcı adı" },
-];
-
 export default function NewCasePage() {
   const router = useRouter();
   const [saving, setSaving] = useState(false);
@@ -100,9 +96,20 @@ export default function NewCasePage() {
   const firstNameRef = useRef<HTMLInputElement>(null);
   const nicknameRef = useRef<HTMLInputElement>(null);
   const identifierRef = useRef<HTMLInputElement>(null);
+  const modeMountedRef = useRef(false);
+  const modeKeyboardRef = useRef(false);
 
   // Mod degisince ilgili zorunlu alan odaklanir (alan sirasi moda gore degisir).
+  // İlk render'da odağı çalma: yalnız kullanıcı modu değiştirdiğinde uygula.
   useEffect(() => {
+    if (!modeMountedRef.current) {
+      modeMountedRef.current = true;
+      return;
+    }
+    if (modeKeyboardRef.current) {
+      modeKeyboardRef.current = false;
+      return;
+    }
     if (mode === "handle") nicknameRef.current?.focus();
     else if (mode === "name") firstNameRef.current?.focus();
     else identifierRef.current?.focus();
@@ -137,6 +144,21 @@ export default function NewCasePage() {
       );
       return;
     }
+    const nameValue = form.name.trim();
+    if (nameValue && nameValue.length < 2) {
+      setError("Vaka adı en az 2 karakter olmalı.");
+      return;
+    }
+    const purposeValue = form.purpose.trim();
+    if (purposeValue && purposeValue.length < 10) {
+      setError("Amaç en az 10 karakter olmalı.");
+      return;
+    }
+    const retentionDays = Number(form.retention_days);
+    if (!Number.isInteger(retentionDays) || retentionDays < 1 || retentionDays > 365) {
+      setError("Saklama süresi 1 ile 365 gün arasında olmalı.");
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -164,12 +186,12 @@ export default function NewCasePage() {
             ? fullname || "Hedef"
             : identifier || "Hedef";
       const res = await api.createCase({
-        name: form.name || `${label} — ${new Date().toLocaleDateString("tr-TR")}`,
-        purpose: form.purpose || `${label} için kamuya açık kaynak taraması`,
+        name: nameValue || `${label} — ${new Date().toLocaleDateString("tr-TR")}`,
+        purpose: purposeValue || `${label} için kamuya açık kaynak taraması`,
         legal_basis: form.legal_basis,
         authorization_confirmed: true,
-        notes: form.notes || null,
-        retention_days: Number(form.retention_days),
+        notes: form.notes.trim() || null,
+        retention_days: retentionDays,
         target: {
           kind: mode,
           first_name: form.first_name,
@@ -256,7 +278,27 @@ export default function NewCasePage() {
                       type="button"
                       role="radio"
                       aria-checked={active}
+                      tabIndex={active ? 0 : -1}
+                      data-mode={m.value}
                       onClick={() => setMode(m.value)}
+                      onKeyDown={(event) => {
+                        const keys = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"];
+                        if (!keys.includes(event.key)) return;
+                        event.preventDefault();
+                        const buttons = Array.from(
+                          event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>(
+                            '[role="radio"]'
+                          ) ?? []
+                        );
+                        const current = buttons.indexOf(event.currentTarget);
+                        if (current < 0) return;
+                        const step = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
+                        const next = (current + step + buttons.length) % buttons.length;
+                        const value = buttons[next]?.dataset.mode as TargetKind | undefined;
+                        modeKeyboardRef.current = true;
+                        if (value) setMode(value);
+                        buttons[next]?.focus();
+                      }}
                       className={`inline-flex items-center justify-center rounded-[4px] px-3 py-1.5 text-[12.5px] transition-colors max-sm:min-h-[40px] max-sm:min-w-[40px] ${
                         active
                           ? "bg-surface font-medium text-ink"
@@ -528,9 +570,10 @@ export default function NewCasePage() {
                   type="number"
                   min={1}
                   max={365}
+                  required
                   className="input"
                   value={form.retention_days}
-                  onChange={(e) => set("retention_days", Number(e.target.value))}
+                  onChange={(e) => set("retention_days", e.target.value)}
                 />
               </label>
             </div>
@@ -694,7 +737,10 @@ export default function NewCasePage() {
               </button>
               <button
                 type="button"
-                onClick={() => router.back()}
+                onClick={() => {
+                  window.sessionStorage.removeItem(DRAFT_KEY);
+                  router.back();
+                }}
                 className="btn-quiet mt-1 w-full"
               >
                 Vazgeç

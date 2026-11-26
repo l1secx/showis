@@ -10,6 +10,7 @@ import {
   useState,
 } from "react";
 import { api, type ScanEstimate, type ScanStatus } from "../../../lib/api";
+import { normalizeScanMode } from "../../../lib/scan-modes";
 
 /** Sekmeler arasinda gezinirken kaybolmamasi gereken tarama oturumu. */
 
@@ -71,15 +72,23 @@ function readSession(key: string): string | null {
 
 export function ScanSessionProvider({
   caseId,
+  initialMode,
   children,
 }: {
   caseId: string;
+  /** Yeni vaka akışından gelen mod; sessionStorage'daki değerden önceliklidir. */
+  initialMode?: string;
   children: React.ReactNode;
 }) {
   const [scanId, setScanId] = useState<string | null>(() => readSession(scanKey(caseId)));
   const [scan, setScan] = useState<ScanStatus | null>(null);
   const [events, setEvents] = useState<SseEvent[]>([]);
-  const [mode, setModeState] = useState(() => readSession(modeKey(caseId)) || "O2");
+  const [mode, setModeState] = useState<string>(
+    () =>
+      normalizeScanMode(initialMode) ??
+      normalizeScanMode(readSession(modeKey(caseId))) ??
+      "O2"
+  );
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [llmModel, setLlmModelState] = useState(() => readSession(modelKey(caseId)) || "");
   const [estimate, setEstimate] = useState<ScanEstimate | null>(null);
@@ -92,6 +101,14 @@ export function ScanSessionProvider({
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const eventFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingEventsRef = useRef<SseEvent[]>([]);
+
+  // URL'den gelen mod sonradan değişirse uygula; storage'daki değer korunur.
+  useEffect(() => {
+    const next = normalizeScanMode(initialMode);
+    if (!next) return;
+    setModeState((current) => (current === next ? current : next));
+    if (typeof window !== "undefined") window.sessionStorage.setItem(modeKey(caseId), next);
+  }, [caseId, initialMode]);
 
   const refreshScan = useCallback(async (id: string) => {
     try {

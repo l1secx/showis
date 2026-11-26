@@ -189,7 +189,13 @@ async function proxy(request: NextRequest, context: RouteContext) {
   const sessionToken =
     request.cookies.get("showis_user_token")?.value ?? incomingUserToken;
   if (sessionToken) {
-    headers.set("X-User-Token", decodeURIComponent(sessionToken));
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(sessionToken);
+    } catch {
+      return Response.json({ detail: "Geçersiz oturum çerezi" }, { status: 400 });
+    }
+    headers.set("X-User-Token", decoded);
   }
   // fetch yanıtı kendisi çözer; upstream sıkıştırmasını istemeyiz.
   headers.delete("accept-encoding");

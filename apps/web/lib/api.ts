@@ -255,6 +255,22 @@ export interface AIProviderProfile {
   updated_at: string;
 }
 
+export interface ProviderSetting {
+  id: string;
+  provider: string;
+  label?: string | null;
+  config: Record<string, any>;
+  secret_masked?: string | null;
+  enabled: boolean;
+  secret_required?: boolean;
+}
+
+export interface ProviderTestResult {
+  ok: boolean;
+  message?: string;
+  error?: string;
+}
+
 export interface PoolItem {
   id: string;
   case_id: string;
@@ -586,24 +602,56 @@ async function listCases(params: CaseListParams = {}): Promise<CaseListPage> {
   };
 }
 
+const HTTP_MESSAGES: Record<number, string> = {
+  400: "İstek geçersiz. Gönderilen bilgileri kontrol edin.",
+  401:
+    "Oturum doğrulanamadı. Kullanıcı anahtarınız geçersiz veya süresi dolmuş olabilir; Ayarlar > Kullanıcı oturumu bölümünden yenileyin.",
+  403: "Bu işlem için yetkiniz yok.",
+  404: "İstenen kayıt bulunamadı.",
+  409: "Kayıt zaten mevcut veya çakışıyor.",
+  413: "İstek gövdesi çok büyük.",
+  422: "Gönderilen bilgiler geçersiz. Alanları kontrol edip yeniden deneyin.",
+  429: "Çok fazla istek gönderildi. Kısa bir süre sonra yeniden deneyin.",
+  500: "Sunucuda beklenmeyen bir hata oluştu.",
+  502: "API'ye ulaşılamadı. Servisin çalıştığını kontrol edin.",
+  503: "API yapılandırılmamış veya geçici olarak kullanılamıyor.",
+};
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
+  if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  if (!headers.has("Accept")) headers.set("Accept", "application/json");
   const res = await fetch(`/api/v1${path}`, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
     ...init,
+    headers,
   });
-  if (res.status === 401) {
-    // Sunucu tarafi proxy token'i ekleyemediyse/gecersizse kullaniciya net mesaj ver.
-    throw new Error("API erişimi reddedildi (token yapılandırılmamış olabilir).");
-  }
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`API ${res.status}: ${text || res.statusText}`);
+    throw new Error(
+      HTTP_MESSAGES[res.status] ?? `API isteği başarısız oldu (HTTP ${res.status}).`
+    );
   }
   const text = await res.text();
-  return (text ? JSON.parse(text) : null) as T;
+  if (!text) return null as T;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error("Sunucudan geçersiz bir yanıt alındı.");
+  }
+}
+
+/** Kullanıcı anahtarını HttpOnly oturum çerezine çevirir; başarılıysa `true`. */
+export async function setUserSession(token: string): Promise<boolean> {
+  const response = await fetch("/api/session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
+  });
+  return response.ok;
+}
+
+/** HttpOnly oturum çerezini siler. */
+export async function clearUserSession(): Promise<void> {
+  await fetch("/api/session", { method: "DELETE" });
 }
 
 export const api = {
@@ -655,8 +703,6 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ username, role }),
     }),
-  deactivateUser: (username: string) =>
-    req<null>(`/auth/users/${encodeURIComponent(username)}`, { method: "DELETE" }),
   exportCase: (caseId: string) => req<any>(`/cases/${caseId}/export`),
   createReport: (caseId: string, format: "json" | "pdf" | "html") =>
     req<ReportInfo>(`/cases/${caseId}/report`, { method: "POST", body: JSON.stringify({ format }) }),
@@ -812,6 +858,22 @@ export const api = {
     }),
   deleteResearch: (caseId: string, sessionId: string) =>
     req<null>(`/cases/${caseId}/research/${sessionId}`, { method: "DELETE" }),
+
+  // --- Sağlayıcı ayarları (legacy) ---
+  listProviderSettings: () => req<ProviderSetting[]>("/settings/providers"),
+  upsertProviderSetting: (body: {
+    provider: string;
+    label?: string;
+    config: Record<string, any>;
+    secret?: string;
+    enabled?: boolean;
+  }) =>
+    req<ProviderSetting>("/settings/providers", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  testProviderSetting: (settingId: string) =>
+    req<ProviderTestResult>(`/settings/providers/${settingId}/test`, { method: "POST" }),
 
   // --- AI sağlayıcı profilleri ---
   listAIProviders: () => req<AIProviderProfile[]>("/ai/providers"),

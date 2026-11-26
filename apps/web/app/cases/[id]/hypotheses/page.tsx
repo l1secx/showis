@@ -193,20 +193,27 @@ export default function HypothesesPage() {
                   </div>
                 </div>
                 <div className="flex shrink-0 flex-wrap gap-1">
-                  <button type="button" className="btn-secondary btn-sm" disabled={busy}
-                    onClick={() => act(async () => void (await api.patchHypothesis(id, hypothesis.id, { status: "confirmed" })))}>
-                    Onayla
-                  </button>
-                  <button type="button" className="btn-danger-quiet btn-sm" disabled={busy}
-                    onClick={() => act(async () => void (await api.patchHypothesis(id, hypothesis.id, { status: "rejected" })))}>
-                    Reddet
-                  </button>
+                  {(hypothesis.status === "proposed" || hypothesis.status === "candidate") && (
+                    <>
+                      <button type="button" className="btn-secondary btn-sm" disabled={busy}
+                        onClick={() => act(async () => void (await api.patchHypothesis(id, hypothesis.id, { status: "confirmed" })))}>
+                        Onayla
+                      </button>
+                      <button type="button" className="btn-danger-quiet btn-sm" disabled={busy}
+                        onClick={() => act(async () => void (await api.patchHypothesis(id, hypothesis.id, { status: "rejected" })))}>
+                        Reddet
+                      </button>
+                    </>
+                  )}
                   <button
                     type="button"
                     className="btn-quiet btn-sm max-sm:min-w-[40px]"
                     disabled={busy}
                     aria-label={`${hypothesis.statement.slice(0, 60)} hipotezini sil`}
-                    onClick={() => act(async () => void (await api.deleteHypothesis(id, hypothesis.id)))}
+                    onClick={() => {
+                      if (!confirm("Bu hipotez silinsin mi?")) return;
+                      void act(async () => void (await api.deleteHypothesis(id, hypothesis.id)));
+                    }}
                   >
                     <Trash2 size={12} aria-hidden />
                   </button>

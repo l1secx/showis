@@ -32,9 +32,11 @@ import {
   type ReportInfo,
 } from "../../../lib/api";
 import type { CaseReportJson } from "../../../lib/types";
+import { externalUrl } from "../../../lib/safe-url";
+import { escapeCsvCell } from "../../../lib/csv";
 import { platformMeta } from "./platform-meta";
 import { formatDuration, useScanSession } from "./scan-context";
-import { useTheme } from "../../components/use-theme";
+import { SCAN_MODES } from "../../../lib/scan-modes";
 import { auditActionLabel, edgeTypeLabel, timelineEventLabel } from "./vocabulary";
 
 /** Durum, nokta + metin ile anlatılır. Rozet çorbası yok. */
@@ -83,12 +85,10 @@ export function Badge({ value }: { value: string }) {
 }
 
 /** Platform rozeti — `platform-meta.ts` etiket/renklerini kullanır, bilinmeyende nötr fallback.
- *  Açık temada markanın koyu rengi, koyu temada markanın açık tonu (`accent`)
- *  kullanılır — koyu zeminde koyu marka rengi görünmezdi. */
+ *  Tek tema siyah olduğu için markanın koyu zeminde okunur `accent` tonu kullanılır. */
 export function PlatformBadge({ platform }: { platform: string }) {
   const meta = platformMeta(platform);
-  const theme = useTheme();
-  const dot = theme === "dark" ? meta.accent : meta.color;
+  const dot = meta.accent;
   return (
     <span
       className="inline-flex items-center gap-1.5 text-[12px] text-ink-3"
@@ -104,22 +104,20 @@ export function PlatformBadge({ platform }: { platform: string }) {
   );
 }
 
-const MODES = [
-  { value: "O1", label: "O1 — Hızlı", desc: "Arama ve API çağrıları, site kontrolü yok" },
-  { value: "O2", label: "O2 — Standart", desc: "Arama, API ve 6 kullanıcı adı site kontrolü" },
-  { value: "O3", label: "O3 — Derin", desc: "Standart mod ve tarayıcı ile 10 kullanıcı adı" },
-];
+const MODES = SCAN_MODES.map((mode) => ({
+  value: mode.value,
+  label: `${mode.value} — ${mode.label}`,
+  desc: mode.hint,
+}));
 
 /* ---------------- Tarama sekmesi ---------------- */
 
 export function ScanTab({
   caseId,
   autoStart = false,
-  initialMode,
 }: {
   caseId: string;
   autoStart?: boolean;
-  initialMode?: string;
 }) {
   const {
     scan,
@@ -140,6 +138,7 @@ export function ScanTab({
   const autoStarted = useRef(false);
   const [monitor, setMonitor] = useState<CaseMonitor | null>(null);
   const [monitorBusy, setMonitorBusy] = useState(false);
+  const [monitorError, setMonitorError] = useState<string | null>(null);
   const [webhook, setWebhook] = useState("");
 
   useEffect(() => {
@@ -153,6 +152,7 @@ export function ScanTab({
   const saveMonitor = async (patch: Partial<CaseMonitor>) => {
     if (!monitor || monitorBusy) return;
     const next = { ...monitor, ...patch };
+    setMonitorError(null);
     setMonitor(next);
     setMonitorBusy(true);
     try {
@@ -163,7 +163,8 @@ export function ScanTab({
           mode: next.mode,
         })
       );
-    } catch {
+    } catch (e: any) {
+      setMonitorError(e?.message || "İzleme ayarı kaydedilemedi.");
       api.getMonitor(caseId).then(setMonitor).catch(() => {});
     } finally {
       setMonitorBusy(false);
@@ -171,32 +172,29 @@ export function ScanTab({
   };
 
   const saveWebhook = async () => {
+    setMonitorError(null);
     setMonitorBusy(true);
     try {
       const result = await api.updateWebhook(caseId, webhook.trim() || null);
       setMonitor((current) =>
         current ? { ...current, webhook_url: result.webhook_url } : current
       );
-    } catch {
-      /* alan sessizce eski değerde kalır */
+    } catch (e: any) {
+      setMonitorError(e?.message || "Webhook kaydedilemedi.");
     } finally {
       setMonitorBusy(false);
     }
   };
 
-  // Modu URL'den bir kez uygula.
-  useEffect(() => {
-    if (initialMode) setMode(initialMode);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   // Yeni vakadan gelindiyse taramayi otomatik baslat.
+  // Provider modu URL'den ilk render'da alır; yine de mod uygulanmadan
+  // başlatmamak için ek guard (ayrı effect sırası yarışına karşı).
   useEffect(() => {
     if (!autoStart || autoStarted.current || scanId || starting) return;
     autoStarted.current = true;
     void start();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoStart, scanId, starting]);
+  }, [autoStart, scanId, starting, mode]);
 
   const running = scan?.status === "running" || scan?.status === "queued";
 
@@ -228,6 +226,14 @@ export function ScanTab({
                 {monitor.enabled ? "açık" : "kapalı"}
               </span>
             </div>
+            {monitorError && (
+              <p
+                role="alert"
+                className="border-t border-danger-line bg-danger-soft px-5 py-2 text-[12.5px] text-danger"
+              >
+                {monitorError}
+              </p>
+            )}
             <div className="flex flex-wrap items-end gap-4 p-5">
               <label className="flex cursor-pointer items-center gap-2 text-[12.5px] text-ink-2 max-sm:min-h-[40px]">
                 <input
@@ -855,6 +861,7 @@ function FindingRecord({
   const pct = Math.round(f.score * 100);
   const isLead = f.status === "lead";
   const evidencePanelId = useId();
+  const findingUrl = externalUrl(f.url);
 
   return (
     <article
@@ -881,17 +888,22 @@ function FindingRecord({
             )}
           </div>
 
-          {f.url && (
-            <a
-              href={f.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="mt-1 inline-flex max-w-full items-center gap-1.5 py-1 font-mono text-[12px] text-ink-3 transition-colors hover:text-accent-ink max-sm:min-h-[40px]"
-            >
-              <span className="break-all">{f.url}</span>
-              <ArrowUpRight size={11} className="shrink-0 text-ink-3" aria-hidden />
-            </a>
-          )}
+          {f.url &&
+            (findingUrl ? (
+              <a
+                href={findingUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-1 inline-flex max-w-full items-center gap-1.5 py-1 font-mono text-[12px] text-ink-3 transition-colors hover:text-accent-ink max-sm:min-h-[40px]"
+              >
+                <span className="break-all">{f.url}</span>
+                <ArrowUpRight size={11} className="shrink-0 text-ink-3" aria-hidden />
+              </a>
+            ) : (
+              <span className="mt-1 block break-all font-mono text-[12px] text-ink-3">
+                {f.url} <span className="text-warn">(güvenli olmayan bağlantı)</span>
+              </span>
+            ))}
 
           {f.explanation && (
             <p className="mt-2 max-w-[28rem] text-[12.5px] leading-relaxed text-ink-2">
@@ -1016,27 +1028,36 @@ function FindingRecord({
         <div id={evidencePanelId} className="mt-3 border-t border-line pt-3">
           <p className="text-[12px] font-medium text-ink-2">Kanıt zinciri</p>
           <div className="mt-2 space-y-2.5">
-            {(evidence || []).map((ev) => (
-              <div key={ev.id} className="space-y-0.5">
-                <a
-                  href={ev.source_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex max-w-full items-center gap-1 break-all font-mono text-[12px] text-accent-ink underline decoration-accent-line underline-offset-2 hover:decoration-accent"
-                >
-                  {ev.source_url}
-                  <ArrowUpRight size={10} className="shrink-0" aria-hidden />
-                </a>
-                <p className="numeric text-ink-3">
-                  {ev.kind} — sha256 {ev.content_hash.slice(0, 16)}
-                  {ev.http_status ? ` — HTTP ${ev.http_status}` : ""}
-                  {ev.fetched_at ? ` — ${new Date(ev.fetched_at).toLocaleString("tr-TR")}` : ""}
-                </p>
-                {ev.preview && (
-                  <p className="line-clamp-3 text-[12px] leading-snug text-ink-2">{ev.preview}</p>
-                )}
-              </div>
-            ))}
+            {(evidence || []).map((ev) => {
+              const evidenceUrl = externalUrl(ev.source_url);
+              return (
+                <div key={ev.id} className="space-y-0.5">
+                  {evidenceUrl ? (
+                    <a
+                      href={evidenceUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex max-w-full items-center gap-1 break-all font-mono text-[12px] text-accent-ink underline decoration-accent-line underline-offset-2 hover:decoration-accent"
+                    >
+                      {ev.source_url}
+                      <ArrowUpRight size={10} className="shrink-0" aria-hidden />
+                    </a>
+                  ) : (
+                    <p className="break-all font-mono text-[12px] text-ink-3">
+                      {ev.source_url} <span className="text-warn">(güvenli olmayan bağlantı)</span>
+                    </p>
+                  )}
+                  <p className="numeric text-ink-3">
+                    {ev.kind} — sha256 {ev.content_hash.slice(0, 16)}
+                    {ev.http_status ? ` — HTTP ${ev.http_status}` : ""}
+                    {ev.fetched_at ? ` — ${new Date(ev.fetched_at).toLocaleString("tr-TR")}` : ""}
+                  </p>
+                  {ev.preview && (
+                    <p className="line-clamp-3 text-[12px] leading-snug text-ink-2">{ev.preview}</p>
+                  )}
+                </div>
+              );
+            })}
           </div>
           {(evidence || []).length === 0 && (
             <p className="mt-2 text-[12px] text-warn">Kanıt kaydı yok.</p>
@@ -1077,6 +1098,7 @@ export function FindingsTab({ caseId }: { caseId: string }) {
   // Grafikten gelen kimlik kümesi filtresi (`?cluster=`).
   const [clusterFilter, setClusterFilter] = useState<string | null>(null);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const lastFocusedEntityRef = useRef<string | null>(null);
 
   // Tercih yalnızca istemcide okunur: SSR/CSR hidrasyon uyuşmazlığı olmasın.
   useEffect(() => {
@@ -1103,6 +1125,7 @@ export function FindingsTab({ caseId }: { caseId: string }) {
 
   const clearFocus = () => {
     setFocusEntity(null);
+    lastFocusedEntityRef.current = null;
     if (typeof window !== "undefined") {
       const url = new URL(window.location.href);
       url.searchParams.delete("entity");
@@ -1120,6 +1143,7 @@ export function FindingsTab({ caseId }: { caseId: string }) {
   };
 
   const load = useCallback(async () => {
+    setErr(null);
     try {
       setFindings(await api.listFindings(caseId));
     } catch (e: any) {
@@ -1330,6 +1354,13 @@ export function FindingsTab({ caseId }: { caseId: string }) {
         : sortedVisible,
     [focusFinding, sortedVisible]
   );
+  // Büyük taramalarda binlerce DOM düğümü üretmemek için kademeli render.
+  const [renderLimit, setRenderLimit] = useState(200);
+  const rendered = useMemo(() => shown.slice(0, renderLimit), [shown, renderLimit]);
+
+  useEffect(() => {
+    setRenderLimit(200);
+  }, [filter, showRejected, hideLowAuth, findingQuery, platformFilter, findingSort, clusterFilter]);
 
   // Kimlik kümeleri: aynı kişiye bağlı hesaplar tek başlık altında toplanır.
   const findingGroups = useMemo(() => {
@@ -1338,7 +1369,7 @@ export function FindingsTab({ caseId }: { caseId: string }) {
       { cluster: NonNullable<FindingWithAuth["cluster"]>; items: FindingWithAuth[] }
     >();
     const singles: FindingWithAuth[] = [];
-    for (const finding of shown) {
+    for (const finding of rendered) {
       const cluster = finding.cluster;
       if (cluster && cluster.size > 1) {
         const existing = clusters.get(cluster.id);
@@ -1357,22 +1388,32 @@ export function FindingsTab({ caseId }: { caseId: string }) {
       ),
       singles,
     };
-  }, [shown]);
+  }, [rendered]);
 
   useEffect(() => {
     if (!focusFinding) return;
+    // Yalnız yeni bir entity vurgusu geldiğinde odakla; SSE/veri yenilemesi
+    // kullanıcının klavye odağını çalmasın.
+    if (lastFocusedEntityRef.current === focusEntity) return;
+    lastFocusedEntityRef.current = focusEntity;
     const el = document.getElementById(`finding-${focusFinding.id}`);
     if (el) {
       el.scrollIntoView({ block: "center" });
       el.focus({ preventScroll: true });
     }
-  }, [focusFinding]);
+  }, [focusFinding, focusEntity]);
 
   if (err)
     return (
-      <p role="alert" className="rounded-[6px] border border-danger-line bg-danger-soft px-4 py-3 text-[13px] text-danger">
-        {err}
-      </p>
+      <div
+        role="alert"
+        className="flex flex-wrap items-center justify-between gap-2 rounded-[6px] border border-danger-line bg-danger-soft px-4 py-3 text-[13px] text-danger"
+      >
+        <span>Bulgular yüklenemedi: {err}</span>
+        <button type="button" onClick={() => void load()} className="btn-secondary btn-sm">
+          Yeniden dene
+        </button>
+      </div>
     );
 
   const running = scan?.status === "running" || scan?.status === "queued";
@@ -1447,11 +1488,10 @@ export function FindingsTab({ caseId }: { caseId: string }) {
         verified_at: "",
         explanation: "",
       });
-      const escapeCell = (value: unknown) => `"${String(value ?? "").replace(/"/g, '""')}"`;
       const lines = [
         headers.join(","),
         ...payload.map((row) =>
-          headers.map((key) => escapeCell((row as Record<string, unknown>)[key])).join(",")
+          headers.map((key) => escapeCsvCell((row as Record<string, unknown>)[key])).join(",")
         ),
       ];
       // BOM: Excel'in UTF-8'i doğru açması için.
@@ -1949,7 +1989,18 @@ export function FindingsTab({ caseId }: { caseId: string }) {
             )}
           </div>
         ) : (
-          <div className="panel divide-y divide-line">{shown.map(renderFinding)}</div>
+          <div className="panel divide-y divide-line">{rendered.map(renderFinding)}</div>
+        )}
+        {shown.length > rendered.length && (
+          <div className="flex justify-center pt-3">
+            <button
+              type="button"
+              onClick={() => setRenderLimit((limit) => limit + 200)}
+              className="btn-secondary btn-sm"
+            >
+              Daha fazla bulgu göster ({shown.length - rendered.length} kaldı)
+            </button>
+        </div>
         )}
       </div>
     </div>
@@ -1997,7 +2048,7 @@ function ReportSummary({ data }: { data: CaseReportJson }) {
   const statusEntries = REPORT_STATUS_ORDER.map((status) => ({
     status,
     count: Number(statusCounts[status] ?? 0),
-  })).filter((row, index, rows) => row.count > 0 || index < rows.length);
+  })).filter((row) => row.count > 0);
   const otherStatuses = Object.entries(statusCounts).filter(
     ([status]) => !REPORT_STATUS_ORDER.includes(status)
   );
@@ -2044,10 +2095,10 @@ function ReportSummary({ data }: { data: CaseReportJson }) {
                 { label: "Kanıt", value: totals.evidence },
               ].map((item) => (
                 <div key={item.label}>
-                  <dd className="tabular text-[20px] font-semibold leading-none text-ink">
+                  <dt className="text-[12px] text-ink-3">{item.label}</dt>
+                  <dd className="tabular mt-1.5 text-[20px] font-semibold leading-none text-ink">
                     {item.value ?? 0}
                   </dd>
-                  <dt className="mt-1.5 text-[12px] text-ink-3">{item.label}</dt>
                 </div>
               ))}
             </dl>
@@ -2107,9 +2158,9 @@ function ReportSummary({ data }: { data: CaseReportJson }) {
                         scope="row"
                         className="max-w-[180px] break-words text-left font-medium text-ink"
                       >
-                        {finding.url ? (
+                        {externalUrl(finding.url) ? (
                           <a
-                            href={finding.url}
+                            href={externalUrl(finding.url) as string}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="link inline-flex items-center max-sm:min-h-[40px]"
@@ -2294,22 +2345,22 @@ function ReportSummary({ data }: { data: CaseReportJson }) {
           <h2 className="section-heading">Kanıt özeti</h2>
           <dl className="mt-3 grid grid-cols-2 gap-x-8 gap-y-3 sm:grid-cols-3">
             <div>
-              <dd className="tabular text-[20px] font-semibold leading-none text-ink">
+              <dt className="text-[12px] text-ink-3">Toplam kanıt</dt>
+              <dd className="tabular mt-1.5 text-[20px] font-semibold leading-none text-ink">
                 {evidence.total ?? 0}
               </dd>
-              <dt className="mt-1.5 text-[12px] text-ink-3">Toplam kanıt</dt>
             </div>
             <div>
-              <dd className="tabular text-[20px] font-semibold leading-none text-ink">
+              <dt className="text-[12px] text-ink-3">Hedefe bağlı</dt>
+              <dd className="tabular mt-1.5 text-[20px] font-semibold leading-none text-ink">
                 {evidence.linked_to_entities ?? 0}
               </dd>
-              <dt className="mt-1.5 text-[12px] text-ink-3">Hedefe bağlı</dt>
             </div>
             <div>
-              <dd className="numeric text-[13px] font-medium text-ink">
+              <dt className="text-[12px] text-ink-3">Saklama bitişi</dt>
+              <dd className="numeric mt-1.5 text-[13px] font-medium text-ink">
                 {formatDateTime(evidence.retention_until)}
               </dd>
-              <dt className="mt-1.5 text-[12px] text-ink-3">Saklama bitişi</dt>
             </div>
           </dl>
 
@@ -2356,6 +2407,7 @@ export function ReportTab({ caseId }: { caseId: string }) {
   const [summaryBusy, setSummaryBusy] = useState(false);
   const [summaryErr, setSummaryErr] = useState<string | null>(null);
   const summaryKey = `showis:report:summary:${caseId}`;
+  const summaryTtlMs = 5 * 60 * 1000;
 
   // Yönetici özeti: JSON raporu üretilir, indirme adresinden içerik çekilir.
   // (Listeleme ucu olmadığı için tek yol rapor üretmek; oturumda bir kez yapılır.)
@@ -2370,7 +2422,10 @@ export function ReportTab({ caseId }: { caseId: string }) {
       const data = (await res.json()) as CaseReportJson;
       setSummary(data);
       try {
-        window.sessionStorage.setItem(summaryKey, JSON.stringify(data));
+        window.sessionStorage.setItem(
+          summaryKey,
+          JSON.stringify({ savedAt: Date.now(), data })
+        );
       } catch {
         /* kota dolu olabilir: önbellek atlanır, işlev görmezden gelir */
       }
@@ -2386,14 +2441,28 @@ export function ReportTab({ caseId }: { caseId: string }) {
     const cached = window.sessionStorage.getItem(summaryKey);
     if (cached) {
       try {
-        setSummary(JSON.parse(cached) as CaseReportJson);
-        return;
+        const parsed = JSON.parse(cached) as
+          | CaseReportJson
+          | { savedAt?: number; data?: CaseReportJson };
+        const savedAt =
+          typeof (parsed as { savedAt?: unknown }).savedAt === "number"
+            ? (parsed as { savedAt: number }).savedAt
+            : null;
+        const data =
+          savedAt !== null && (parsed as { data?: CaseReportJson }).data
+            ? (parsed as { data: CaseReportJson }).data
+            : (parsed as CaseReportJson);
+        if (savedAt !== null && Date.now() - savedAt > summaryTtlMs) {
+          window.sessionStorage.removeItem(summaryKey);
+          return;
+        }
+        setSummary(data);
       } catch {
         window.sessionStorage.removeItem(summaryKey);
       }
     }
-    void loadSummary();
-  }, [loadSummary, summaryKey]);
+    // Otomatik rapor üretilmez: kullanıcı "Özeti getir" ile başlatır.
+  }, [summaryKey]);
 
   const generate = async (format: "json" | "pdf" | "html") => {
     setBusy(format);
@@ -2401,20 +2470,15 @@ export function ReportTab({ caseId }: { caseId: string }) {
     try {
       const r = await api.createReport(caseId, format);
       setReports((prev) => [r, ...prev]);
-      if (format === "html") {
-        // HTML raporu sayfa içinde RENDER ETME (XSS yüzeyi açmamak için):
-        // yalnız indir. API `Content-Disposition: attachment` + sıkı CSP gönderir;
-        // ayrıca `download` özniteliğiyle yeni sekme hiç açılmaz.
-        const anchor = document.createElement("a");
-        anchor.href = r.download_url;
-        anchor.download = "";
-        anchor.rel = "noopener";
-        document.body.appendChild(anchor);
-        anchor.click();
-        anchor.remove();
-      } else {
-        window.open(r.download_url, "_blank");
-      }
+      // Rapor sayfa içinde render edilmez: API `Content-Disposition: attachment`
+      // gönderir; programatik indirme popup engeline takılmaz.
+      const anchor = document.createElement("a");
+      anchor.href = r.download_url;
+      anchor.download = "";
+      anchor.rel = "noopener";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
     } catch (e: any) {
       setErr(e.message);
     } finally {
@@ -2526,10 +2590,10 @@ export function ReportTab({ caseId }: { caseId: string }) {
             onClick={loadSummary}
             disabled={summaryBusy}
             className="btn-quiet"
-            aria-label="Yönetici özetini yenile"
+            aria-label={summary ? "Yönetici özetini yenile" : "Yönetici özetini getir"}
           >
             <RefreshCw size={13} className={summaryBusy ? "animate-spin" : ""} aria-hidden />
-            Özeti yenile
+            {summary ? "Özeti yenile" : "Özeti getir"}
           </button>
         </div>
 
@@ -2697,7 +2761,11 @@ export function CommentsTab({ caseId }: { caseId: string }) {
             aria-label="Yorum metni"
             maxLength={4000}
           />
-          {error && <p className="text-[12px] text-danger">{error}</p>}
+          {error && (
+            <p role="alert" className="text-[12px] text-danger">
+              {error}
+            </p>
+          )}
           <button type="submit" disabled={busy || !body.trim()} className="btn-primary btn-sm">
             {busy ? "Kaydediliyor" : "Yorum ekle"}
           </button>

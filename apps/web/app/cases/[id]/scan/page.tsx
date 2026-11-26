@@ -10,8 +10,8 @@ function ScanPageInner() {
   const params = useSearchParams();
   const mode = params.get("mode") || undefined;
   return (
-    <ScanSessionProvider caseId={id}>
-      <ScanTab caseId={id} autoStart={params.get("start") === "1"} initialMode={mode} />
+    <ScanSessionProvider caseId={id} initialMode={mode}>
+      <ScanTab caseId={id} autoStart={params.get("start") === "1"} />
     </ScanSessionProvider>
   );
 }

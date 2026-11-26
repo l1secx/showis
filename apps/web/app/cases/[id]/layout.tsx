@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
 import { AlertTriangle, Download, Trash2, X } from "lucide-react";
 import { api, type CaseDetail } from "../../../lib/api";
+import { legalBasisLabel } from "../../../lib/case-labels";
 
 const TABS = [
   { key: "pool", label: "Havuz", href: "pool" },
@@ -23,12 +24,6 @@ const TABS = [
   { key: "audit", label: "Denetim", href: "audit" },
 ];
 
-const LEGAL_LABELS: Record<string, string> = {
-  consent: "Açık rıza",
-  legitimate_interest: "Meşru menfaat",
-  self_check: "Öz kontrol",
-};
-
 export default function CaseLayout({ children }: { children: React.ReactNode }) {
   const { id } = useParams<{ id: string }>();
   const pathname = usePathname();
@@ -41,6 +36,7 @@ export default function CaseLayout({ children }: { children: React.ReactNode }) 
   );
 
   const load = useCallback(() => {
+    setError(null);
     api.getCase(id).then(setCaseData).catch((e) => setError(e.message));
   }, [id]);
 
@@ -52,10 +48,13 @@ export default function CaseLayout({ children }: { children: React.ReactNode }) 
       const data = await api.exportCase(id);
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
       const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
+      const url = URL.createObjectURL(blob);
+      a.href = url;
       a.download = `showis-case-${id}.json`;
+      document.body.appendChild(a);
       a.click();
-      URL.revokeObjectURL(a.href);
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
     } catch (e: any) {
       setExportError({
         message: "Kayıt dışa aktarılamadı. Bağlantıyı kontrol edip yeniden deneyin.",
@@ -82,9 +81,17 @@ export default function CaseLayout({ children }: { children: React.ReactNode }) 
     return (
       <div
         role="alert"
-        className="rounded-[6px] border border-danger-line bg-danger-soft px-4 py-3 text-[13px] text-danger"
+        className="space-y-3 rounded-[6px] border border-danger-line bg-danger-soft px-4 py-3 text-[13px] text-danger"
       >
-        Vaka yüklenemedi: {error}
+        <p>Vaka yüklenemedi: {error}</p>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={load} className="btn-secondary btn-sm">
+            Yeniden dene
+          </button>
+          <Link href="/" className="btn-quiet btn-sm">
+            Vakalara dön
+          </Link>
+        </div>
       </div>
     );
   }
@@ -116,7 +123,7 @@ export default function CaseLayout({ children }: { children: React.ReactNode }) 
     caseData
       ? {
           label: "Hukuki dayanak",
-          value: LEGAL_LABELS[caseData.legal_basis] || caseData.legal_basis,
+          value: legalBasisLabel(caseData.legal_basis),
         }
       : null,
     caseData?.owner ? { label: "Sahip", value: caseData.owner } : null,

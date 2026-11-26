@@ -28,6 +28,7 @@ import {
   type ResearchSession,
 } from "../../../../lib/api";
 import { Markdown } from "../../../../components/Markdown";
+import { externalUrl } from "../../../../lib/safe-url";
 
 const STATUS_TR: Record<string, string> = {
   queued: "sırada",
@@ -160,6 +161,8 @@ function ResearchPageInner() {
   const [answerText, setAnswerText] = useState("");
   const prefilled = useRef(false);
   const esRef = useRef<EventSource | null>(null);
+  const sessionRequestRef = useRef(0);
+  const toolSeqRef = useRef(0);
 
   const activeStatus = session?.status;
   const isRunning =
@@ -183,12 +186,17 @@ function ResearchPageInner() {
 
   const loadSession = useCallback(
     async (sessionId: string) => {
+      const requestSeq = ++sessionRequestRef.current;
       try {
         const data = await api.getResearch(id, sessionId);
+        if (requestSeq !== sessionRequestRef.current) return null;
         setSession(data);
+        setError(null);
         return data;
       } catch (e: any) {
-        setError(e.message || "Araştırma oturumu yüklenemedi");
+        if (requestSeq === sessionRequestRef.current) {
+          setError(e.message || "Araştırma oturumu yüklenemedi");
+        }
         return null;
       }
     },
@@ -208,7 +216,6 @@ function ResearchPageInner() {
           ? requested
           : items[0]?.id || null;
         setSelectedId(initial);
-        if (initial) void loadSession(initial);
       })
       .catch((e: any) => !cancelled && setError(e.message || "Araştırma yüklenemedi"))
       .finally(() => !cancelled && setLoading(false));
@@ -265,7 +272,7 @@ function ResearchPageInner() {
         [
           ...current,
           {
-            key: `${d.agent}-${d.tool}-${current.length}`,
+            key: `${d.agent}-${d.tool}-${toolSeqRef.current++}`,
             agent: d.agent ?? null,
             role: d.role || "",
             tool: d.tool,
@@ -1072,9 +1079,9 @@ function ResearchPageInner() {
                               <ul className="mt-1 space-y-1">
                                 {message.citations.map((citation, index) => (
                                   <li key={index} className="text-[12px] text-ink-2">
-                                    {citation.url ? (
+                                    {externalUrl(citation.url) ? (
                                       <a
-                                        href={citation.url}
+                                        href={externalUrl(citation.url) as string}
                                         target="_blank"
                                         rel="noreferrer noopener"
                                         className="inline-flex items-center gap-1 text-accent-ink hover:underline max-sm:min-h-[40px]"

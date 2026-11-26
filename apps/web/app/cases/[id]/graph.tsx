@@ -11,11 +11,14 @@ import {
   Image as ImageIcon,
   Info,
   Layers,
+  Minus,
+  Plus,
   RotateCcw,
   Search,
   X,
 } from "lucide-react";
 import { api, type GraphData } from "../../../lib/api";
+import { externalUrl } from "../../../lib/safe-url";
 import {
   GraphCanvas,
   GraphContextMenu,
@@ -207,16 +210,9 @@ function writePrefs(caseId: string, prefs: GraphPrefs) {
   window.localStorage.setItem(prefsKey(caseId), JSON.stringify(prefs));
 }
 
-/** Yalnız http(s) URL'lerini tıklanabilir yap (javascript:/data: XSS koruması). */
+/** Yalnız mutlak http(s) URL'lerini tıklanabilir yap (javascript:/data:/file: koruması). */
 function safeUrl(url: string | null | undefined): string | null {
-  if (!url) return null;
-  try {
-    const parsed = new URL(url, "https://example.invalid");
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
-    return parsed.toString();
-  } catch {
-    return null;
-  }
+  return externalUrl(url);
 }
 
 function attrText(value: unknown): string {
@@ -676,9 +672,16 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
   }, [selectedId, selectedIds.length]);
 
   /* --- türetilmiş seçim verisi --- */
+  const nodeMap = useMemo(() => {
+    const map = new Map<string, (typeof nodes)[number]>();
+    for (const node of nodes) {
+      if (!map.has(node.id)) map.set(node.id, node);
+    }
+    return map;
+  }, [nodes]);
   const selectedNode = useMemo(
-    () => nodes.find((n) => n.id === selectedId) ?? null,
-    [nodes, selectedId]
+    () => (selectedId ? nodeMap.get(selectedId) ?? null : null),
+    [nodeMap, selectedId]
   );
 
   const selectedCluster = useMemo(
@@ -713,11 +716,11 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
         return {
           edge: e,
           outgoing,
-          other: nodes.find((n) => n.id === otherId) ?? null,
+          other: nodeMap.get(otherId) ?? null,
         };
       })
       .sort((a, b) => b.edge.confidence - a.edge.confidence);
-  }, [edges, nodes, selectedId, visibleEdgeIds]);
+  }, [edges, nodeMap, selectedId, visibleEdgeIds]);
 
   const hiddenLinkedCount = useMemo(() => {
     if (!selectedId) return 0;
@@ -977,7 +980,7 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
   const runContextAction = (action: ContextMenuAction) => {
     const targetId = menuTargetId;
     const selection = effectiveSelectionForMenu(targetId);
-    const targetNode = targetId ? nodes.find((node) => node.id === targetId) ?? null : null;
+    const targetNode = targetId ? nodeMap.get(targetId) ?? null : null;
 
     switch (action) {
       case "expand-neighbors": {
@@ -1227,6 +1230,24 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
               {multiClusters.length > 0 && ` · ${multiClusters.length} kimlik kümesi`}
               {layoutMs > 0 && ` — yerleşim ${layoutMs} ms`}
             </span>
+            <button
+              type="button"
+              onClick={() => canvasRef.current?.zoomBy(1.25)}
+              className="btn-secondary btn-sm"
+              aria-label="Grafiği yakınlaştır"
+              title="Yakınlaştır"
+            >
+              <Plus size={12} aria-hidden />
+            </button>
+            <button
+              type="button"
+              onClick={() => canvasRef.current?.zoomBy(0.8)}
+              className="btn-secondary btn-sm"
+              aria-label="Grafiği uzaklaştır"
+              title="Uzaklaştır"
+            >
+              <Minus size={12} aria-hidden />
+            </button>
             <button
               type="button"
               onClick={fitVisible}
@@ -1853,7 +1874,7 @@ export default function CaseGraph({ caseId }: { caseId: string }) {
             </p>
             <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-ink-2">
               {pathNodeIds.map((nodeId, index) => {
-                const node = nodes.find((item) => item.id === nodeId);
+                const node = nodeMap.get(nodeId);
                 return (
                   <span key={`${nodeId}-${index}`} className="inline-flex items-center gap-1.5">
                     {index > 0 && (

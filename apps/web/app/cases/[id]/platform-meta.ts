@@ -10,6 +10,8 @@
  *           marka renkleri (github, tiktok, medium…) için açık ton.
  */
 
+import type { Platform } from "../../../lib/types";
+
 export interface PlatformMeta {
   label: string;
   color: string;
@@ -18,7 +20,7 @@ export interface PlatformMeta {
 
 const NEUTRAL: PlatformMeta = { label: "bilinmeyen", color: "#7f8c8d", accent: "#94a3b8" };
 
-export const PLATFORM_META: Record<string, PlatformMeta> = {
+const PLATFORM_META_DEFINED = {
   // --- Derin connector'lar ---
   github: { label: "GitHub", color: "#24292f", accent: "#a9b8cb" },
   gitlab: { label: "GitLab", color: "#fc6d26", accent: "#fc6d26" },
@@ -97,7 +99,9 @@ export const PLATFORM_META: Record<string, PlatformMeta> = {
   // --- Genel ---
   web: { label: "web", color: "#3498db", accent: "#38bdf8" },
   unknown: NEUTRAL,
-};
+} satisfies Partial<Record<Platform, PlatformMeta>>;
+
+export const PLATFORM_META: Record<string, PlatformMeta> = PLATFORM_META_DEFINED;
 
 /** Bilinmeyen platformda güvenli fallback: ham değer + nötr renk. */
 export function platformMeta(platform: string | null | undefined): PlatformMeta {

@@ -148,7 +148,8 @@ export class InteractionController {
       this.mode = "node";
       this.dragNode = node;
       this.pressedEdge = null;
-      node.fixed = true;
+      // Sabitleme yalnız gerçek sürüklemede yapılır; tıklama seçimi düğümü
+      // force yerleşimine kilitlememeli.
       node.vx = 0;
       node.vy = 0;
       this.host.setCursor("grabbing");
@@ -182,12 +183,13 @@ export class InteractionController {
       this.host.setCamera(panBy(this.host.camera(), point.x - this.lastX, point.y - this.lastY));
       this.host.invalidate();
     } else if (this.mode === "node" && this.dragNode) {
+      if (!this.moved) return;
+      this.dragNode.fixed = true;
       const world = screenToWorldPoint(this.host.camera(), this.host.viewport(), point);
       this.dragNode.x = world.x;
       this.dragNode.y = world.y;
       this.dragNode.vx = 0;
       this.dragNode.vy = 0;
-      this.dragNode.fixed = true;
       this.host.nodeMoved(this.dragNode);
       this.host.invalidate();
     } else if (this.mode === "box") {

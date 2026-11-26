@@ -5,12 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowDown, Loader2, Plus, Search, Trash2, X } from "lucide-react";
 import { api, type CaseListItem, type CaseSort } from "../../lib/api";
-
-const LEGAL_LABELS: Record<string, string> = {
-  consent: "Açık rıza",
-  legitimate_interest: "Meşru menfaat",
-  self_check: "Öz kontrol",
-};
+import { legalBasisLabel } from "../../lib/case-labels";
 
 const CASE_STATUS_LABELS: Record<string, string> = {
   active: "Aktif",
@@ -96,6 +91,7 @@ export function CasesDashboard() {
   // Arama başlarken ilgi sıralamasına geç; kullanıcı başka sıralama seçtiyse
   // dokunma. Arama temizlenince varsayılan "En yeni"ye dön.
   const hadQueryRef = useRef(false);
+  const listRequestRef = useRef(0);
   useEffect(() => {
     const hadQuery = hadQueryRef.current;
     hadQueryRef.current = Boolean(debouncedQuery);
@@ -117,7 +113,9 @@ export function CasesDashboard() {
   // Filtre/sıralama değişince ilk sayfayı yükle.
   useEffect(() => {
     let cancelled = false;
+    const requestSeq = ++listRequestRef.current;
     setLoading(true);
+    setLoadingMore(false);
     setError(null);
     api
       .listCases({
@@ -128,18 +126,23 @@ export function CasesDashboard() {
         offset: 0,
       })
       .then((page) => {
-        if (cancelled) return;
+        if (cancelled || requestSeq !== listRequestRef.current) return;
         setItems(page.items);
         setTotal(page.total);
       })
-      .catch((e: Error) => !cancelled && setError(e.message))
-      .finally(() => !cancelled && setLoading(false));
+      .catch((e: Error) => {
+        if (!cancelled && requestSeq === listRequestRef.current) setError(e.message);
+      })
+      .finally(() => {
+        if (!cancelled && requestSeq === listRequestRef.current) setLoading(false);
+      });
     return () => {
       cancelled = true;
     };
   }, [debouncedQuery, statusFilter, sort]);
 
   const loadMore = async () => {
+    const requestSeq = listRequestRef.current;
     setLoadingMore(true);
     setError(null);
     try {
@@ -150,15 +153,16 @@ export function CasesDashboard() {
         limit: PAGE_SIZE,
         offset: items.length,
       });
+      if (requestSeq !== listRequestRef.current) return;
       setItems((prev) => {
         const seen = new Set(prev.map((c) => c.id));
         return [...prev, ...page.items.filter((c) => !seen.has(c.id))];
       });
       setTotal(page.total);
     } catch (e: any) {
-      setError(e.message);
+      if (requestSeq === listRequestRef.current) setError(e.message);
     } finally {
-      setLoadingMore(false);
+      if (requestSeq === listRequestRef.current) setLoadingMore(false);
     }
   };
 
@@ -325,7 +329,7 @@ export function CasesDashboard() {
           role="alert"
           className="rounded-[6px] border border-danger-line bg-danger-soft px-4 py-3 text-[13px] text-danger"
         >
-          API&apos;ye ulaşılamadı: {error}. API servisinin çalıştığından emin olun.
+          İşlem tamamlanamadı: {error}
         </div>
       )}
 
@@ -395,7 +399,7 @@ export function CasesDashboard() {
                     {CASE_STATUS_LABELS[c.status] || c.status}
                   </span>
                   <span className="text-[12px] text-ink-3">
-                    {LEGAL_LABELS[c.legal_basis] || c.legal_basis}
+                    {legalBasisLabel(c.legal_basis)}
                   </span>
                   {c.last_scan?.mode && (
                     <span className="numeric text-ink-3">{c.last_scan.mode}</span>
@@ -452,7 +456,7 @@ export function CasesDashboard() {
                         </p>
                       </td>
                       <td className="hidden max-w-[14rem] truncate text-ink-2 md:table-cell">
-                        {LEGAL_LABELS[c.legal_basis] || c.legal_basis}
+                        {legalBasisLabel(c.legal_basis)}
                       </td>
                       <td>
                         <span className="status text-ink-2">

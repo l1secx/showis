@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 import { Crosshair } from "lucide-react";
 
 const LINKS = [
@@ -10,11 +11,41 @@ const LINKS = [
   { href: "/settings", label: "Ayarlar" },
 ];
 
+type Health = "checking" | "online" | "offline";
+
 export function SiteNav() {
   const pathname = usePathname();
+  const [health, setHealth] = useState<Health>("checking");
+
+  useEffect(() => {
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const res = await fetch("/healthz", { cache: "no-store" });
+        const data = (await res.json().catch(() => ({}))) as { ok?: boolean };
+        if (!cancelled) setHealth(res.ok && data.ok ? "online" : "offline");
+      } catch {
+        if (!cancelled) setHealth("offline");
+      }
+    };
+    void check();
+    const timer = setInterval(check, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
+
+  const healthText =
+    health === "online" ? "Motor çevrimiçi" : health === "offline" ? "Motor çevrimdışı" : "Kontrol ediliyor";
+  const healthDot =
+    health === "online" ? "bg-ok" : health === "offline" ? "bg-danger" : "bg-ink-4";
 
   return (
-    <nav className="mx-auto flex h-14 w-full max-w-[1180px] items-center justify-between gap-3 px-5 lg:px-8">
+    <nav
+      aria-label="Ana gezinme"
+      className="mx-auto flex h-14 w-full max-w-[1180px] items-center justify-between gap-3 px-5 lg:px-8"
+    >
       <div className="flex items-center gap-4 sm:gap-6">
         <Link href="/" className="flex min-h-[40px] shrink-0 items-center gap-2.5">
           <span className="flex h-6 w-6 items-center justify-center text-accent">
@@ -46,9 +77,13 @@ export function SiteNav() {
         </div>
       </div>
 
-      <span className="hidden shrink-0 items-center gap-1.5 text-[12px] text-ink-3 sm:flex">
-        <span className="h-1.5 w-1.5 rounded-full bg-ok" aria-hidden />
-        Motor çevrimiçi
+      <span
+        className="hidden shrink-0 items-center gap-1.5 text-[12px] text-ink-3 sm:flex"
+        role="status"
+        aria-live="polite"
+      >
+        <span className={`h-1.5 w-1.5 rounded-full ${healthDot}`} aria-hidden />
+        {healthText}
       </span>
     </nav>
   );

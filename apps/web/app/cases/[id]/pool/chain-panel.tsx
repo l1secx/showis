@@ -9,6 +9,7 @@
 import { useState } from "react";
 import { GitBranch, Loader2 } from "lucide-react";
 import { api, type ChainNode, type ChainSummary } from "../../../../lib/api";
+import { externalUrl } from "../../../../lib/safe-url";
 
 const RELATION_TR: Record<string, string> = {
   proof: "doğrulanmış kanıt",
@@ -101,9 +102,9 @@ export function ChainPanel({ caseId, onDone }: { caseId: string; onDone: () => v
                   <span className={`w-12 shrink-0 tabular-nums ${trustTone(node.trust)}`}>
                     %{Math.round(node.trust * 100)}
                   </span>
-                  {node.url ? (
+                  {externalUrl(node.url) ? (
                     <a
-                      href={node.url}
+                      href={externalUrl(node.url) as string}
                       target="_blank"
                       rel="noreferrer noopener"
                       className="min-w-0 break-all font-medium text-ink hover:underline"

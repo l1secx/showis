@@ -31,6 +31,8 @@ export interface GraphCanvasHandle {
   getSelection(): string[];
   /** Klavye odağını düğüme taşır. */
   focusNode(id: string | null): void;
+  /** Görünüm merkezine göre yakınlaştırır (mobil araç çubuğu). */
+  zoomBy(factor: number): void;
   /** Düğüm konumları; açma/daraltma sırasında korunur. */
   getPositions(): Record<string, { x: number; y: number }>;
 }
@@ -122,6 +124,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   const preserveViewRef = useRef(false);
   const [summary, setSummary] = useState<ConnectedNode[]>([]);
   const [summaryDirty, setSummaryDirty] = useState(0);
+  const [focusedId, setFocusedId] = useState<string | null>(null);
   onSelectRef.current = onSelect;
   onSelectionChangeRef.current = onSelectionChange;
   onHoverRef.current = onHover;
@@ -152,6 +155,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       engine.on("contextmenu", (event) =>
         onContextMenuRef.current?.({ id: event.id, x: event.x, y: event.y })
       ),
+      engine.on("focus", (event) => setFocusedId(event.id)),
       engine.on("layout", (event) => {
         onLayoutRef.current?.({ name: event.name, ms: event.ms });
         setSummaryDirty((value) => value + 1);
@@ -267,6 +271,9 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       focusNode: (id: string | null) => {
         engineRef.current?.focusNode(id);
       },
+      zoomBy: (factor: number) => {
+        engineRef.current?.zoomBy(factor);
+      },
       getPositions: () => engineRef.current?.getPositions() ?? {},
     }),
     []
@@ -278,6 +285,9 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       : `En çok bağlantılı düğümler: ${summary
           .map((item) => `${item.label} (${item.degree} bağlantı)`)
           .join(", ")}.`;
+  const focusedNode = focusedId
+    ? data.nodes.find((node) => node.id === focusedId) ?? null
+    : null;
 
   return (
     <div className={className} style={{ position: "relative", overflow: "hidden", ...style }}>
@@ -303,6 +313,9 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
           bağlam menüsünü açar.
         </p>
       </div>
+      <p className="sr-only" role="status" aria-live="polite">
+        {focusedNode ? `Odak: ${focusedNode.label}` : ""}
+      </p>
     </div>
   );
 });

@@ -40,6 +40,7 @@ import {
   type TimelineCamera,
 } from "../../../../lib/timeline/viewport";
 import { drawTimeline, readTimelinePalette } from "../../../../lib/timeline/renderer";
+import { externalUrl } from "../../../../lib/safe-url";
 import { timelineStatusLabel } from "./labels";
 
 const DATE_FORMAT = new Intl.DateTimeFormat("tr-TR", {
@@ -258,14 +259,15 @@ export function TimelineView({ events }: TimelineViewProps) {
         if (!current) return current;
         if (event.time >= current.start && event.time <= current.end) return current;
         const span = windowMs(current);
-        return {
+        const next = {
           start: event.time - span / 2,
           end: event.time + span / 2,
           scrollY: current.scrollY,
         };
+        return range ? clampToRange(next, range) : next;
       });
     },
-    []
+    [range]
   );
 
   const focusCluster = useCallback(
@@ -662,6 +664,7 @@ function humanSpan(ms: number): string {
 }
 
 function TimelineDetail({ event }: { event: TimelineEvent | null }) {
+  const eventUrl = event ? externalUrl(event.url) : null;
   return (
     <section
       aria-labelledby="timeline-detail-title"
@@ -702,14 +705,14 @@ function TimelineDetail({ event }: { event: TimelineEvent | null }) {
               </div>
             )}
           </dl>
-          {event.url && (
+          {eventUrl && (
             <a
-              href={event.url}
+              href={eventUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="link inline-block break-all text-[12px]"
             >
-              {event.url}
+              {event?.url}
             </a>
           )}
         </div>

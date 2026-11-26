@@ -406,6 +406,8 @@ export default function SupplyChainPage() {
                                   type="button"
                                   className="btn-danger-quiet btn-sm"
                                   onClick={() => setNodeStatus(node, "rejected")}
+                                  aria-label={`${node.name} düğümünü reddet`}
+                                  title="Reddet"
                                 >
                                   <X size={12} aria-hidden />
                                 </button>
@@ -415,6 +417,8 @@ export default function SupplyChainPage() {
                               type="button"
                               className="btn-danger-quiet btn-sm"
                               onClick={() => removeNode(node)}
+                              aria-label={`${node.name} düğümünü sil`}
+                              title="Sil"
                             >
                               <Trash2 size={12} aria-hidden />
                             </button>
@@ -485,6 +489,10 @@ export default function SupplyChainPage() {
                               type="button"
                               className="btn-danger-quiet btn-sm"
                               onClick={() => removeEdge(edge)}
+                              aria-label={`${nodeNameById[edge.source_id] ?? edge.source_id} → ${
+                                nodeNameById[edge.target_id] ?? edge.target_id
+                              } ilişkisini sil`}
+                              title="Sil"
                             >
                               <Trash2 size={12} aria-hidden />
                             </button>

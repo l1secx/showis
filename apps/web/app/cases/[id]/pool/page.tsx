@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import {
   Check,
   ChevronDown,
@@ -229,6 +229,23 @@ function PivotMenu({
   const [pivots, setPivots] = useState<PivotInfo[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const menuRef = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
 
   const toggle = async () => {
     const next = !open;
@@ -268,11 +285,17 @@ function PivotMenu({
         onClick={toggle}
         title="Pivot"
         aria-expanded={open}
+        aria-haspopup="menu"
       >
         Pivot
       </button>
       {open && (
-        <span className="absolute right-0 z-10 mt-1 block w-64 rounded-panel border border-line-2 bg-overlay p-2 text-left text-[12px] shadow-popover">
+        <span
+          ref={menuRef}
+          role="menu"
+          aria-label="Pivot seçenekleri"
+          className="absolute right-0 z-10 mt-1 block w-64 rounded-panel border border-line-2 bg-overlay p-2 text-left text-[12px] shadow-popover"
+        >
           {pivots === null ? (
             <Loader2 size={12} className="animate-spin" aria-hidden />
           ) : pivots.length === 0 ? (
@@ -282,6 +305,7 @@ function PivotMenu({
               <button
                 key={pivot.id}
                 type="button"
+                role="menuitem"
                 disabled={busy !== null}
                 onClick={() => run(pivot)}
                 className="block w-full rounded-control px-2 py-1 text-left transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/25"
@@ -300,6 +324,9 @@ function PivotMenu({
 }
 
 async function sha1Hex(text: string): Promise<string> {
+  if (typeof crypto === "undefined" || !crypto.subtle) {
+    throw new Error("Parola kontrolü için HTTPS (güvenli bağlam) gerekir.");
+  }
   const data = new TextEncoder().encode(text);
   const digest = await crypto.subtle.digest("SHA-1", data);
   return Array.from(new Uint8Array(digest))
@@ -356,6 +383,7 @@ function PasswordCheck() {
             onChange={(event) => setPassword(event.target.value)}
             onKeyDown={(event) => event.key === "Enter" && run()}
             placeholder="Kontrol edilecek parola"
+            aria-label="Kontrol edilecek parola"
             className="input flex-1"
           />
           <button
@@ -367,16 +395,27 @@ function PasswordCheck() {
             {busy ? <Loader2 size={12} className="animate-spin" aria-hidden /> : "Kontrol et"}
           </button>
         </div>
-        {result && <p className="mt-2 font-medium text-ink">{result}</p>}
-        {error && <p className="mt-2 text-danger">{error}</p>}
+        {result && (
+          <p role="status" className="mt-2 font-medium text-ink">
+            {result}
+          </p>
+        )}
+        {error && (
+          <p role="alert" className="mt-2 text-danger">
+            {error}
+          </p>
+        )}
       </div>
     </details>
   );
 }
 
-export default function PoolPage() {
+function PoolPageInner() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const params = useSearchParams();
+  const initialQuery = (params.get("q") ?? "").trim();
+  const initialKind = params.get("kind") ?? "";
   const [items, setItems] = useState<PoolItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -388,13 +427,19 @@ export default function PoolPage() {
   const [chainSuggest, setChainSuggest] = useState<PoolItem | null>(null);
   const [chainBusy, setChainBusy] = useState(false);
   const [bulkBreach, setBulkBreach] = useState(false);
+  const [bulkBreachProgress, setBulkBreachProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
+  const bulkBreachCancelRef = useRef(false);
 
-  const [query, setQuery] = useState("");
-  const [appliedQuery, setAppliedQuery] = useState("");
-  const [kind, setKind] = useState("");
+  const [query, setQuery] = useState(initialQuery);
+  const [appliedQuery, setAppliedQuery] = useState(initialQuery);
+  const [kind, setKind] = useState(KINDS.includes(initialKind) ? initialKind : "");
   const [source, setSource] = useState("");
   const [status, setStatus] = useState("");
   const [offset, setOffset] = useState(0);
+  const loadSeqRef = useRef(0);
 
   // Gürültü önayarı: varsayılan kapalı (düşük kaliteli adaylar gizli),
   // tek anahtarla geri alınır. Yalnız istemci tarafında çalışır.
@@ -441,6 +486,7 @@ export default function PoolPage() {
   }, [items]);
 
   const load = useCallback(async () => {
+    const requestSeq = ++loadSeqRef.current;
     setLoading(true);
     setError(null);
     try {
@@ -452,6 +498,7 @@ export default function PoolPage() {
         limit: PAGE_SIZE,
         offset,
       });
+      if (requestSeq !== loadSeqRef.current) return;
       setItems(data.items);
       setTotal(data.total);
       // Son sayfa boşaldıysa (ör. toplu işlem sonrası) son dolu sayfaya dön.
@@ -467,9 +514,9 @@ export default function PoolPage() {
         return new Set([...prev].filter((itemId) => pending.has(itemId)));
       });
     } catch (e: any) {
-      setError(e.message || "Havuz yüklenemedi");
+      if (requestSeq === loadSeqRef.current) setError(e.message || "Havuz yüklenemedi");
     } finally {
-      setLoading(false);
+      if (requestSeq === loadSeqRef.current) setLoading(false);
     }
   }, [id, appliedQuery, kind, source, status, offset]);
 
@@ -646,15 +693,33 @@ export default function PoolPage() {
         setNotice("Havuzda e-posta kaydı yok.");
         return;
       }
+      bulkBreachCancelRef.current = false;
+      setBulkBreachProgress({ done: 0, total: emails.length });
+      let done = 0;
+      let failed = 0;
       for (const email of emails) {
-        await api.checkPoolBreach(id, email.id);
+        if (bulkBreachCancelRef.current) break;
+        try {
+          await api.checkPoolBreach(id, email.id);
+        } catch {
+          failed += 1;
+        }
+        done += 1;
+        setBulkBreachProgress({ done, total: emails.length });
       }
-      setNotice(`${emails.length} e-posta HIBP'de kontrol edildi.`);
+      const skipped = emails.length - done;
+      setNotice(
+        `${done} e-posta HIBP'de kontrol edildi` +
+          (failed ? `, ${failed} hata` : "") +
+          (skipped ? `, ${skipped} iptal edildi` : "") +
+          "."
+      );
       await load();
     } catch (e: any) {
       setError(e.message || "Toplu HIBP kontrolü başarısız");
     } finally {
       setBulkBreach(false);
+      setBulkBreachProgress(null);
     }
   };
 
@@ -856,8 +921,21 @@ export default function PoolPage() {
             ) : (
               <ShieldAlert size={12} aria-hidden />
             )}
-            E-postaları kontrol et
+            {bulkBreach && bulkBreachProgress
+              ? `Kontrol ediliyor (${bulkBreachProgress.done}/${bulkBreachProgress.total})`
+              : "E-postaları kontrol et"}
           </button>
+          {bulkBreach && (
+            <button
+              type="button"
+              onClick={() => {
+                bulkBreachCancelRef.current = true;
+              }}
+              className="btn-quiet btn-sm"
+            >
+              Durdur
+            </button>
+          )}
           <div className="ml-auto flex flex-wrap items-center gap-2">
             <button
               type="button"
@@ -1409,5 +1487,13 @@ export default function PoolPage() {
         onConfirm={() => void runBulk()}
       />
     </div>
+  );
+}
+
+export default function PoolPage() {
+  return (
+    <Suspense fallback={<p className="text-[13px] text-ink-3">Havuz yükleniyor</p>}>
+      <PoolPageInner />
+    </Suspense>
   );
 }

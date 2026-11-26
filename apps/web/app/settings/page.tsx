@@ -2,16 +2,14 @@
 
 import React, { useState, useEffect } from "react";
 import { Check, Loader2, Sparkles, Trash2, Zap } from "lucide-react";
-import { api, type AIProviderProfile, type AuthUser } from "../../lib/api";
-
-interface ProviderSetting {
-  id: string;
-  provider: string;
-  label?: string | null;
-  config: Record<string, any>;
-  secret_masked?: string | null;
-  enabled: boolean;
-}
+import {
+  api,
+  clearUserSession,
+  setUserSession,
+  type AIProviderProfile,
+  type AuthUser,
+  type ProviderSetting,
+} from "../../lib/api";
 
 const TABS = [
   { key: "github", label: "GitHub" },
@@ -57,18 +55,18 @@ export default function SettingsPage() {
 
   const saveUserToken = async () => {
     if (!userToken.trim()) return;
-    const response = await fetch("/api/session", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token: userToken.trim() }),
-    });
-    if (!response.ok) {
-      setStatusMsg({ type: "error", text: "Kullanıcı anahtarı geçersiz." });
-      return;
+    try {
+      const ok = await setUserSession(userToken.trim());
+      if (!ok) {
+        setStatusMsg({ type: "error", text: "Kullanıcı anahtarı geçersiz." });
+        return;
+      }
+      setStatusMsg({ type: "success", text: "Kullanıcı oturumu kuruldu." });
+      setUserToken("");
+      await refreshMe();
+    } catch {
+      setStatusMsg({ type: "error", text: "Sunucuya ulaşılamadı; kullanıcı oturumu kurulamadı." });
     }
-    setStatusMsg({ type: "success", text: "Kullanıcı oturumu kuruldu." });
-    setUserToken("");
-    await refreshMe();
   };
 
   const createUser = async () => {
@@ -111,11 +109,7 @@ export default function SettingsPage() {
 
   const fetchProviders = async () => {
     try {
-      const res = await fetch("/api/v1/settings/providers");
-      if (res.ok) {
-        const data = await res.json();
-        setProviders(data);
-      }
+      setProviders(await api.listProviderSettings());
     } catch {
       // API erişilemezse ayar formları boş kalır; sayfa çökmmez.
     } finally {
@@ -313,28 +307,21 @@ export default function SettingsPage() {
 
   const handleSave = async (providerKey: string) => {
     setStatusMsg(null);
-    const config: Record<string, any> = {};
+    const existing = getProvider(providerKey);
+    // Mevcut config'i koru: backend upsert mevcut config'i gönderilenle değiştirir.
+    const config: Record<string, any> = existing?.config ?? {};
 
     try {
-      const res = await fetch("/api/v1/settings/providers", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          provider: providerKey,
-          label: providerKey.toUpperCase(),
-          config,
-          secret: secretInput ? secretInput : undefined,
-          enabled: true,
-        }),
+      await api.upsertProviderSetting({
+        provider: providerKey,
+        label: providerKey.toUpperCase(),
+        config,
+        secret: secretInput ? secretInput : undefined,
+        enabled: existing?.enabled ?? true,
       });
-
-      if (res.ok) {
-        setStatusMsg({ type: "success", text: "Ayar kaydedildi." });
-        setSecretInput("");
-        fetchProviders();
-      } else {
-        setStatusMsg({ type: "error", text: "Ayarlar kaydedilirken hata oluştu." });
-      }
+      setStatusMsg({ type: "success", text: "Ayar kaydedildi." });
+      setSecretInput("");
+      fetchProviders();
     } catch (e: any) {
       setStatusMsg({ type: "error", text: e.message || "Bağlantı hatası" });
     }
@@ -349,10 +336,7 @@ export default function SettingsPage() {
     setTesting(true);
     setStatusMsg(null);
     try {
-      const res = await fetch(`/api/v1/settings/providers/${existing.id}/test`, {
-        method: "POST",
-      });
-      const data = await res.json();
+      const data = await api.testProviderSetting(existing.id);
       if (data.ok) {
         setStatusMsg({ type: "success", text: "Bağlantı doğrulandı." });
       } else {
@@ -403,7 +387,7 @@ export default function SettingsPage() {
           <button
             type="button"
             onClick={async () => {
-              await fetch("/api/session", { method: "DELETE" });
+              await clearUserSession();
               setUserToken("");
               setStatusMsg({ type: "success", text: "Kullanıcı oturumu kapatıldı." });
               await refreshMe();

@@ -7,7 +7,7 @@
  */
 
 // @ts-ignore -- Node `--test` ESM için .ts uzantısı zorunlu; apps/web/tsconfig.json allowImportingTsExtensions olmadan reddediyor.
-import { fitToView, screenRectToWorld, screenToWorld } from "./camera.ts";
+import { fitToView, screenRectToWorld, screenToWorld, zoomAt } from "./camera.ts";
 // @ts-ignore -- Aynı gerekçe.
 import type { Camera, GEdge, GNode, GraphData, Point, Rect, Size, Theme } from "./types.ts";
 // @ts-ignore -- Aynı gerekçe.
@@ -191,10 +191,9 @@ export class GraphEngine {
 
     this.canvas = document.createElement("canvas");
     this.canvas.style.display = "block";
-    this.canvas.style.outline = "none";
     this.canvas.style.touchAction = "none";
-    this.canvas.setAttribute("role", "img");
-    this.canvas.setAttribute("aria-label", "Varlık grafiği");
+    this.canvas.setAttribute("role", "application");
+    this.canvas.setAttribute("aria-label", "Varlık grafiği — klavyeyle gezilebilir");
     this.canvas.setAttribute(
       "aria-describedby",
       "graph-canvas-help graph-canvas-summary"
@@ -478,6 +477,24 @@ export class GraphEngine {
     this.renderer.setCamera(this.camera);
     this.refreshScene();
     this.emit("camera", { camera: { ...this.camera } });
+  }
+
+  /** Görünüm merkezine göre yakınlaştırır; dokunmatik araç çubuğu kullanır. */
+  zoomBy(factor: number): void {
+    if (this.destroyed || !Number.isFinite(factor) || factor <= 0) return;
+    const next = zoomAt(
+      this.camera,
+      this.viewport,
+      this.viewport.width / 2,
+      this.viewport.height / 2,
+      factor
+    );
+    this.userAdjusted = true;
+    this.camera = next;
+    this.renderer.setCamera(next);
+    this.refreshScene();
+    this.renderer.invalidate();
+    this.emit("camera", { camera: { ...next } });
   }
 
   /** Kamerayı düğüme ortalar; yakınlaştırma `minZoom` altına inmez. */

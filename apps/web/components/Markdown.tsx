@@ -2,6 +2,7 @@
 
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { safeLinkHref } from "../lib/safe-url";
 
 // Güvenli markdown: ham HTML işlenmez (react-markdown varsayılanı), `javascript:`
 // bağlantıları temizlenir; dış bağlantılar yeni sekmede ve noopener ile açılır.
@@ -16,16 +17,21 @@ export function Markdown({ children }: { children: string }) {
               <table>{children}</table>
             </div>
           ),
-          a: ({ href, children: label }) => (
-            <a
-              href={href}
-              target="_blank"
-              rel="noreferrer noopener"
-              className="text-accent-ink hover:underline"
-            >
-              {label}
-            </a>
-          ),
+          a: ({ href, children: label }) => {
+            const safeHref = safeLinkHref(href);
+            return safeHref ? (
+              <a
+                href={safeHref}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="text-accent-ink hover:underline"
+              >
+                {label}
+              </a>
+            ) : (
+              <span>{label}</span>
+            );
+          },
         }}
       >
         {children}
