@@ -57,6 +57,7 @@ async def _create_case(client) -> str:
             "name": "Butce Testi",
             "purpose": "Kendi hesabimi denetlemek icin",
             "legal_basis": "self_check",
+            "authorization_confirmed": True,
             "target": {"first_name": "Kerem", "last_name": "Boz", "hints": {}},
         },
     )

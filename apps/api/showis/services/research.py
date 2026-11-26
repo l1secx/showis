@@ -21,6 +21,7 @@ import hashlib
 import json
 import logging
 import time
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Iterable, Sequence
@@ -109,7 +110,7 @@ from showis_engine.policy import (
 )
 from showis_engine.scan_modes import budget_for_mode, norm_mode
 from showis_llm import LLMClient, LLMClientError
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -433,6 +434,16 @@ def _pending_question(
     return {"question_id": pending.id, "question": pending.question, "options": pending.options}
 
 
+def identity_url_flags(identity: IdentityProfile) -> list[tuple[str, bool]]:
+    """Ön okunacak URL'ler ve robots istisnası bayrağı.
+
+    DEC-001: yalnız kullanıcının açıkça verdiği seed/havuz URL'leri `trusted`
+    olabilir; AI/tarama kaynaklı keşifler robots kurallarına tabidir.
+    """
+    trusted = set(identity.trusted_urls)
+    return [(url, url in trusted) for url in identity.urls[:6]]
+
+
 def session_to_dict(
     session: ResearchSession,
     *,
@@ -512,6 +523,7 @@ async def _set_activity(
     """Kısa canlı durum metnini kaydeder ve SSE ile yayınlar."""
     stats["activity"] = activity[:180]
     session.stats = {**stats}
+    session.heartbeat_at = _now()
     await db.commit()
     await research_broadcaster.broadcast(
         session.id,
@@ -527,6 +539,8 @@ async def _set_status(
     session.error = error
     if status == "running" and session.started_at is None:
         session.started_at = _now()
+    if status in {"queued", "running", "awaiting_user"}:
+        session.heartbeat_at = _now()
     if status in {"completed", "failed", "cancelled"}:
         session.finished_at = _now()
     await db.commit()
@@ -1181,6 +1195,9 @@ class ResearchRuntime:
 
     def interrupted(self) -> bool:
         return bool(self.control and self.control.interrupt)
+
+    def cancelled(self) -> bool:
+        return bool(self.control and self.control.cancelled)
 
     # ------------------------------------------------------------------
     # Yardımcılar
@@ -3825,8 +3842,8 @@ async def _run_loop(
             # doğrudan oku. Linktree gibi toplayıcılar burada hemen işlenir;
             # böylece sayfa bütçesi başka aramalara kalsa da hedefin
             # bağlantıları havuza girer.
-            for url in identity.urls[:6]:
-                await runtime.fetch(url, reason="Seed/havuz URL'si", trusted=True)
+            for url, trusted in identity_url_flags(identity):
+                await runtime.fetch(url, reason="Seed/havuz URL'si", trusted=trusted)
             await runtime.persist()
             # Onaylı hesaplardan sahip beyanlı bağlantı zinciri: arama motoruna
             # gerek kalmadan diğer hesapları bulur; doğrulanan kullanıcı adları
@@ -3858,6 +3875,9 @@ async def _run_loop(
             await _run_chain_phase(runtime, verify_leads=True)
             identity = runtime.identity
             await _run_breach_checks(runtime)
+            if runtime.cancelled():
+                await _set_status(db, session, "cancelled")
+                return
         if not resume:
             stats["waves"] = 1
         stats["coverage"] = runtime.coverage()
@@ -3880,6 +3900,10 @@ async def _run_loop(
                 stored = await research_state.get_state(db, session.id)
                 if stored is not None and stored.interrupt:
                     runtime.control.request_interrupt()
+            if runtime.cancelled():
+                stats["wave"] = wave
+                await _set_status(db, session, "cancelled")
+                return
             if runtime.interrupted():
                 await _park_interrupted(runtime, next_wave=wave)
                 return
@@ -3932,6 +3956,11 @@ async def _run_loop(
             before_findings = int(stats.get("findings", 0))
             before_leads = len(runtime.leads)
             await _run_subagent_wave(runtime, specs, wave=wave)
+            if runtime.cancelled():
+                stats["wave"] = wave
+                stats["waves"] = wave
+                await _set_status(db, session, "cancelled")
+                return
             await runtime.persist()
             await runtime.drain_pages()
             await runtime.persist()
@@ -4067,6 +4096,7 @@ def _make_question_hook(session_id: str):
             if row is None:
                 return
             row.status = "awaiting_user"
+            row.heartbeat_at = datetime.now(timezone.utc)
             row.stats = {**(row.stats or {}), "activity": "Analistin yanıtı bekleniyor"}
             await research_state.save_pending_question(
                 db,
@@ -4111,6 +4141,7 @@ def _make_answered_hook(session_id: str):
                 return
             if row.status == "awaiting_user":
                 row.status = "running"
+            row.heartbeat_at = datetime.now(timezone.utc)
             await research_state.clear_pending_question(db, session_id)
             db.add(
                 ResearchMessage(
@@ -4129,6 +4160,32 @@ def _make_answered_hook(session_id: str):
         )
 
     return hook
+
+
+async def _research_heartbeat_loop(session_id: str, interval: float = 60.0) -> None:
+    """Çalışan araştırma oturumunun canlılık damgasını periyodik günceller.
+
+    Uzun LLM/dalga çağrıları sırasında `_set_activity` çalışmayabilir; restart
+    kurtarması canlı oturumu kesmesin diye bağımsız döngü gerekir.
+    """
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            async with task_session() as beat_db:
+                await beat_db.execute(
+                    update(ResearchSession)
+                    .where(
+                        ResearchSession.id == session_id,
+                        ResearchSession.status.in_(("queued", "running", "awaiting_user")),
+                    )
+                    .values(heartbeat_at=_now())
+                    .execution_options(synchronize_session=False)
+                )
+                await beat_db.commit()
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - canlılık damgası oturumu düşürmesin
+            logger.debug("Research heartbeat yazilamadi", exc_info=True)
 
 
 async def run_research_session(session_id: str) -> None:
@@ -4156,6 +4213,7 @@ async def run_research_session(session_id: str) -> None:
         control = register_control(session.id)
         control.on_question = _make_question_hook(session.id)
         control.on_answered = _make_answered_hook(session.id)
+        heartbeat_task = asyncio.create_task(_research_heartbeat_loop(session.id))
         try:
             selected_model = str((session.stats or {}).get("llm_model") or "").strip()
             client = await build_llm_client(
@@ -4258,6 +4316,17 @@ async def run_research_session(session_id: str) -> None:
         except (ResearchError, AIProviderValidationError) as exc:
             logger.info("Arastirma tamamlanamadi (session=%s): %s", session_id, exc)
             await _set_status(db, session, "failed", error=str(exc)[:1000])
+        except asyncio.CancelledError:
+            # Zarif kapanış (API shutdown): oturum `running` kalıp yeni araştırmayı
+            # engellemesin; restart kurtarması da aynı duruma düşürür.
+            logger.info("Arastirma gorevi iptal edildi (session=%s)", session_id)
+            try:
+                await asyncio.shield(
+                    _set_status(db, session, "interrupted", error="süreç durduruldu")
+                )
+            except Exception:  # noqa: BLE001 - iptal yolunda durum yazımı best-effort
+                logger.debug("Arastirma iptal durumu yazilamadi", exc_info=True)
+            raise
         except Exception as exc:  # noqa: BLE001 - arka plan görevi sessizce ölmesin
             logger.error(
                 "Arastirma beklenmeyen hata (session=%s): %s", session_id, type(exc).__name__
@@ -4266,12 +4335,18 @@ async def run_research_session(session_id: str) -> None:
                 db, session, "failed", error=f"beklenmeyen hata ({type(exc).__name__})"
             )
         finally:
+            heartbeat_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat_task
             release_control(session.id)
 
 
 async def cancel_research_session(db: AsyncSession, session: ResearchSession) -> None:
     if session.status in {"completed", "failed", "cancelled"}:
         return
+    control = get_control(session.id)
+    if control is not None:
+        control.request_cancel()
     await _set_status(db, session, "cancelled")
 
 

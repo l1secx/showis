@@ -180,6 +180,7 @@ class ApiHarness:
                 "name": name,
                 "purpose": purpose,
                 "legal_basis": "self_check",
+                "authorization_confirmed": True,
                 "retention_days": retention_days,
                 "target": {"first_name": first_name, "last_name": last_name, "hints": {}},
                 "seeds": [{"platform": "github", "username": "test_smoke"}],
@@ -774,7 +775,9 @@ async def test_planner_gorevleri_ayni_entity_i_cogaltmaz(api: ApiHarness):
             .all()
         )
     assert duplicated == [], f"ayni URL birden fazla entity satiri: {duplicated}"
-    assert shared_ids == ["web:shared_handle"], shared_ids
+    from showis.services.scanner import scoped_entity_id
+
+    assert shared_ids == [scoped_entity_id(case_id, "web:shared_handle")], shared_ids
 
 
 @pytest.mark.asyncio

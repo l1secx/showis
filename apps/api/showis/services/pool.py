@@ -223,8 +223,26 @@ async def create_item(
         provenance=dict(provenance or {}),
         created_by=created_by,
     )
-    db.add(item)
-    await db.flush()
+    try:
+        # Eşzamanlı yazımda unique constraint yarışı olabilir (scanner + research +
+        # API aynı değeri ekleyebilir). Savepoint ile düşen insert'i izole et ve
+        # kazanan satırı döndür; çağırana 500 sızmasın.
+        async with db.begin_nested():
+            db.add(item)
+            await db.flush()
+    except IntegrityError:
+        existing = (
+            await db.execute(
+                select(PoolItem).where(
+                    PoolItem.case_id == case_id,
+                    PoolItem.kind == normalized_kind,
+                    PoolItem.normalized == normalized,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            return existing, False
+        raise
     return item, True
 
 

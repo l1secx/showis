@@ -21,6 +21,7 @@ async def test_case_crud_and_export(client):
             "name": "Test Vaka",
             "purpose": "entegrasyon testi",
             "legal_basis": "self_check",
+            "authorization_confirmed": True,
             "retention_days": 7,
             "target": {"first_name": "Test", "last_name": "Kisi", "hints": {"city": "Ankara"}},
             "seeds": [{"platform": "github", "username": "testuser"}],
@@ -96,6 +97,7 @@ async def test_delete_case_removes_evidence_files(client, tmp_path, monkeypatch)
             "name": "Kanit Vaka",
             "purpose": "silme testi",
             "legal_basis": "self_check",
+            "authorization_confirmed": True,
             "target": {"first_name": "Kanit", "last_name": "Kisi", "hints": {}},
         },
     )
@@ -255,4 +257,6 @@ async def test_case_owner_ve_yorumlar(client):
     comments = (await client.get(f"/api/v1/cases/{case_id}/comments")).json()
     assert len(comments) == 1
     assert comments[0]["body"] == "İlk inceleme notu"
-    assert comments[0]["author"] == "analist-1"
+    # V-005/B-012: yazar istemci alanından değil, doğrulanmış aktörden gelir
+    # (paylaşılan token yolu aktörü `api-token` yapar).
+    assert comments[0]["author"] == "api-token"

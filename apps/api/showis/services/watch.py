@@ -316,6 +316,13 @@ async def run_due_watches(db: AsyncSession, *, limit: int = MAX_CASES_PER_TICK) 
             await db.execute(
                 select(Case)
                 .where(Case.monitor_enabled.is_(True), Case.status == "active")
+                # En uzun süredir izlenmeyen (veya hiç izlenmeyen) vakalar önce:
+                # sabit `limit` ilk N vakada takılıp kalanları açlığa düşürmesin.
+                .order_by(
+                    Case.monitor_last_scan_at.is_not(None),
+                    Case.monitor_last_scan_at.asc(),
+                    Case.id.asc(),
+                )
                 .limit(limit)
             )
         )

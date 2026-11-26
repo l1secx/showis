@@ -22,7 +22,7 @@ from showis.core.security import (
 )
 from showis.db.models import ApiUser
 from showis.db.session import get_db
-from showis.services.audit import record_audit
+from showis.services.audit import client_ip_from_forwarded, record_audit
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -125,17 +125,17 @@ def _basic_credentials(request: Request) -> tuple[str, str] | None:
     return username, password
 
 
-@router.api_route("/edge", methods=["GET", "POST"])
-async def edge_auth(
-    request: Request, response: Response, db: AsyncSession = Depends(get_db)
+async def _edge_auth_impl(
+    request: Request, response: Response, db: AsyncSession
 ) -> Response:
     """Caddy `forward_auth` ucu: Basic kimliği doğrular, audit ve limit uygular."""
     credentials = _basic_credentials(request)
     username = (credentials[0] if credentials else "")[:128]
     password = (credentials[1] if credentials else "")[:256]
-    client = request.headers.get("x-forwarded-for", "").split(",")[-1].strip()
-    if not client:
-        client = request.client.host if request.client else "unknown"
+    # Güvenilir proxy modeli: peer güvenilirse yalnız Caddy'nin yönettiği XFF;
+    # istemcinin gönderebildiği X-Real-IP edge anahtarında yok sayılır (T17-03).
+    peer = request.client.host if request.client else None
+    client = client_ip_from_forwarded(request.headers, peer) or "unknown"
     user_key = f"user:{username}"
     ip_key = f"ip:{client}"
     if _edge_limited(user_key) or _edge_limited(ip_key, _EDGE_MAX_FAILURES_PER_IP):
@@ -193,6 +193,22 @@ async def edge_auth(
     response.headers["X-Actor"] = username
     response.status_code = status.HTTP_204_NO_CONTENT
     return response
+
+
+@router.get("/edge")
+async def edge_auth_get(
+    request: Request, response: Response, db: AsyncSession = Depends(get_db)
+) -> Response:
+    """GET varyantı (Caddy forward_auth varsayılanı)."""
+    return await _edge_auth_impl(request, response, db)
+
+
+@router.post("/edge")
+async def edge_auth_post(
+    request: Request, response: Response, db: AsyncSession = Depends(get_db)
+) -> Response:
+    """POST varyantı (forward_auth `method POST` yapılandırması)."""
+    return await _edge_auth_impl(request, response, db)
 
 
 class UserCreate(BaseModel):

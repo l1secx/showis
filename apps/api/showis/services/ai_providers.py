@@ -74,7 +74,21 @@ def available_presets() -> dict[str, dict[str, Any]]:
     }
 
 
+def _normalize_preset(value: Any) -> str:
+    """Preset adını doğrular; bilinmeyen ad 422'ye dönüşür (P-018).
+
+    `showis_llm.get_preset` geriye uyumluluk için bilinmeyende `opencode-go`
+    döndürür; API katmanı bu sessiz yönlendirmeye izin vermez (sır yanlış
+    sağlayıcıya gitmesin).
+    """
+    key = str(value or "custom").strip().lower()
+    if key not in PRESETS and key != "custom":
+        raise AIProviderValidationError(f"bilinmeyen preset: {value}")
+    return key
+
+
 def validate_config(config: dict[str, Any] | None, *, preset: str) -> dict[str, Any]:
+    preset_key = _normalize_preset(preset)
     if config is None:
         config = {}
     if not isinstance(config, dict):
@@ -106,14 +120,18 @@ def validate_config(config: dict[str, Any] | None, *, preset: str) -> dict[str, 
             raise AIProviderValidationError(f"config.{key} cok uzun")
         cleaned[key] = value
 
-    if preset == "custom":
+    if "preset" in cleaned:
+        # config içindeki preset de doğrulanır; sessiz opencode-go yönlendirmesi yok.
+        cleaned["preset"] = _normalize_preset(cleaned["preset"])
+
+    if preset_key == "custom":
         if not cleaned.get("base_url") or not cleaned.get("model"):
             raise AIProviderValidationError(
                 "ozel profil icin base_url ve model zorunlu"
             )
         fallback = get_preset("opencode-go")
     else:
-        fallback = get_preset(preset)
+        fallback = get_preset(preset_key)
     raw_base_url = cleaned.get("base_url") or fallback.base_url
     try:
         cleaned["base_url"] = validate_base_url(raw_base_url)
@@ -255,9 +273,7 @@ async def create_provider(
     roles: dict[str, Any] | None = None,
 ) -> AIProvider:
     clean_name = validate_name(name)
-    preset_key = str(preset or "custom").strip().lower()
-    if preset_key not in PRESETS and preset_key != "custom":
-        raise AIProviderValidationError(f"bilinmeyen preset: {preset}")
+    preset_key = _normalize_preset(preset)
     cleaned = validate_config(config, preset=preset_key)
     await _validate_secret(secret)
     if activate and not secret:
@@ -318,15 +334,14 @@ async def update_provider(
             changed.append("name")
 
     if preset is not None:
-        preset_key = str(preset).strip().lower()
-        if preset_key not in PRESETS and preset_key != "custom":
-            raise AIProviderValidationError(f"bilinmeyen preset: {preset}")
+        preset_key = _normalize_preset(preset)
         provider.preset = preset_key
         changed.append("preset")
 
     previous_url = str((provider.config or {}).get("base_url") or DEFAULT_BASE_URL)
     if config is not None:
-        cleaned = validate_config(config, preset=provider.preset)
+        # Kolondaki preset legacy/bozuksa sessizce opencode-go'ya düşme.
+        cleaned = validate_config(config, preset=_normalize_preset(provider.preset))
         await _guard_base_url(cleaned["base_url"])
         provider.config = cleaned
         changed.append("config")

@@ -8,9 +8,9 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from showis.core.security import get_actor
-from showis.db.models import Case, PoolItem
+from showis.db.models import PoolItem
 from showis.db.session import get_db
-from showis.services.audit import record_request_audit
+from showis.services.audit import record_request_audit, record_request_audit_safe
 from showis.services.breach import BreachError, check_email
 from showis.services.pool import (
     MAX_BULK_ITEMS,
@@ -102,13 +102,7 @@ def _parse_csv(raw: str | None, allowed: frozenset[str], field: str) -> list[str
     return list(dict.fromkeys(values))
 
 
-async def _require_case(db: AsyncSession, case_id: str) -> Case:
-    case = (
-        await db.execute(select(Case).where(Case.id == case_id))
-    ).scalar_one_or_none()
-    if case is None:
-        raise HTTPException(status_code=404, detail="Case not found")
-    return case
+from .common import require_case as _require_case  # noqa: E402
 
 
 async def _require_item(db: AsyncSession, case_id: str, item_id: str) -> PoolItem:
@@ -118,7 +112,7 @@ async def _require_item(db: AsyncSession, case_id: str, item_id: str) -> PoolIte
         )
     ).scalar_one_or_none()
     if item is None:
-        raise HTTPException(status_code=404, detail="Pool item not found")
+        raise HTTPException(status_code=404, detail="Havuz kaydı bulunamadı")
     return item
 
 
@@ -190,7 +184,7 @@ async def add_pool_item(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     await db.commit()
     await db.refresh(item)
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="pool.item.create" if created else "pool.item.merge",
@@ -266,7 +260,7 @@ async def breach_check(
     item.attributes = attributes
     await db.commit()
     await db.refresh(item)
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="pool.breach_check",
@@ -289,7 +283,6 @@ async def update_pool_item(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    await _require_case(db, case_id)
     case = await _require_case(db, case_id)
     item = await _require_item(db, case_id, item_id)
     changed: list[str] = []
@@ -327,7 +320,7 @@ async def update_pool_item(
         mark_reasoning_stale(case)
     await db.commit()
     await db.refresh(item)
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="pool.item.update",
@@ -353,7 +346,7 @@ async def delete_pool_item(
     # Havuzdan öğe kalkınca mevcut ilişki/hipotez çıktıları bayatlar.
     mark_reasoning_stale(case)
     await db.commit()
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="pool.item.delete",

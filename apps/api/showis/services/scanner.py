@@ -1,6 +1,8 @@
 import asyncio
+import hashlib
 import logging
 import re
+import time
 import uuid
 from collections import deque
 from contextlib import suppress
@@ -49,6 +51,7 @@ from showis_contracts import (
     Edge,
     Entity,
     EntityType,
+    FindingStatus,
     Observation,
     Platform,
     QueryPlan,
@@ -56,8 +59,10 @@ from showis_contracts import (
     Seed,
     Target,
     TaskSpec,
+    make_finding_id,
 )
 from showis_engine.authenticity import compute_authenticity
+from showis_engine.edge_ids import short_edge_id
 from showis_engine.http import (
     BudgetExceededError,
     HttpClient,
@@ -67,7 +72,6 @@ from showis_engine.http import (
 )
 from showis_engine.identity_edges import (
     build_identity_edges,
-    db_safe_edge_id,
     edges_by_type,
     entity_platform_key,
     pair_key,
@@ -163,6 +167,11 @@ class _TaskRunStats:
 #: istisnalar 0.5'te kalır ve tek başına skoru şişirmez.
 MIN_TRUSTED_SOURCE_CONFIDENCE = 0.6
 
+#: Çalışan taramanın canlılık damgası periyodu (sn). Stale recovery bu damgayı
+#: görürse taramayı kesmez; O3 duvar bütçesi (1800 sn) eşiğe eşit olduğundan
+#: damga olmadan canlı tarama ikinci kez başlatılabiliyordu.
+_HEARTBEAT_INTERVAL_SECONDS = 30.0
+
 
 def _entity_username(entity: Entity) -> str:
     """Entity icin normalize kullanici adi (karsilastirma icin)."""
@@ -217,6 +226,73 @@ def _safe_platform(value: str) -> Platform:
         return Platform(value)
     except ValueError:
         return Platform.UNKNOWN
+
+
+def clamp_machine_finding_status(status: FindingStatus) -> FindingStatus:
+    """Otomatik üretim `confirmed` yazamaz; onay yalnız kullanıcı kararıdır.
+
+    DEC-002: resolver skor eşiği `confirmed` üretse bile API katmanı bunu
+    `candidate`'a indirir (kullanıcı onaysız confirmed invariant'ı).
+    """
+    if status == FindingStatus.CONFIRMED:
+        return FindingStatus.CANDIDATE
+    return status
+
+
+_SCOPED_ENTITY_RE = re.compile(r"~c[0-9a-f]{8}$")
+
+
+def scoped_entity_id(case_id: str, raw_id: str) -> str:
+    """Entity kimliğini case kapsamına alır (DEC-010, P-005).
+
+    Gelen kimlikte `~c<8hex>` soneki varsa **hangi case'e ait olduğuna
+    güvenilmez** (T17-01): sonek atılır ve kimlik bu case için yeniden üretilir.
+    Böylece başka case'in kimliği bu case'e taşınamaz. Biçimsiz kimlikler
+    olduğu gibi kalır; 96 karakter sınırında deterministik hash'e düşülür.
+    """
+    text = str(raw_id or "")
+    platform, separator, identifier = text.partition(":")
+    if not separator or not identifier:
+        return text
+    base_identifier = _SCOPED_ENTITY_RE.sub("", identifier)
+    if not base_identifier:
+        return text
+    digest = hashlib.sha1(str(case_id).encode("utf-8")).hexdigest()[:8]
+    scoped = f"{platform}:{base_identifier}~c{digest}"
+    if len(scoped) <= 96:
+        return scoped
+    digest = hashlib.sha1(f"{case_id}|{base_identifier}".encode("utf-8")).hexdigest()[:16]
+    return f"{platform}:{digest}"
+
+
+def scoped_finding_id(case_id: str, entity_id: str) -> str:
+    """Bulgu kimliğini case kapsamına alır.
+
+    `entity_id` zaten case kapsamlıdır (`scoped_entity_id`); burada `case_id`
+    tekrar eklenirse kimlik çift hash'lenir. Bu yüzden kapsam yalnız entity
+    kimliğinden türetilir; `case_id` imza uyumu için korunur.
+    """
+    return make_finding_id(entity_id)
+
+
+def scoped_edge_id(case_id: str, raw_edge_id: str) -> str:
+    """Kenar kimliğini case kapsamına alır; `short_edge_id` ≤27 karakter.
+
+    `ec:` önekiyle gelen kimlik "zaten kapsanmış" sayılıp **güvenilmez**
+    (T17-01); her durumda bu case için yeniden hash'lenir.
+    """
+    return short_edge_id("ec", str(case_id), str(raw_edge_id))
+
+
+def scoped_edge(case_id: str, edge: Edge) -> Edge:
+    """Edge'in kimliğini ve iki ucunu case kapsamına taşır."""
+    return edge.model_copy(
+        update={
+            "id": scoped_edge_id(case_id, edge.id),
+            "source_entity_id": scoped_entity_id(case_id, edge.source_entity_id),
+            "target_entity_id": scoped_entity_id(case_id, edge.target_entity_id),
+        }
+    )
 
 
 def _merge_entity(dst: Entity, src: Entity) -> None:
@@ -498,6 +574,32 @@ class ScannerService:
         ).scalar_one_or_none()
         return status == "cancelled"
 
+    async def _touch_heartbeat(self, db: AsyncSession, scan_id: str) -> None:
+        """Çalışan taramanın canlılık damgasını günceller (stale recovery için)."""
+        await db.execute(
+            update(Scan)
+            .where(Scan.id == scan_id, Scan.status == "running")
+            .values(heartbeat_at=datetime.now(timezone.utc))
+            .execution_options(synchronize_session=False)
+        )
+        await db.commit()
+
+    async def _fail_scan_before_start(
+        self, db: AsyncSession, scan_id: str, reason: str
+    ) -> None:
+        """Erken dönüşte taramayı `failed` işaretler (kuyrukta asılı kalmasın)."""
+        res = await db.execute(select(Scan).where(Scan.id == scan_id))
+        scan = res.scalar_one_or_none()
+        if scan is None or scan.status not in ("queued", "running"):
+            return
+        scan.status = "failed"
+        scan.finished_at = datetime.now(timezone.utc)
+        scan.stats = {**(scan.stats or {}), "error": reason}
+        await db.commit()
+        await event_broadcaster.broadcast(
+            scan.id, "scan.failed", {"status": "failed", "error": reason}
+        )
+
     def _planner_task_specs(
         self,
         query_plan: QueryPlan,
@@ -590,11 +692,13 @@ class ScannerService:
         case_res = await db.execute(select(Case).where(Case.id == scan.case_id))
         case = case_res.scalar_one_or_none()
         if not case:
+            await self._fail_scan_before_start(db, scan_id, "case_missing")
             return
 
         target_res = await db.execute(select(DbTarget).where(DbTarget.case_id == case.id))
         db_target = target_res.scalar_one_or_none()
         if not db_target:
+            await self._fail_scan_before_start(db, scan_id, "target_missing")
             return
 
         # Prepare contracts (DB NULL'ları kontratta "" olur — handle hedefinde
@@ -650,7 +754,7 @@ class ScannerService:
             await db.execute(
                 update(Scan)
                 .where(Scan.id == scan.id, Scan.status.in_(("queued", "running")))
-                .values(status="running", started_at=started_at)
+                .values(status="running", started_at=started_at, heartbeat_at=started_at)
                 .execution_options(synchronize_session=False)
             ),
         )
@@ -827,6 +931,8 @@ class ScannerService:
             edge_map=edge_map,
             seed_emails=seed_emails,
         )
+        # Görev döngüsü bitti; bulgu/kanıt yazımı da uzun sürebilir: damgayı tazele.
+        await self._touch_heartbeat(db, scan.id)
         executed_tasks_count = run_stats.executed
         http_requests_count = run_stats.http_requests
         total_observations = run_stats.total_observations
@@ -893,19 +999,22 @@ class ScannerService:
         identity_edges = build_identity_edges(all_entities)
         seen_pairs = {pair_key(edge) for edge in identity_edges}
         for edge in identity_edges:
-            edge_map[edge.id] = edge
+            scoped = scoped_edge(case.id, edge)
+            edge_map[scoped.id] = scoped
         # Mevcut avatar eslesmesi korunur; kimlik modulunun urettigi ciftler tekrar eklenmez.
         for ent in all_entities:
             for edge in build_cross_link_edges(ent, all_entities):
                 if pair_key(edge) in seen_pairs:
                     continue
                 seen_pairs.add(pair_key(edge))
-                edge_map[db_safe_edge_id(edge.id)] = edge
+                scoped = scoped_edge(case.id, edge)
+                edge_map[scoped.id] = scoped
         for edge in build_avatar_match_edges(all_entities):
             if pair_key(edge) in seen_pairs:
                 continue
             seen_pairs.add(pair_key(edge))
-            edge_map[db_safe_edge_id(edge.id)] = edge
+            scoped = scoped_edge(case.id, edge)
+            edge_map[scoped.id] = scoped
 
         # Step 2b: Entity'leri DB'ye toplu yaz + edge'leri persist et
         known_entity_ids = set(entity_map.keys())
@@ -951,12 +1060,18 @@ class ScannerService:
 
         await self._write_findings(db, scan, case, target, list(entity_map.values()), seed_emails)
         await self._sync_entities_to_pool(db, scan, list(entity_map.values()))
+        await self._touch_heartbeat(db, scan.id)
 
         # Final durum: KOSULLU UPDATE — DB'de `cancelled` yazildiysa `completed`
         # ile ezilmez (SEC-06). Istatistikler her durumda yazilir.
         # Tarama anlık görüntüsü: sonraki taramayla diff/alarm için.
+        # Yalnız BU taramanın bulguları (önceki taramaların kayıtları karışmasın).
         snapshot_findings = (
-            await db.execute(select(DbFinding).where(DbFinding.case_id == case.id))
+            await db.execute(
+                select(DbFinding).where(
+                    DbFinding.case_id == case.id, DbFinding.scan_id == scan.id
+                )
+            )
         ).scalars().all()
         if str(scan.mode).upper() in {"O2", "O3"}:
             try:
@@ -970,7 +1085,7 @@ class ScannerService:
             "total_entities": len(all_entities),
             "total_edges": len(edge_map),
             "edges_by_type": edges_by_type(list(edge_map.values())),
-            "total_findings": len(all_entities),
+            "total_findings": len(snapshot_findings),
             "skipped_tasks": len(leftover),
             "cancelled_tasks": run_stats.cancelled_tasks,
             "snapshot": {
@@ -1020,14 +1135,22 @@ class ScannerService:
         ).scalar_one_or_none() or "cancelled"
         self.clear_cancel(scan.id)
 
-        # Audit: yalniz gercekten tamamlanan tarama `scan.completed` yazar
-        await record_audit(
-            db=db,
-            action="scan.completed" if final_status == "completed" else "scan.cancelled",
-            case_id=case.id,
-            target=f"Scan: {scan.id}",
-            details=stats_payload,
-        )
+        # Audit: yalnız gerçekten tamamlanan tarama `scan.completed` yazar.
+        # Audit yazımı best-effort: hata terminal olayı/webhook'u düşürmesin.
+        try:
+            await record_audit(
+                db=db,
+                action="scan.completed" if final_status == "completed" else "scan.cancelled",
+                case_id=case.id,
+                target=f"Scan: {scan.id}",
+                details=stats_payload,
+            )
+        except Exception:  # noqa: BLE001 - tamamlanma yan etkileri audit'e bağlı değil
+            logger.warning("Tarama tamamlama audit'i yazilamadi (scan=%s)", scan.id, exc_info=True)
+            try:
+                await db.rollback()
+            except Exception:  # noqa: BLE001
+                pass
 
         await event_broadcaster.broadcast(
             scan.id,
@@ -1389,6 +1512,7 @@ class ScannerService:
                 # Normalize into entities + edges (sirali merge -> deterministik)
                 ents, edges = connector.normalize(obs)
                 for ent in ents:
+                    ent = ent.model_copy(update={"id": scoped_entity_id(case.id, ent.id)})
                     existing = pending_entities.get(ent.id)
                     if existing is None:
                         pending_entities[ent.id] = ent
@@ -1397,7 +1521,8 @@ class ScannerService:
                     # Entity'ler step 2b'de toplu yazilir (dedupe + merge sonrasi)
 
                 for edge in edges:
-                    pending_edges[edge.id] = edge
+                    scoped = scoped_edge(case.id, edge)
+                    pending_edges[scoped.id] = scoped
 
                 await event_broadcaster.broadcast(
                     scan_id,
@@ -1460,9 +1585,14 @@ class ScannerService:
         # uyandirsin: `asyncio.wait` hem gorevleri hem event'i dinler.
         cancel_event = self.cancel_event(scan_id)
         cancel_waiter = asyncio.create_task(cancel_event.wait())
+        last_heartbeat = time.monotonic()
 
         try:
             while True:
+                # Canlılık damgası: uzun görevler sürerken stale recovery taramayı kesmesin.
+                if time.monotonic() - last_heartbeat >= _HEARTBEAT_INTERVAL_SECONDS:
+                    await self._touch_heartbeat(db, scan_id)
+                    last_heartbeat = time.monotonic()
                 # T-322: iptal sinyali `asyncio.wait`e varmadan gelebilir; bu durumda
                 # `cancel_waiter` zaten done olur ve waiters'a eklenmez. Event'i her turda
                 # ayrica kontrol etmek bu yarisi kapatir (DB kontrolu tek basina yetmez:
@@ -1717,6 +1847,12 @@ class ScannerService:
         explain: bool = True,
     ) -> None:
         """Entity'leri skorlar ve finding'leri yazar (artimli cagrilabilir)."""
+        # P-005: giriş hangi yoldan gelirse gelsin kimlik case kapsamlı olsun
+        # (zaten kapsanmış kimlikler `scoped_entity_id` içinde değişmez).
+        entities = [
+            ent.model_copy(update={"id": scoped_entity_id(case.id, ent.id)})
+            for ent in entities
+        ]
         # Finding yazimi entity satirlarini gerektirir (FK) — artimli gecislerde
         # entity'ler henuz DB'ye yazilmamis olabilir.
         await self._persist_entities(db, case, entities)
@@ -1732,6 +1868,22 @@ class ScannerService:
         entity_lookup: dict[tuple[str, str], Entity] = {}
         for ent in entities:
             entity_lookup[(ent.platform.value, _entity_username(ent))] = ent
+
+        # Mevcut bulguları tek sorguda yükle (R-018; db.get N+1 kaldırıldı).
+        existing_findings: dict[str, DbFinding] = {}
+        finding_ids = [scoped_finding_id(case.id, ent.id) for ent in entities]
+        for start in range(0, len(finding_ids), 400):
+            chunk = finding_ids[start : start + 400]
+            rows = (
+                (
+                    await db.execute(
+                        select(DbFinding).where(DbFinding.id.in_(chunk))
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            existing_findings.update({row.id: row for row in rows})
 
         for ent in entities:
             uname = _entity_username(ent)
@@ -1802,6 +1954,16 @@ class ScannerService:
                 email_or_pgp_match=email_match,
                 authenticity_score=authenticity.score,
             )
+            clamped_status = clamp_machine_finding_status(finding.status)
+            if clamped_status != finding.status:
+                finding = finding.model_copy(update={"status": clamped_status})
+            # P-005/DEC-010: bulgu kimliği case kapsamlı (entity id zaten kapsamlı).
+            finding = finding.model_copy(
+                update={
+                    "id": scoped_finding_id(case.id, finding.entity_id),
+                    "entity_id": ent.id,
+                }
+            )
 
             # LLM/deterministik aciklama (skoru degistirmez).
             # LLM cagrisi ~6 sn surer: sadece aday+ bulgular ve son gecis aciklanir.
@@ -1831,7 +1993,7 @@ class ScannerService:
             # SEC-15: kullanicinin confirmed/rejected karari yeniden taramada
             # EZILMEZ. Karar varsa (verified_at dolu veya status candidate degil)
             # yalniz skor/breakdown/aciklama guncellenir.
-            existing = await db.get(DbFinding, db_finding.id)
+            existing = existing_findings.get(db_finding.id)
             if existing is None:
                 db.add(db_finding)
             elif existing.verified_at is not None or existing.status in (
@@ -1874,17 +2036,50 @@ class ScannerService:
             )
 
     async def _persist_entities(self, db: AsyncSession, case: Case, entities: list[Entity]) -> None:
-        """Entity satirlarini upsert eder (idempotent)."""
-        for ent in entities:
-            await db.merge(
-                DbEntity(
-                    id=ent.id,
-                    case_id=case.id,
-                    type=ent.type.value,
-                    platform=ent.platform.value,
-                    label=ent.label,
-                    url=ent.url,
-                    attributes=ent.attributes,
+        """Entity satirlarini upsert eder (idempotent, toplu SELECT — R-006).
+
+        Gelen kimlikler bu case için **yeniden** kapsamlanır (T17-01); başka
+        case'in `~c` soneki taşınamaz.
+        """
+        if not entities:
+            return
+        entities = [
+            ent.model_copy(update={"id": scoped_entity_id(case.id, ent.id)})
+            for ent in entities
+        ]
+        # SQLite parametre siniri (999) icin parcali; üretimde tek commit.
+        for start in range(0, len(entities), 400):
+            chunk = entities[start : start + 400]
+            ids = [ent.id for ent in chunk]
+            rows = (
+                (
+                    await db.execute(
+                        select(DbEntity).where(DbEntity.id.in_(ids))
+                    )
                 )
+                .scalars()
+                .all()
             )
+            existing = {row.id: row for row in rows}
+            for ent in chunk:
+                row = existing.get(ent.id)
+                if row is None:
+                    db.add(
+                        DbEntity(
+                            id=ent.id,
+                            case_id=case.id,
+                            type=ent.type.value,
+                            platform=ent.platform.value,
+                            label=ent.label,
+                            url=ent.url,
+                            attributes=ent.attributes,
+                        )
+                    )
+                    continue
+                row.case_id = case.id
+                row.type = ent.type.value
+                row.platform = ent.platform.value
+                row.label = ent.label
+                row.url = ent.url
+                row.attributes = ent.attributes
         await db.commit()

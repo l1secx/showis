@@ -89,3 +89,14 @@ async def test_build_llm_client_applies_role_model_and_timeout(client, db_factor
     assert override.model == "claude-sonnet-5-5"
     assert plain.model == "claude-opus-5-5" and plain.thinking_budget is None
     assert provider.roles["extractor"] == "claude-haiku-5-5"
+
+
+@pytest.mark.asyncio
+async def test_bilinmeyen_preset_422(client):
+    """P-018: bilinmeyen preset sessizce opencode-go'ya düşmez."""
+    bad = await _create(client, preset="openai-typo")
+    assert bad.status_code == 422, bad.text
+    assert "preset" in bad.text.lower()
+
+    bad_config = await _create(client, config={"preset": "yanlis-preset"})
+    assert bad_config.status_code == 422, bad_config.text

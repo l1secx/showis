@@ -6,6 +6,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "infra" / "scripts" / "caddy-render-config.sh"
 CADDYFILE = ROOT / "infra" / "caddy" / "Caddyfile"
@@ -81,7 +83,11 @@ def test_forward_auth_modu(tmp_path):
     assert "basicauth @gate {" not in rendered
 
 
-def test_kullanici_yoksa_auth_bloku_yok(tmp_path):
-    rendered = _render(tmp_path)
-    assert "basicauth @gate {" not in rendered
-    assert "__BASIC_AUTH_PLACEHOLDER__" not in rendered
+def test_kimlik_yoksa_render_fail_closed(tmp_path):
+    """DEC-008: edge auth zorunlu; kimlik yoksa render HATA verir (auth'suz mod yok)."""
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        _render(tmp_path)
+    assert excinfo.value.returncode == 1
+    stderr = excinfo.value.stderr or ""
+    assert "edge kimlik dogrulamasi yapilandirilmamis" in stderr
+    assert not (tmp_path / "Caddyfile.rendered").exists()

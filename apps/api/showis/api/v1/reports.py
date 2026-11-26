@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from showis.db.models import Report
 from showis.db.session import get_db
-from showis.services.audit import record_request_audit
+from showis.services.audit import record_request_audit_safe
 from showis.services.report_service import resolve_report_path, safe_case_token
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,18 +32,18 @@ async def download_report(
     res = await db.execute(select(Report).where(Report.id == report_id))
     report = res.scalar_one_or_none()
     if not report:
-        raise HTTPException(status_code=404, detail="Report not found")
+        raise HTTPException(status_code=404, detail="Rapor bulunamadı")
     if not report.storage_key:
-        raise HTTPException(status_code=404, detail="Report file missing")
+        raise HTTPException(status_code=404, detail="Rapor dosyası eksik")
 
     # T112-R3: yeni yerleşim `REPORT_DIR/<case>/<ad>`; eski düz dosyalar
     # (`REPORT_DIR/<ad>`) da okunur — `storage_key` kayıtlı yol önce denenir.
     path: Path | None = resolve_report_path(report.storage_key, report.case_id)
     if path is None:
-        raise HTTPException(status_code=404, detail="Report file missing on disk")
+        raise HTTPException(status_code=404, detail="Rapor dosyası diskte yok")
 
     # SEC-13: rapor indirme (tam PII içerir) adli iz bırakır — içerik yazılmaz
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="report.download",

@@ -215,6 +215,7 @@ async def test_pypi_profile_parse():
     </body></html>
     """
     with respx.mock(assert_all_called=False) as router:
+        router.get("https://pypi.org/robots.txt").respond(404)
         router.get("https://pypi.org/user/pypiuser/").respond(200, text=html)
         obs = await conn.run(
             make_task("pypi", Platform.PYPI, username="pypiuser"), make_ctx()
@@ -263,6 +264,7 @@ async def test_hackernews_user_page():
     </table></body></html>
     """
     with respx.mock(assert_all_called=False) as router:
+        router.get("https://news.ycombinator.com/robots.txt").respond(404)
         router.get(
             "https://news.ycombinator.com/user", params={"id": "hnuser"}
         ).respond(200, text=html)
@@ -288,6 +290,7 @@ async def test_steam_profile_page():
     </head><body>Member since March 2015, 12,345 BADGES</body></html>
     """
     with respx.mock(assert_all_called=False) as router:
+        router.get("https://steamcommunity.com/robots.txt").respond(404)
         router.get("https://steamcommunity.com/id/steamuser").respond(
             200, text=html
         )
@@ -303,6 +306,7 @@ async def test_steam_profile_page():
 async def test_steam_not_found_marker():
     conn = SteamConnector(http_client=HttpClient(enable_ssrf_guard=False))
     with respx.mock(assert_all_called=False) as router:
+        router.get("https://steamcommunity.com/robots.txt").respond(404)
         router.get("https://steamcommunity.com/id/ghost").respond(
             200, text="The specified profile could not be found."
         )
@@ -568,6 +572,7 @@ async def test_hackernews_algolia_activity_enrichment():
     </table></body></html>
     """
     with respx.mock(assert_all_called=False) as router:
+        router.get("https://news.ycombinator.com/robots.txt").respond(404)
         router.get(
             "https://news.ycombinator.com/user", params={"id": "hnuser"}
         ).respond(200, text=html)

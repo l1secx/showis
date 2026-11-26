@@ -27,7 +27,7 @@ from showis_llm import LLMClientError
 logger = logging.getLogger("showis.research.interactive")
 T = TypeVar("T", bound=BaseModel)
 
-research_broadcaster = ScanEventBroadcaster()
+research_broadcaster = ScanEventBroadcaster(remote=False)
 
 #: Kullanıcı soruya bu kadar sürede yanıt vermezse ajan kendi kararıyla sürer.
 QUESTION_TIMEOUT_SECONDS = 900.0
@@ -53,6 +53,9 @@ AnsweredHook = Callable[[PendingQuestion, str], Awaitable[None]]
 class ResearchControl:
     session_id: str
     interrupt: bool = False
+    #: Kullanıcı iptali: interrupt'tan farklı olarak oturum `interrupted` değil
+    #: `cancelled` olarak kapanır ve "Devam et" sunulmaz.
+    cancelled: bool = False
     steering: list[str] = field(default_factory=list)
     pending: PendingQuestion | None = None
     asked: int = 0
@@ -130,6 +133,11 @@ class ResearchControl:
         pending = self.pending
         if pending is not None and not pending.future.done():
             pending.future.set_result("(oturum durduruldu)")
+
+    def request_cancel(self) -> None:
+        """Kullanıcı iptali: canlı döngüyü durdurur, oturum `cancelled` kapanır."""
+        self.cancelled = True
+        self.request_interrupt()
 
 
 _CONTROLS: dict[str, ResearchControl] = {}

@@ -219,6 +219,8 @@ class IdentityProfile:
     locations: tuple[str, ...] = ()
     organizations: tuple[str, ...] = ()
     urls: tuple[str, ...] = ()
+    #: Kullanıcının açıkça verdiği seed/havuz URL'leri: robots istisnası yalnız bunlara.
+    trusted_urls: tuple[str, ...] = ()
 
     @property
     def primary_handle(self) -> str:
@@ -258,6 +260,7 @@ def build_identity_profile(
     locations: list[str] = []
     organizations: list[str] = []
     urls: list[str] = []
+    trusted_urls: list[str] = []
 
     first = _clean_text(first_name, limit=80)
     last = _clean_text(last_name, limit=80)
@@ -284,6 +287,8 @@ def build_identity_profile(
         if not text.startswith(("http://", "https://")):
             continue
         add_unique(urls, text, limit=2048)
+        # Kullanıcının açıkça verdiği seed URL'si robots istisnasının tek kaynağıdır.
+        add_unique(trusted_urls, text, limit=2048)
         platform, subject = extract_platform_from_url(text)
         if platform not in {Platform.WEB, Platform.UNKNOWN} and subject:
             add_handle(subject)
@@ -322,6 +327,12 @@ def build_identity_profile(
             text = str(value or "").strip()
             if text.startswith(("http://", "https://")):
                 add_unique(urls, text, limit=2048)
+                # Robots istisnası yalnız kullanıcı kaydı/onaylı kayıt içindir;
+                # AI/tarama kaynaklı keşif robots kurallarına tabidir (DEC-001).
+                if str(item.get("source") or "").lower() == "user" or str(
+                    item.get("status") or ""
+                ).lower() == "confirmed":
+                    add_unique(trusted_urls, text, limit=2048)
                 platform, subject = extract_platform_from_url(text)
                 if platform not in {Platform.WEB, Platform.UNKNOWN} and subject:
                     add_handle(subject)
@@ -357,6 +368,7 @@ def build_identity_profile(
         locations=tuple(locations[:8]),
         organizations=tuple(organizations[:8]),
         urls=tuple(urls[:24]),
+        trusted_urls=tuple(trusted_urls[:24]),
     )
 
 

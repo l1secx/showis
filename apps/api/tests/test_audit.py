@@ -51,3 +51,56 @@ async def test_record_and_query_audit_logs(db_session: AsyncSession):
     assert len(case_100_logs) == 1
     assert case_100_logs[0].action == "case.create"
     assert case_100_logs[0].target == "Case: Ahmet Yilmaz"
+
+
+@pytest.mark.asyncio
+async def test_safe_audit_failure_does_not_raise(db_session: AsyncSession, monkeypatch):
+    """B-011/T17-04: audit hatası çağıran oturumu expire etmez (500 yok)."""
+    from showis.db.models import Case as DbCase
+    from showis.services import audit
+    from sqlalchemy import select
+
+    case = DbCase(
+        id="case-safe",
+        name="Safe",
+        purpose="test",
+        legal_basis="self_check",
+        retention_days=7,
+    )
+    db_session.add(case)
+    await db_session.commit()
+    await db_session.refresh(case)
+
+    async def _boom(**_kwargs):
+        raise RuntimeError("audit db down")
+
+    monkeypatch.setattr(audit, "record_request_audit", _boom)
+    result = await audit.record_request_audit_safe(
+        db=db_session,
+        request=None,  # type: ignore[arg-type]
+        action="scan.start",
+        case_id="case-safe",
+    )
+    assert result is None
+    # Eski davranışta rollback case'i expire edip burada MissingGreenlet üretiyordu.
+    assert case.name == "Safe"
+    assert (await db_session.execute(select(DbCase.id))).scalar_one() == "case-safe"
+
+
+@pytest.mark.asyncio
+async def test_safe_audit_writes_in_separate_session(db_session: AsyncSession):
+    from showis.services import audit
+
+    class _Request:
+        client = None
+        headers: dict[str, str] = {}
+
+    log = await audit.record_request_audit_safe(
+        db=db_session,
+        request=_Request(),  # type: ignore[arg-type]
+        action="scan.start",
+        case_id="case-safe-write",
+    )
+    assert log is not None and log.action == "scan.start"
+    logs = await list_audit_logs(db_session, case_id="case-safe-write")
+    assert [row.action for row in logs] == ["scan.start"]

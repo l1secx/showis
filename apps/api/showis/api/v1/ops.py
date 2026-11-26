@@ -26,6 +26,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse, PlainTextResponse
 from showis.db.models import Scan
 from showis.db.session import get_db
+from showis_contracts import EdgeType, FindingStatus
 from showis_engine.http import budget_exceeded_count
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,15 +46,10 @@ CHECK_TIMEOUT_SECONDS = float(os.getenv("SHOWIS_HEALTHCHECK_TIMEOUT", "3"))
 
 SCAN_STATUSES: tuple[str, ...] = ("completed", "failed", "cancelled")
 TASK_STATUSES: tuple[str, ...] = ("pending", "running", "done", "failed", "skipped")
-FINDING_STATUSES: tuple[str, ...] = ("confirmed", "candidate", "lead", "rejected")
+#: Kontrat kaynağından türetilir (drift önlenir).
+FINDING_STATUSES: tuple[str, ...] = tuple(status.value for status in FindingStatus)
 #: `showis_contracts.enums.EdgeType` değerleri (küçük harf — DB'de böyle saklanır).
-EDGE_TYPES: tuple[str, ...] = (
-    "same_person",
-    "cross_link",
-    "has_account",
-    "mentions",
-    "owned_domain",
-)
+EDGE_TYPES: tuple[str, ...] = tuple(edge_type.value for edge_type in EdgeType)
 DURATION_WINDOW = 20
 
 _metrics_cache: dict[str, Any] = {"at": 0.0, "body": ""}

@@ -240,12 +240,15 @@ async def test_pool_comment_is_added(db_factory, client):
         json={"body": "Tedarikçi görüşmesi 12 Aralık", "author": "analist"},
     )
     assert response.status_code == 201
+    # Yazar istemci `author` alanından değil, doğrulanmış aktörden gelir
+    # (testlerde kimlik bypass'ı aktörü `dev` yapar).
+    assert response.json()["author"] == "dev"
     async with db_factory() as session:
         notes = (
             (
                 await session.execute(
                     select(PoolItem).where(
-                        PoolItem.case_id == case_id, PoolItem.label == "Yorum — analist"
+                        PoolItem.case_id == case_id, PoolItem.label == "Yorum — dev"
                     )
                 )
             )

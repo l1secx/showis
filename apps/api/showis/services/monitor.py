@@ -42,20 +42,27 @@ async def create_due_monitor_scans(
     ).scalars().all()
 
     created: list[str] = []
+    case_ids = [case.id for case in cases]
+    active_case_ids: set[str] = set()
+    if case_ids:
+        active_case_ids = set(
+            (
+                await db.execute(
+                    select(Scan.case_id)
+                    .where(
+                        Scan.case_id.in_(case_ids),
+                        Scan.status.in_(ACTIVE_SCAN_STATUSES),
+                    )
+                    .distinct()
+                )
+            )
+            .scalars()
+            .all()
+        )
     for case in cases:
         if len(created) >= limit:
             break
-        active = (
-            await db.execute(
-                select(Scan.id)
-                .where(
-                    Scan.case_id == case.id,
-                    Scan.status.in_(ACTIVE_SCAN_STATUSES),
-                )
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-        if active:
+        if case.id in active_case_ids:
             continue
         last = case.monitor_last_scan_at
         if last is not None:

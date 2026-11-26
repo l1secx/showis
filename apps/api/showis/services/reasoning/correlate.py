@@ -83,10 +83,6 @@ def _platform_of(item: PoolItem) -> str:
     return _attr(item, "platform").casefold() or item.kind
 
 
-def _pairs(ids: list[str]) -> list[tuple[str, str]]:
-    return list(itertools.combinations(sorted(ids), 2))
-
-
 def rule_same_handle(items: Sequence[PoolItem]) -> list[Match]:
     """Aynı (yeterince ayırt edici) kullanıcı adı farklı platformlarda → aynı kişi."""
     groups: dict[str, list[PoolItem]] = defaultdict(list)

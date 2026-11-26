@@ -597,8 +597,11 @@ async def test_kullanici_karari_yeniden_yazimda_korunur(session_factory):
     from showis_contracts import Target as ContractTarget
 
     case_id, scan_id = await _make_scan(session_factory)
-    entity_id = "github:kararli"
-    finding_id = f"finding:{entity_id}"
+    from showis.services.scanner import scoped_entity_id, scoped_finding_id
+
+    raw_entity_id = "github:kararli"
+    entity_id = scoped_entity_id(case_id, raw_entity_id)
+    finding_id = scoped_finding_id(case_id, entity_id)
     verified = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 
     async with session_factory() as session:

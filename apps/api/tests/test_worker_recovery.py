@@ -54,6 +54,7 @@ async def _add_scan(
     age_seconds: int = 3600,
     stats: dict[str, Any] | None = None,
     started_offset: int | None = None,
+    heartbeat_offset: int | None = None,
 ) -> Scan:
     now = datetime.now(timezone.utc)
     case = Case(name="Recovery Case", purpose="self_check", legal_basis="consent")
@@ -66,6 +67,9 @@ async def _add_scan(
         stats=stats or {},
         created_at=now - timedelta(seconds=age_seconds),
         started_at=None if started_offset is None else now - timedelta(seconds=started_offset),
+        heartbeat_at=(
+            None if heartbeat_offset is None else now - timedelta(seconds=heartbeat_offset)
+        ),
     )
     session.add(scan)
     await session.commit()
@@ -120,6 +124,48 @@ async def test_live_running_scan_is_not_requeued(db_url: str):
 
     assert result["skipped"] == [scan.id]
     assert enqueued == []
+
+
+async def test_old_started_but_fresh_heartbeat_not_requeued(db_url: str):
+    """O3 duvar bütçesi eşiğe eşit olsa da canlılık damgası taze taramayı korur."""
+    enqueued: list[str] = []
+    async with _session_ctx(db_url) as session:
+        scan = await _add_scan(
+            session,
+            status="running",
+            age_seconds=7300,
+            started_offset=1900,  # O3 max_wall_seconds (1800) aşılmış görünüyor
+            heartbeat_offset=15,  # ama süreç 15 sn önce damga yazdı
+        )
+        result = await worker.recover_stale_scans(
+            session, enqueue=enqueued.append, stale_seconds=1800
+        )
+        await session.refresh(scan)
+        assert scan.status == "running"
+
+    assert result["skipped"] == [scan.id]
+    assert enqueued == []
+
+
+async def test_stale_heartbeat_requeues_running_scan(db_url: str):
+    """Damga eskiyse (süreç ölmüş) running tarama yine kurtarılır."""
+    enqueued: list[str] = []
+    async with _session_ctx(db_url) as session:
+        scan = await _add_scan(
+            session,
+            status="running",
+            age_seconds=7300,
+            started_offset=1900,
+            heartbeat_offset=3600,
+        )
+        result = await worker.recover_stale_scans(
+            session, enqueue=enqueued.append, stale_seconds=1800
+        )
+        await session.refresh(scan)
+        assert scan.status == "queued"
+        assert scan.heartbeat_at is None
+
+    assert result["requeued"] == [scan.id]
 
 
 # --- (b) yeniden kuyruga atma ----------------------------------------------

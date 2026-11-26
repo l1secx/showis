@@ -332,52 +332,32 @@ async def audit_auth_failures(request: Request, call_next):
             logger.warning("auth.failed audit yazilamadi", exc_info=True)
     return response
 
+def _include_v1(router: Any, *, write: bool = False, admin: bool = False) -> None:
+    """Ortak auth bağımlılıklarıyla `/api/v1` router'ı ekler (R-003)."""
+    dependencies = [*auth_required]
+    if write:
+        dependencies.extend(write_required)
+    if admin:
+        dependencies.append(Depends(require_admin_access))
+    app.include_router(router, prefix="/api/v1", dependencies=dependencies)
+
+
 app.include_router(auth_router, prefix="/api/v1")
-app.include_router(
-    cases_router, prefix="/api/v1", dependencies=[*auth_required, *write_required]
-)
-app.include_router(
-    scans_router, prefix="/api/v1", dependencies=[*auth_required, *write_required]
-)
-app.include_router(
-    settings_router,
-    prefix="/api/v1",
-    dependencies=[*auth_required, Depends(require_admin_access)],
-)
-app.include_router(
-    ai_providers_router,
-    prefix="/api/v1",
-    dependencies=[*auth_required],
-)
-app.include_router(
-    pool_router, prefix="/api/v1", dependencies=[*auth_required, *write_required]
-)
-app.include_router(
-    breach_router, prefix="/api/v1", dependencies=[*auth_required, *write_required]
-)
-app.include_router(
-    reasoning_router, prefix="/api/v1", dependencies=[*auth_required, *write_required]
-)
-app.include_router(
-    research_router, prefix="/api/v1", dependencies=[*auth_required, *write_required]
-)
-app.include_router(
-    snapshots_router, prefix="/api/v1", dependencies=[*auth_required, *write_required]
-)
-app.include_router(
-    watch_router, prefix="/api/v1", dependencies=[*auth_required, *write_required]
-)
-app.include_router(
-    supply_chain_router, prefix="/api/v1", dependencies=[*auth_required, *write_required]
-)
-app.include_router(
-    findings_router, prefix="/api/v1", dependencies=[*auth_required, *write_required]
-)
-app.include_router(
-    reports_router, prefix="/api/v1", dependencies=[*auth_required, *write_required]
-)
+_include_v1(cases_router, write=True)
+_include_v1(scans_router, write=True)
+_include_v1(settings_router, admin=True)
+_include_v1(ai_providers_router)
+_include_v1(pool_router, write=True)
+_include_v1(breach_router, write=True)
+_include_v1(reasoning_router, write=True)
+_include_v1(research_router, write=True)
+_include_v1(snapshots_router, write=True)
+_include_v1(watch_router, write=True)
+_include_v1(supply_chain_router, write=True)
+_include_v1(findings_router, write=True)
+_include_v1(reports_router, write=True)
 # T-329: gozlemlenebilirlik (/metrics, /healthz) — token korumali.
-app.include_router(ops_router, prefix="/api/v1", dependencies=auth_required)
+_include_v1(ops_router)
 # T-330/F-04: derin saglik ucu kimliksiz (yalniz ok|degraded + check adlari).
 app.include_router(ops_public_router)
 

@@ -15,12 +15,34 @@ def test_planner_fallback_templates():
     plan = build_template_fallback_queries(target, variants)
     assert isinstance(plan, QueryPlan)
     assert len(plan.queries) > 0
-    assert len(plan.queries) <= 50
+    # Site tablosu 50 ile tavanlanır; varyant/isim/CTF sorguları tavan dışında
+    # eklenir (eski kod tüm listeyi 50'ye kırpıyordu).
+    assert len(plan.queries) <= 80
 
     query_strings = [q.query for q in plan.queries]
     assert any("site:github.com" in q for q in query_strings)
     assert any("site:tryhackme.com" in q for q in query_strings)
     assert any("site:hackthebox.com" in q for q in query_strings)
+
+
+def test_planner_fallback_varyant_ve_profil_sorgulari_korunur():
+    """Tavan yalnız site bloğuna uygulanır; varyant/THM/HTB/generic korunur."""
+    target = Target(first_name="Kemal", last_name="Aydın")
+    variants = generate_variants("Kemal", "Aydın")
+    plan = build_template_fallback_queries(target, variants)
+    rationales = [q.rationale for q in plan.queries]
+    assert any("Varyant" in r for r in rationales)
+    assert any("TryHackMe profil" in r for r in rationales)
+    assert any("Birleşik ad soyad" in r for r in rationales)
+    assert any("Web genelinde isim" in r for r in rationales)
+
+
+def test_handle_mode_varyant_sorgulari_da_plana_girer():
+    target = Target(kind="handle", nickname="kboz")
+    variants = generate_variants("", "", {}, nickname="kboz")
+    plan = build_template_fallback_queries(target, variants)
+    assert any("Varyant" in q.rationale for q in plan.queries)
+    assert all("kboz" in q.query for q in plan.queries)
 
 
 def test_planner_fallback_includes_pool_identifiers():

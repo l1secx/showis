@@ -16,6 +16,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+import showis.db.session as db_session_module
 from fastapi import Request
 from showis.db.models import AuditLog
 from sqlalchemy import select
@@ -134,6 +135,29 @@ def client_ip_from_headers(
     return peer
 
 
+def client_ip_from_forwarded(
+    headers: Mapping[str, str], client_host: str | None = None
+) -> str | None:
+    """Edge auth için: yalnız **X-Forwarded-For** zincirine güvenir.
+
+    `X-Real-IP` Caddy `forward_auth` bloğunda set edilmiyor ve istemciden
+    geçebiliyor (T17-03); bu yüzden edge hız sınırı anahtarında yok sayılır.
+    Peer güvenilir proxy değilse başlıklar tamamen yok sayılır.
+    """
+    networks = trusted_proxy_networks()
+    peer = _clean_ip(client_host)
+    if not _in_networks(peer, networks):
+        return peer
+    forwarded = headers.get("x-forwarded-for") or ""
+    chain = [ip for ip in (_clean_ip(part) for part in forwarded.split(",")) if ip]
+    if chain:
+        for candidate in reversed(chain):
+            if not _in_networks(candidate, networks):
+                return candidate
+        return chain[0]
+    return peer
+
+
 def client_ip(request: Request) -> str | None:
     """İstemci IP'si (güvenilir proxy kontrolü: peer → X-Real-IP → XFF zinciri)."""
     client = request.client
@@ -202,6 +226,38 @@ async def record_request_audit(
         actor_ip=client_ip(request),
         user_agent_header=user_agent(request),
     )
+
+
+async def record_request_audit_safe(
+    db: AsyncSession,
+    request: Request,
+    action: str,
+    case_id: str | None = None,
+    target: str | None = None,
+    details: dict[str, Any] | None = None,
+) -> AuditLog | None:
+    """Commit sonrası audit: hata işlemi 500'e düşürmesin.
+
+    Audit **ayrı kısa oturumda** yazılır (çağıran oturumun engine'ine bağlı);
+    böylece çağıranın transaction'ı ve ORM nesneleri etkilenmez, hata yolunda
+    `rollback` ile expire olup `MissingGreenlet` üretmez (T17-04).
+    Hata `error` seviyesinde loglanır; istemci başarılı işlemi tekrar deneyip
+    çift kayıt üretmez.
+    """
+    try:
+        bind = getattr(db, "bind", None) or db_session_module.engine
+        async with AsyncSession(bind=bind, expire_on_commit=False) as audit_db:
+            return await record_request_audit(
+                db=audit_db,
+                request=request,
+                action=action,
+                case_id=case_id,
+                target=target,
+                details=details,
+            )
+    except Exception:  # noqa: BLE001 - audit işlemi engellemez
+        logger.exception("Audit yazilamadi (action=%s); islem etkilenmedi", action)
+        return None
 
 
 # ---------------------------------------------------------------------------

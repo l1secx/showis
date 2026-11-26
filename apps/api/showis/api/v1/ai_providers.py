@@ -10,7 +10,7 @@ from showis.core.security import require_admin_access
 from showis.db.models import AIProvider
 from showis.db.session import get_db
 from showis.services import ai_providers as service
-from showis.services.audit import record_request_audit
+from showis.services.audit import record_request_audit_safe
 from showis_settings.crypto import decrypt_secret
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -75,7 +75,7 @@ def _response(provider: AIProvider, *, secret_required: bool = False) -> AIProvi
     )
 
 
-@router.get("/presets")
+@router.get("/presets", dependencies=[Depends(require_admin_access)])
 async def list_presets():
     presets = service.available_presets()
     for key, value in presets.items():
@@ -83,7 +83,11 @@ async def list_presets():
     return presets
 
 
-@router.get("", response_model=list[AIProviderResponse])
+@router.get(
+    "",
+    response_model=list[AIProviderResponse],
+    dependencies=[Depends(require_admin_access)],
+)
 async def list_ai_providers(db: AsyncSession = Depends(get_db)):
     providers = await service.list_providers(db)
     return [_response(provider) for provider in providers]
@@ -112,7 +116,7 @@ async def create_ai_provider(
     except IntegrityError as exc:
         await db.rollback()
         raise HTTPException(status_code=409, detail="Bu adla bir profil zaten var") from exc
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="settings.ai_provider.create",
@@ -138,7 +142,7 @@ async def update_ai_provider(
 ):
     provider = await service.get_provider(db, provider_id)
     if provider is None:
-        raise HTTPException(status_code=404, detail="AI provider not found")
+        raise HTTPException(status_code=404, detail="AI sağlayıcısı bulunamadı")
     try:
         provider, secret_invalidated = await service.update_provider(
             db,
@@ -155,7 +159,7 @@ async def update_ai_provider(
     except IntegrityError as exc:
         await db.rollback()
         raise HTTPException(status_code=409, detail="Bu adla bir profil zaten var") from exc
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="settings.ai_provider.update",
@@ -188,7 +192,7 @@ async def discover_ai_provider_models(
     elif data.provider_id:
         provider = await service.get_provider(db, data.provider_id)
         if provider is None:
-            raise HTTPException(status_code=404, detail="AI provider not found")
+            raise HTTPException(status_code=404, detail="AI sağlayıcısı bulunamadı")
         base_url = str((provider.config or {}).get("base_url") or service.DEFAULT_BASE_URL)
         try:
             api_key = str(decrypt_secret(provider.secret_encrypted) or "")
@@ -205,7 +209,7 @@ async def discover_ai_provider_models(
         models = await service.discover_models(base_url=base_url, api_key=api_key)
     except service.AIProviderValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="settings.ai_provider.discover_models",
@@ -232,7 +236,7 @@ async def activate_ai_provider(
     except IntegrityError as exc:
         await db.rollback()
         raise HTTPException(status_code=409, detail="Profil aktive edilemedi") from exc
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="settings.ai_provider.activate",
@@ -251,9 +255,9 @@ async def test_ai_provider(
 ):
     provider = await service.get_provider(db, provider_id)
     if provider is None:
-        raise HTTPException(status_code=404, detail="AI provider not found")
+        raise HTTPException(status_code=404, detail="AI sağlayıcısı bulunamadı")
     result = await service.test_provider(provider)
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="settings.ai_provider.test",
@@ -272,10 +276,10 @@ async def delete_ai_provider(
 ):
     provider = await service.get_provider(db, provider_id)
     if provider is None:
-        raise HTTPException(status_code=404, detail="AI provider not found")
+        raise HTTPException(status_code=404, detail="AI sağlayıcısı bulunamadı")
     name = provider.name
     await service.delete_provider(db, provider)
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="settings.ai_provider.delete",

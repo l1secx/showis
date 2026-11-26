@@ -19,7 +19,8 @@ from fastapi import (
 )
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, field_validator, model_validator
-from showis.core.security import ROLE_ANALYST, Actor, require_token
+from showis.core.queues import scan_queue
+from showis.core.security import ROLE_ANALYST, Actor, get_actor, require_token
 from showis.db.models import (
     AIProvider,
     Case,
@@ -41,7 +42,11 @@ from showis.db.models import Seed as DbSeed
 from showis.db.models import Target as DbTarget
 from showis.db.session import get_db
 from showis.services.ai_providers import allowed_models
-from showis.services.audit import list_audit_logs, record_request_audit
+from showis.services.audit import (
+    list_audit_logs,
+    record_request_audit,
+    record_request_audit_safe,
+)
 from showis.services.connectors_factory import build_connectors, build_llm_client
 from showis.services.identity_graph import (
     compute_identity_clusters,
@@ -264,9 +269,9 @@ class CaseCreateRequest(BaseModel):
     legal_basis: Literal["consent", "legitimate_interest", "self_check"]
     notes: str | None = Field(default=None, max_length=MAX_NOTES)
     retention_days: int = Field(default=30, ge=1, le=365)
-    #: Hukuki dayanak + robots/ToS operatör onayı. Eski API istemcileri için
-    #: varsayılan `True`; yeni arayüz açık onay gönderir. `False` reddedilir.
-    authorization_confirmed: bool = True
+    #: Hukuki dayanak + robots/ToS operatör onayı. Fail-closed: istemci açıkça
+    #: `true` göndermek zorundadır; onaysız vaka açılamaz (V-005).
+    authorization_confirmed: bool = False
     target: TargetInput
     seeds: list[SeedInput] = Field(default_factory=list, max_length=20)
 
@@ -332,7 +337,7 @@ async def create_case(
     )
     guard_target(contract_target)
     if contract_target.review_required:
-        await record_request_audit(
+        await record_request_audit_safe(
             db=db,
             request=request,
             action="target.blocked",
@@ -398,7 +403,7 @@ async def create_case(
     )
 
     await db.commit()
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="case.create",
@@ -851,7 +856,7 @@ async def get_case(case_id: str, db: AsyncSession = Depends(get_db)):
     )
     case = res.scalar_one_or_none()
     if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
+        raise HTTPException(status_code=404, detail="Vaka bulunamadı")
 
     target = case.targets[0] if case.targets else None
     contract = _db_target_to_contract(target) if target else None
@@ -898,7 +903,7 @@ async def delete_case(
     res = await db.execute(select(Case).where(Case.id == case_id))
     case = res.scalar_one_or_none()
     if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
+        raise HTTPException(status_code=404, detail="Vaka bulunamadı")
 
     await record_request_audit(
         db=db,
@@ -924,7 +929,7 @@ async def delete_case(
     # kalan PDF/JSON (tam PII) kalirsa KVKK md.7 fiilen ihlal edilir.
     failed_paths, removed = await _cleanup_report_files(db, case_id)
     if failed_paths:
-        await record_request_audit(
+        await record_request_audit_safe(
             db=db,
             request=request,
             action="report.cleanup_failed",
@@ -1016,7 +1021,7 @@ def _dispatch_celery_task(scan: Scan) -> bool:
     from showis.services.worker import celery_app
 
     try:
-        result = celery_app.send_task("showis.scan.run", args=[scan.id], queue="osint")
+        result = celery_app.send_task("showis.scan.run", args=[scan.id], queue=scan_queue())
     except Exception as exc:  # noqa: BLE001 - broker hatasi tarama baslatmayi bloklamasin
         logger.warning(
             "Celery dispatch basarisiz (scan=%s): %s", scan.id, type(exc).__name__
@@ -1059,7 +1064,7 @@ async def run_scan_in_background(scan_id: str):
     if _use_celery():
         from showis.services.worker import celery_app
 
-        celery_app.send_task("showis.scan.run", args=[scan_id], queue="osint")
+        celery_app.send_task("showis.scan.run", args=[scan_id], queue=scan_queue())
         return
     await _run_scan_inline(scan_id)
 
@@ -1073,7 +1078,7 @@ async def estimate_case_scan(
         await db.execute(select(DbTarget).where(DbTarget.case_id == case_id))
     ).scalar_one_or_none()
     if not target:
-        raise HTTPException(status_code=404, detail="Case target not found")
+        raise HTTPException(status_code=404, detail="Vaka hedefi bulunamadı")
     contract_target = _db_target_to_contract(target)
     return estimate_scan(contract_target, mode)
 
@@ -1138,15 +1143,15 @@ async def start_scan(
     res = await db.execute(select(Case).where(Case.id == case_id))
     case = res.scalar_one_or_none()
     if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
+        raise HTTPException(status_code=404, detail="Vaka bulunamadı")
 
     # SEC-07 (defense in depth): planlama öncesi hedef yeniden denetlenir.
     contract_target = await _load_contract_target(db, case_id)
     if contract_target is None:
-        raise HTTPException(status_code=404, detail="Case target not found")
+        raise HTTPException(status_code=404, detail="Vaka hedefi bulunamadı")
     guard_target(contract_target)
     if contract_target.review_required or case.status == "review_pending":
-        await record_request_audit(
+        await record_request_audit_safe(
             db=db,
             request=request,
             action="target.blocked",
@@ -1231,7 +1236,7 @@ async def start_scan(
                 await db.rollback()
     await db.refresh(scan)
 
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="scan.start",
@@ -1338,7 +1343,7 @@ def _monitor_payload(case: Case) -> dict[str, Any]:
 async def get_case_monitor(case_id: str, db: AsyncSession = Depends(get_db)):
     case = (await db.execute(select(Case).where(Case.id == case_id))).scalar_one_or_none()
     if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
+        raise HTTPException(status_code=404, detail="Vaka bulunamadı")
     return _monitor_payload(case)
 
 
@@ -1351,13 +1356,13 @@ async def update_case_monitor(
 ):
     case = (await db.execute(select(Case).where(Case.id == case_id))).scalar_one_or_none()
     if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
+        raise HTTPException(status_code=404, detail="Vaka bulunamadı")
     case.monitor_enabled = payload.enabled
     case.monitor_interval_hours = payload.interval_hours
     case.monitor_mode = norm_mode(payload.mode)
     await db.commit()
     await db.refresh(case)
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="monitor.update",
@@ -1383,7 +1388,7 @@ async def update_case_webhook(
 
     case = (await db.execute(select(Case).where(Case.id == case_id))).scalar_one_or_none()
     if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
+        raise HTTPException(status_code=404, detail="Vaka bulunamadı")
     value = (payload.url or "").strip() or None
     if value:
         parsed = urlparse(value)
@@ -1393,7 +1398,7 @@ async def update_case_webhook(
             raise HTTPException(status_code=422, detail="Webhook URL'de kimlik bilgisi olamaz")
     case.webhook_url = value
     await db.commit()
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="case.webhook.update",
@@ -1414,7 +1419,7 @@ async def get_case_diff(
     """İki taramanın anlık görüntülerini karşılaştırır (yeni/çıkan/değişen)."""
     case = (await db.execute(select(Case).where(Case.id == case_id))).scalar_one_or_none()
     if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
+        raise HTTPException(status_code=404, detail="Vaka bulunamadı")
 
     async def _load(scan_id: str | None) -> Scan | None:
         if scan_id:
@@ -1508,11 +1513,11 @@ async def update_case_owner(
 ):
     case = (await db.execute(select(Case).where(Case.id == case_id))).scalar_one_or_none()
     if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
+        raise HTTPException(status_code=404, detail="Vaka bulunamadı")
     owner = (payload.owner or "").strip() or None
     case.owner = owner[:128] if owner else None
     await db.commit()
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="case.owner.update",
@@ -1527,7 +1532,7 @@ async def update_case_owner(
 async def list_case_comments(case_id: str, db: AsyncSession = Depends(get_db)):
     case = (await db.execute(select(Case).where(Case.id == case_id))).scalar_one_or_none()
     if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
+        raise HTTPException(status_code=404, detail="Vaka bulunamadı")
     rows = (
         await db.execute(
             select(CaseComment)
@@ -1555,13 +1560,13 @@ async def add_case_comment(
 ):
     case = (await db.execute(select(Case).where(Case.id == case_id))).scalar_one_or_none()
     if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
+        raise HTTPException(status_code=404, detail="Vaka bulunamadı")
     body = reject_control_chars(payload.body.strip(), param="body") or ""
     if not body:
         raise HTTPException(status_code=422, detail="Yorum boş olamaz")
-    author = reject_control_chars(
-        (request.headers.get("X-Actor") or payload.author).strip(), param="author"
-    ) or "operator"
+    # Yazar yalnız doğrulanmış aktörden gelir; X-Actor başlığı istemci tarafından
+    # uydurulabilir (edge auth kapalıyken veya paylaşılan token'da).
+    author = reject_control_chars(get_actor(request).username, param="author") or "operator"
     row = CaseComment(
         case_id=case.id,
         author=author[:128],
@@ -1578,7 +1583,7 @@ async def add_case_comment(
     except Exception:  # noqa: BLE001 - yorum kaydı havuz hatasına kurban gitmesin
         await db.rollback()
         logger.warning("Yorum havuza eklenemedi (comment=%s)", row.id, exc_info=True)
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="case.comment.create",
@@ -1716,7 +1721,7 @@ async def export_case_stix(
     """Vakayı STIX 2.1 bundle olarak dışa aktarır (MISP/OpenCTI uyumu)."""
     case = (await db.execute(select(Case).where(Case.id == case_id))).scalar_one_or_none()
     if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
+        raise HTTPException(status_code=404, detail="Vaka bulunamadı")
     target = (
         await db.execute(select(DbTarget).where(DbTarget.case_id == case_id))
     ).scalar_one_or_none()
@@ -1737,7 +1742,7 @@ async def export_case_stix(
         findings=list(findings),
         evidence=list(evidence),
     )
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="case.export.stix",
@@ -1759,7 +1764,7 @@ async def export_case_misp(
     """MISP core formatında Event JSON'u döndürür."""
     case = (await db.execute(select(Case).where(Case.id == case_id))).scalar_one_or_none()
     if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
+        raise HTTPException(status_code=404, detail="Vaka bulunamadı")
     target = (
         await db.execute(select(DbTarget).where(DbTarget.case_id == case_id))
     ).scalar_one_or_none()
@@ -1775,7 +1780,7 @@ async def export_case_misp(
         entities=list(entities),
         findings=list(findings),
     )
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="case.export.misp",
@@ -1797,7 +1802,7 @@ async def export_case_maltego(
     """Maltego local transform için XML entity listesi."""
     case = (await db.execute(select(Case).where(Case.id == case_id))).scalar_one_or_none()
     if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
+        raise HTTPException(status_code=404, detail="Vaka bulunamadı")
     target = (
         await db.execute(select(DbTarget).where(DbTarget.case_id == case_id))
     ).scalar_one_or_none()
@@ -1813,7 +1818,7 @@ async def export_case_maltego(
         entities=list(entities),
         findings=list(findings),
     )
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="case.export.maltego",
@@ -1836,7 +1841,7 @@ async def export_case(
     """KVKK veri sahibi talebi: vakanin tum verisini JSON olarak disar aktarir."""
     case = (await db.execute(select(Case).where(Case.id == case_id))).scalar_one_or_none()
     if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
+        raise HTTPException(status_code=404, detail="Vaka bulunamadı")
 
     target = (
         await db.execute(select(DbTarget).where(DbTarget.case_id == case_id))
@@ -1868,6 +1873,10 @@ async def export_case(
         .scalars()
         .all()
     )
+    # O(n×m) yerine tek geçişte oturum bazında grupla (R-005).
+    messages_by_session: dict[str, list[ResearchMessage]] = {}
+    for message in research_messages:
+        messages_by_session.setdefault(message.session_id, []).append(message)
     supply_nodes = (
         (
             await db.execute(
@@ -1888,7 +1897,7 @@ async def export_case(
     )
     clusters_by_entity, clusters = compute_identity_clusters(entities, edges)
 
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="case.export",
@@ -2034,8 +2043,7 @@ async def export_case(
                         if message.created_at
                         else None,
                     }
-                    for message in research_messages
-                    if message.session_id == session.id
+                    for message in messages_by_session.get(session.id, [])
                 ],
             }
             for session in research_sessions
@@ -2079,7 +2087,7 @@ async def get_case_graph(case_id: str, db: AsyncSession = Depends(get_db)):
     """Cytoscape icin {nodes, edges} dondurur."""
     case = (await db.execute(select(Case).where(Case.id == case_id))).scalar_one_or_none()
     if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
+        raise HTTPException(status_code=404, detail="Vaka bulunamadı")
 
     entities = (await db.execute(select(Entity).where(Entity.case_id == case_id))).scalars().all()
     edges = (await db.execute(select(Edge).where(Edge.case_id == case_id))).scalars().all()
@@ -2288,7 +2296,7 @@ async def _pool_graph(
 async def get_case_audit(case_id: str, db: AsyncSession = Depends(get_db)):
     case = (await db.execute(select(Case).where(Case.id == case_id))).scalar_one_or_none()
     if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
+        raise HTTPException(status_code=404, detail="Vaka bulunamadı")
     logs = await list_audit_logs(db, case_id=case_id, limit=500)
     return [
         {
@@ -2316,13 +2324,13 @@ async def create_case_report(
 ):
     case = (await db.execute(select(Case).where(Case.id == case_id))).scalar_one_or_none()
     if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
+        raise HTTPException(status_code=404, detail="Vaka bulunamadı")
     try:
         report, _content = await create_report(db, case_id, payload.format)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="report.create",

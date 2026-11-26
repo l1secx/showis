@@ -4,7 +4,8 @@ import logging
 import os
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -13,8 +14,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from showis.db.models import Scan
 from showis.db.session import get_db
-from showis.services.audit import record_request_audit
-from showis.services.orchestrator import event_broadcaster
+from showis.services.audit import record_request_audit_safe
+from showis.services.orchestrator import (
+    ScanEventQueue,
+    event_broadcaster,
+    redis_event_feeder,
+    redis_events_enabled,
+)
 from showis.services.scanner import ScannerService
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -169,6 +175,18 @@ def _sse_payload(event_type: str, data: dict[str, Any]) -> str:
     return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
 
 
+def _already_seen(seen: dict[str, None], event_id: str) -> bool:
+    """Aynı olay hem yerel kuyruktan hem Redis'ten gelebilir; tek kez işle."""
+    if not event_id:
+        return False
+    if event_id in seen:
+        return True
+    seen[event_id] = None
+    if len(seen) > 2048:
+        seen.pop(next(iter(seen)))
+    return False
+
+
 async def _client_disconnected(request: Request | None) -> bool:
     """Istemci koptu mu? (periyodik kontrol; bloklamaz)"""
     if request is None:
@@ -184,6 +202,7 @@ async def _scan_event_stream(
     initial_status: str,
     request: Request | None = None,
     lease: SseLease | None = None,
+    status_getter: Callable[[], Awaitable[str | None]] | None = None,
 ) -> AsyncIterator[str]:
     """Sinirli omurlu, heartbeat'li SSE akisi (SEC-16 + T-354 kira).
 
@@ -198,13 +217,24 @@ async def _scan_event_stream(
       dolunca `: bye` yorumu ile kapanir.
     """
     lease = lease or acquire_sse_lease(scan_id)
-    queue: asyncio.Queue[dict[str, Any]] | None = None
+    queue: ScanEventQueue | None = None
+    redis_task: asyncio.Task[None] | None = None
+    seen: dict[str, None] = {}
     try:
         if initial_status in _FINAL_STATUSES:
             yield _sse_payload(f"scan.{initial_status}", {"status": initial_status})
             return
 
         queue = event_broadcaster.subscribe(scan_id)
+        if redis_events_enabled():
+            redis_task = asyncio.create_task(redis_event_feeder(scan_id, queue))
+        if status_getter is not None:
+            # Abonelik ile ilk durum okuması arasında tarama bitmiş olabilir:
+            # terminal olay yayınlanmış ve kaçmıştır; DB'den tazele.
+            current = await status_getter()
+            if current in _FINAL_STATUSES:
+                yield _sse_payload(f"scan.{current}", {"status": current})
+                return
         # Ilk bayti hemen gonder: proxy/tarayici baglantiyi acik saysin, testler
         # heartbeat beklemesin (SSE yorumlari istemciye olay olarak gitmez).
         yield ": connected\n\n"
@@ -230,6 +260,8 @@ async def _scan_event_stream(
                 continue
 
             renew_sse_lease(lease)
+            if _already_seen(seen, str(item.get("event_id") or "")):
+                continue
             yield _sse_payload(item["type"], item["data"])
             if item["type"] in ("scan.completed", "scan.failed", "scan.cancelled"):
                 return
@@ -239,6 +271,10 @@ async def _scan_event_stream(
         return
     finally:
         release_sse_lease(lease)
+        if redis_task is not None:
+            redis_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await redis_task
         if queue is not None:
             dropped = getattr(queue, "dropped", 0)
             if dropped:
@@ -257,7 +293,7 @@ async def get_scan_status(scan_id: str, db: AsyncSession = Depends(get_db)):
     res = await db.execute(select(Scan).options(selectinload(Scan.tasks)).where(Scan.id == scan_id))
     scan = res.scalar_one_or_none()
     if not scan:
-        raise HTTPException(status_code=404, detail="Scan not found")
+        raise HTTPException(status_code=404, detail="Tarama bulunamadı")
 
     return {
         "id": scan.id,
@@ -303,7 +339,7 @@ async def stream_scan_events(
         await db.execute(select(Scan.id, Scan.status).where(Scan.id == scan_id))
     ).first()
     if scan is None:
-        raise HTTPException(status_code=404, detail="Scan not found")
+        raise HTTPException(status_code=404, detail="Tarama bulunamadı")
 
     reap_stale_sse_leases(scan_id)
     active = active_sse_leases(scan_id)
@@ -318,8 +354,21 @@ async def stream_scan_events(
         )
 
     lease = acquire_sse_lease(scan_id)
+
+    async def _current_status() -> str | None:
+        row = (
+            await db.execute(select(Scan.status).where(Scan.id == scan_id))
+        ).scalar_one_or_none()
+        return str(row) if row is not None else None
+
     return StreamingResponse(
-        _scan_event_stream(scan_id, str(scan.status), request=request, lease=lease),
+        _scan_event_stream(
+            scan_id,
+            str(scan.status),
+            request=request,
+            lease=lease,
+            status_getter=_current_status,
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -344,8 +393,17 @@ async def cancel_scan(
     res = await db.execute(select(Scan).where(Scan.id == scan_id))
     scan = res.scalar_one_or_none()
     if not scan:
-        raise HTTPException(status_code=404, detail="Scan not found")
+        raise HTTPException(status_code=404, detail="Tarama bulunamadı")
 
+    if scan.status in ("completed", "failed"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "scan_terminal",
+                "status": scan.status,
+                "message": "Tamamlanmış/başarısız tarama iptal edilemez",
+            },
+        )
     was_cancelled = scan.status == "cancelled"
     scan.status = "cancelled"
     await db.commit()
@@ -363,7 +421,7 @@ async def cancel_scan(
         _revoke_celery_task(str(celery_task_id))
 
     await event_broadcaster.broadcast(scan.id, "scan.cancelled", {"status": "cancelled"})
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="scan.cancel",

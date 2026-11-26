@@ -67,6 +67,7 @@ async def _create_case(client, name: str = "T112 Vaka") -> str:
             "name": name,
             "purpose": "kendi hesabimi denetlemek icin",
             "legal_basis": "self_check",
+            "authorization_confirmed": True,
             "target": {"first_name": "Kerem", "last_name": "Boz", "hints": {}},
         },
     )
@@ -282,3 +283,27 @@ async def test_rapor_silme_basarisizsa_audit_yazilir(
         assert logs[0].details["failed_count"] >= 1
     finally:
         monkeypatch.undo()
+
+
+@pytest.mark.asyncio
+async def test_scan_queue_env_override_api_ile_ayni_kaynak(
+    client, session_factory, monkeypatch
+):
+    """SHOWIS_SCAN_QUEUE özelleştirilirse API aynı kuyruğa gönderir (Mert devri)."""
+    monkeypatch.setenv("USE_CELERY", "1")
+    monkeypatch.setenv("SHOWIS_SCAN_QUEUE", "osint-alt")
+    calls: list[dict] = []
+
+    def _fake_send_task(name, args=None, queue=None, **kwargs):
+        calls.append({"name": name, "args": args, "queue": queue})
+        result = _FakeAsyncResult("celery-task-alt")
+        return result
+
+    import showis.services.worker as worker
+
+    monkeypatch.setattr(worker.celery_app, "send_task", _fake_send_task)
+
+    case_id = await _create_case(client, name="Kuyruk Testi")
+    res = await client.post(f"/api/v1/cases/{case_id}/scan", json={"mode": "O2"})
+    assert res.status_code == 200, res.text
+    assert calls and calls[0]["queue"] == "osint-alt"

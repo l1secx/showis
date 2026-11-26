@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from showis.db.models import Case, PoolItem, ResearchMessage, ResearchSession, Setting
+from showis.db.models import PoolItem, ResearchMessage, ResearchSession, Setting
 from showis.db.session import get_db
 from showis.services import research_state
 from showis.services.ai_providers import active_provider, allowed_models, get_provider
-from showis.services.audit import record_request_audit
+from showis.services.audit import record_request_audit_safe
 from showis.services.pool import ensure_case_pool
 from showis.services.research import (
     DEPTH_PROFILES,
@@ -57,13 +58,7 @@ class ResearchAnswer(BaseModel):
     answer: str = Field(min_length=1, max_length=2000)
 
 
-async def _require_case(db: AsyncSession, case_id: str) -> Case:
-    case = (
-        await db.execute(select(Case).where(Case.id == case_id))
-    ).scalar_one_or_none()
-    if case is None:
-        raise HTTPException(status_code=404, detail="Case not found")
-    return case
+from .common import require_case as _require_case  # noqa: E402
 
 
 async def _require_session(
@@ -207,7 +202,7 @@ async def start_research(
     if data.provider_id:
         provider = await get_provider(db, data.provider_id)
         if provider is None or not provider.enabled:
-            raise HTTPException(status_code=404, detail="AI provider not found")
+            raise HTTPException(status_code=404, detail="AI sağlayıcısı bulunamadı")
         if not provider.secret_encrypted:
             raise HTTPException(
                 status_code=422, detail="Seçili AI sağlayıcısının API anahtarı yok"
@@ -283,7 +278,7 @@ async def start_research(
             status_code=409, detail="Bu vakada çalışan bir araştırma oturumu var"
         ) from None
     await db.refresh(session)
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="research.session.create",
@@ -351,6 +346,7 @@ async def add_research_message(
     session.error = None
     session.started_at = None
     session.finished_at = None
+    session.heartbeat_at = datetime.now(timezone.utc)
     try:
         await db.commit()
     except IntegrityError:
@@ -359,7 +355,7 @@ async def add_research_message(
             status_code=409, detail="Bu vakada çalışan başka bir araştırma oturumu var"
         ) from None
     await db.refresh(session)
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="research.session.follow_up",
@@ -395,6 +391,7 @@ async def _answer_offline(
     )
     session.status = "queued"
     session.error = None
+    session.heartbeat_at = datetime.now(timezone.utc)
     await db.commit()
     background_tasks.add_task(run_research_session, session.id)
     return True
@@ -415,7 +412,29 @@ async def _steer_running_session(
             return {"id": session.id, "status": "running", "queued": False, "answered": True}
     if control is None and await _answer_offline(db, background_tasks, session, None, text):
         return {"id": session.id, "status": "queued", "queued": False, "answered": True}
-    queued = control.push_steer(text) if control is not None else False
+    if control is None:
+        # Süreç yeniden başlamış: canlı tüketici yok. Yönlendirmeyi kalıcılaştır ve
+        # oturumu `interrupted`'a çek; kullanıcı "Devam et" ile kaldığı yerden sürer.
+        session.status = "interrupted"
+        session.error = "Araştırma süreci yeniden başladı; Devam et ile sürdürün"
+        session.heartbeat_at = datetime.now(timezone.utc)
+        session.stats = {
+            **(session.stats or {}),
+            "activity": "Araştırma durduruldu; Devam et ile sürdürülebilir",
+        }
+        db.add(
+            ResearchMessage(
+                session_id=session.id,
+                role="user",
+                tool_name="steer",
+                content=text,
+                tool_args={"queued": False, "live": False},
+            )
+        )
+        await research_state.append_steer(db, session.id, text)
+        await db.commit()
+        return {"id": session.id, "status": "interrupted", "queued": False, "live": False}
+    queued = control.push_steer(text)
     await research_state.append_steer(db, session.id, text)
     db.add(
         ResearchMessage(
@@ -432,7 +451,7 @@ async def _steer_running_session(
         "steer",
         {"session_id": session.id, "text": text[:600], "queued": queued},
     )
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="research.session.steer",
@@ -464,7 +483,7 @@ async def interrupt_research(
         session.status = "interrupted"
         await db.commit()
         status_text = "interrupted"
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="research.session.interrupt",
@@ -493,6 +512,7 @@ async def resume_research(
     session.status = "queued"
     session.error = None
     session.finished_at = None
+    session.heartbeat_at = datetime.now(timezone.utc)
     try:
         await db.commit()
     except IntegrityError:
@@ -501,7 +521,7 @@ async def resume_research(
             status_code=409, detail="Bu vakada çalışan başka bir araştırma oturumu var"
         ) from None
     await db.refresh(session)
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="research.session.resume",
@@ -535,7 +555,7 @@ async def answer_research_question(
         db, background_tasks, session, data.question_id, data.answer
     ):
         raise HTTPException(status_code=409, detail="Bekleyen soru yok")
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="research.session.answer",
@@ -560,6 +580,7 @@ async def research_proposals(
                     PoolItem.case_id == case_id,
                     PoolItem.source == "ai",
                     PoolItem.status.in_(("proposed", "candidate")),
+                    PoolItem.provenance["session_id"].as_string() == session_id,
                 )
                 .order_by(PoolItem.created_at.desc())
                 .limit(300)
@@ -579,7 +600,6 @@ async def research_proposals(
             "source_url": (row.provenance or {}).get("url"),
         }
         for row in rows
-        if (row.provenance or {}).get("session_id") == session_id
     ]
     return {"items": items, "total": len(items)}
 
@@ -595,7 +615,7 @@ async def cancel_research(
     if session.status in TERMINAL_STATUSES:
         return {"id": session.id, "status": session.status}
     await cancel_research_session(db, session)
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="research.session.cancel",
@@ -618,7 +638,7 @@ async def delete_research_session(
         raise HTTPException(status_code=409, detail="Çalışan oturum silinemez")
     await db.delete(session)
     await db.commit()
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="research.session.delete",

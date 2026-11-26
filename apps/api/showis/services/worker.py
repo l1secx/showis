@@ -24,6 +24,7 @@ from celery import Celery
 from celery.schedules import crontab
 from celery.signals import worker_process_init
 from showis.core.logging import install_redaction_filter
+from showis.core.queues import scan_queue
 from showis.db.models import Scan
 from showis.db.session import reset_inherited_engine, task_session
 from showis.services.retention import run_retention_purge
@@ -38,7 +39,7 @@ install_redaction_filter()
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
 # Yalnizca osint kuyrugunu tuketen worker icin gecerli ayarlar.
-SCAN_QUEUE = os.getenv("SHOWIS_SCAN_QUEUE", "osint")
+SCAN_QUEUE = scan_queue()
 STALE_SCAN_SECONDS = int(os.getenv("SHOWIS_STALE_SCAN_SECONDS", "1800"))
 MAX_RECOVERY_ATTEMPTS = int(os.getenv("SHOWIS_SCAN_MAX_RECOVERY_ATTEMPTS", "2"))
 SCAN_MAX_RETRIES = int(os.getenv("SHOWIS_SCAN_MAX_RETRIES", "2"))
@@ -61,6 +62,10 @@ celery_app.conf.update(
     accept_content=["json"],
     timezone="UTC",
     enable_utc=True,
+    #: Beat/route edilmemiş tüm görevler worker'ın tükettiği kuyruğa düşsün
+    #: (`SHOWIS_SCAN_QUEUE` tek kaynak; aksi halde beat görevleri `celery`
+    #: kuyruğuna gider ve `-Q osint` worker'ı onları hiç çalıştırmaz).
+    task_default_queue=SCAN_QUEUE,
     # Worker yalnizca osint kuyrugunu tuketir; bu ayarlar o kuyrugu etkiler.
     worker_prefetch_multiplier=1,
     broker_transport_options={"visibility_timeout": BROKER_VISIBILITY_TIMEOUT},
@@ -81,6 +86,10 @@ celery_app.conf.update(
         "watch-cases": {
             "task": "showis.watch.run",
             "schedule": 6 * 3600.0,
+        },
+        "recover-research": {
+            "task": "showis.research.recover",
+            "schedule": 120.0,
         },
     },
 )
@@ -153,6 +162,18 @@ def watch_run_task() -> dict:
     async def _run() -> dict:
         async with task_session() as session:
             return await run_due_watches(session)
+
+    return asyncio.run(_run())
+
+
+@celery_app.task(name="showis.research.recover")
+def recover_research_task() -> dict:
+    """Süreci ölmüş `queued|running` araştırma oturumlarını `interrupted` işaretler."""
+    from showis.services.research_recovery import recover_stale_research_sessions
+
+    async def _run() -> dict:
+        async with task_session() as session:
+            return await recover_stale_research_sessions(session)
 
     return asyncio.run(_run())
 
@@ -257,6 +278,19 @@ def _stale_reference(scan: Scan, stats: dict) -> datetime:
     return max(_as_utc(value) for value in candidates)
 
 
+def _is_stale(scan: Scan, stats: dict, cutoff: datetime) -> bool:
+    """Tarama bayat mi?
+
+    `heartbeat_at` doluysa tek doğruluk kaynağı odur: çalışan tarama döngüsü
+    periyodik günceller, böylece O3 duvar bütçesine eşit stale eşiği canlı
+    taramayı ikinci kez başlatmaz. Eski satırlarda (heartbeat yok) created_at/
+    started_at/requeue damgasına düşülür.
+    """
+    if scan.heartbeat_at is not None:
+        return _as_utc(scan.heartbeat_at) < cutoff
+    return _stale_reference(scan, stats) < cutoff
+
+
 async def recover_stale_scans(
     session: AsyncSession,
     *,
@@ -292,7 +326,7 @@ async def recover_stale_scans(
 
     for scan in candidates:
         stats = dict(scan.stats or {})
-        if _stale_reference(scan, stats) > cutoff:
+        if not _is_stale(scan, stats, cutoff):
             skipped.append(scan.id)
             continue
 
@@ -301,6 +335,7 @@ async def recover_stale_scans(
         if attempts >= limit:
             scan.status = "failed"
             scan.finished_at = now
+            scan.heartbeat_at = None
             scan.stats = {
                 **stats,
                 "recovery": "stale",
@@ -313,6 +348,7 @@ async def recover_stale_scans(
 
         scan.status = "queued"
         scan.started_at = None
+        scan.heartbeat_at = None
         scan.stats = {
             **stats,
             "recovery": "requeued",

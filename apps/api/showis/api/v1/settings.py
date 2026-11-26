@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 from showis.core.redact import provider_error_message, sanitize_error
 from showis.db.models import Setting
 from showis.db.session import get_db
-from showis.services.audit import record_request_audit
+from showis.services.audit import record_request_audit_safe
 from showis_engine.policy import SSRFViolationError, guard_url
 from showis_llm.base_url import BaseUrlError, validate_base_url
 from showis_settings.crypto import decrypt_secret, encrypt_secret, mask_secret
@@ -210,7 +210,7 @@ async def upsert_provider(
 
     # T-112/3 (SEC-13): sır rotasyonu / base_url değişimi iz bırakır.
     # Sır değeri ASLA yazılmaz — yalnız provider + değişen alan adları.
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="settings.provider.update",
@@ -233,11 +233,11 @@ async def delete_provider(
     res = await db.execute(select(Setting).where(Setting.id == setting_id))
     item = res.scalar_one_or_none()
     if not item:
-        raise HTTPException(status_code=404, detail="Provider setting not found")
+        raise HTTPException(status_code=404, detail="Sağlayıcı ayarı bulunamadı")
     provider = item.provider
     await db.delete(item)
     await db.commit()
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="settings.provider.delete",
@@ -265,7 +265,7 @@ async def test_provider_connection(setting_id: str, db: AsyncSession = Depends(g
     res = await db.execute(select(Setting).where(Setting.id == setting_id))
     item = res.scalar_one_or_none()
     if not item:
-        raise HTTPException(status_code=404, detail="Provider setting not found")
+        raise HTTPException(status_code=404, detail="Sağlayıcı ayarı bulunamadı")
 
     headers = {"User-Agent": "Showis/0.1 (+https://github.com/showis-osint)"}
     provider = item.provider

@@ -214,3 +214,40 @@ async def test_checkpoint_saves_resume_state(db_factory, client):
         await _checkpoint_for_question(runtime)
     stored = await _session_row(db_factory, session_id)
     assert stored.stats["resume"]["next_wave"] == 3
+
+
+@pytest.mark.asyncio
+async def test_running_session_without_control_marks_interrupted(db_factory, client):
+    """B-014: süreç yeniden başlamışsa steer yutulmaz; oturum interrupted olur."""
+    case_id = await _workspace._seed_case(db_factory)
+    async with db_factory() as db:
+        db.add(
+            ResearchSession(
+                id="stale-running-session",
+                case_id=case_id,
+                title="Süreçsiz",
+                question="Kerem Boz kim?",
+                status="running",
+                created_by="test",
+            )
+        )
+        await db.commit()
+    assert get_control("stale-running-session") is None
+
+    res = await client.post(
+        f"/api/v1/cases/{case_id}/research/stale-running-session/messages",
+        json={"question": "LinkedIn'e odaklan"},
+    )
+    assert res.status_code == 202, res.text
+    assert res.json()["status"] == "interrupted"
+    assert res.json()["queued"] is False
+
+    async with db_factory() as db:
+        row = (
+            await db.execute(
+                select(ResearchSession).where(ResearchSession.id == "stale-running-session")
+            )
+        ).scalar_one()
+        state = await research_state.get_state(db, "stale-running-session")
+    assert row.status == "interrupted"
+    assert state is not None and "LinkedIn'e odaklan" in state.steering

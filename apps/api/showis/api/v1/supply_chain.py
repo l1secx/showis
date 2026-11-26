@@ -6,9 +6,9 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
-from showis.db.models import Case, SupplyChainEdge, SupplyChainNode
+from showis.db.models import SupplyChainEdge, SupplyChainNode
 from showis.db.session import get_db
-from showis.services.audit import record_request_audit
+from showis.services.audit import record_request_audit_safe
 from showis.services.pool import POOL_STATUSES, PoolValidationError, normalize_value
 from showis.services.supply_chain import (
     NODE_KINDS,
@@ -66,13 +66,7 @@ class EdgePatch(BaseModel):
     evidence: dict[str, Any] | None = None
 
 
-async def _require_case(db: AsyncSession, case_id: str) -> Case:
-    case = (
-        await db.execute(select(Case).where(Case.id == case_id))
-    ).scalar_one_or_none()
-    if case is None:
-        raise HTTPException(status_code=404, detail="Case not found")
-    return case
+from .common import require_case as _require_case  # noqa: E402
 
 
 async def _require_node(db: AsyncSession, case_id: str, node_id: str) -> SupplyChainNode:
@@ -84,7 +78,7 @@ async def _require_node(db: AsyncSession, case_id: str, node_id: str) -> SupplyC
         )
     ).scalar_one_or_none()
     if node is None:
-        raise HTTPException(status_code=404, detail="Node not found")
+        raise HTTPException(status_code=404, detail="Düğüm bulunamadı")
     return node
 
 
@@ -97,7 +91,7 @@ async def _require_edge(db: AsyncSession, case_id: str, edge_id: str) -> SupplyC
         )
     ).scalar_one_or_none()
     if edge is None:
-        raise HTTPException(status_code=404, detail="Edge not found")
+        raise HTTPException(status_code=404, detail="İlişki bulunamadı")
     return edge
 
 
@@ -161,7 +155,7 @@ async def add_node(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     await db.commit()
     await db.refresh(node)
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="supply_chain.node.create" if created else "supply_chain.node.merge",
@@ -223,7 +217,7 @@ async def update_node(
             status_code=409, detail="aynı türde bu adla bir düğüm zaten var"
         ) from None
     await db.refresh(node)
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="supply_chain.node.update",
@@ -257,7 +251,7 @@ async def delete_node(
     )
     await db.delete(node)
     await db.commit()
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="supply_chain.node.delete",
@@ -294,7 +288,7 @@ async def add_edge(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     await db.commit()
     await db.refresh(edge)
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="supply_chain.edge.create" if created else "supply_chain.edge.merge",
@@ -335,7 +329,7 @@ async def update_edge(
         changed.append("evidence")
     await db.commit()
     await db.refresh(edge)
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="supply_chain.edge.update",
@@ -358,7 +352,7 @@ async def delete_edge(
     relation = edge.relation
     await db.delete(edge)
     await db.commit()
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="supply_chain.edge.delete",

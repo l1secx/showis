@@ -87,6 +87,7 @@ async def test_browser_service_render_blocked_429():
     svc._last_render.clear()
     transport = httpx.ASGITransport(app=browser_app)
     with respx.mock:
+        respx.get("https://thm.example.com/robots.txt").respond(404)
         respx.get("https://thm.example.com/p/foo").respond(status_code=429)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             resp = await c.post("/render", json={"url": "https://thm.example.com/p/foo"})
@@ -104,6 +105,7 @@ async def test_browser_service_render_ok():
     svc._last_render.clear()
     transport = httpx.ASGITransport(app=browser_app)
     with respx.mock:
+        respx.get("https://ok.example.com/robots.txt").respond(404)
         respx.get("https://ok.example.com/p/foo").respond(
             text="<html><body>Profile OK</body></html>"
         )

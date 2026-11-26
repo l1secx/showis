@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request
 from showis.db.session import get_db
-from showis.services.audit import record_request_audit
+from showis.services.audit import record_request_audit_safe
 from showis.services.breach.common import BreachProviderError
 from showis.services.breach.pwned_passwords import fetch_range
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,7 +27,7 @@ async def password_range(
     except BreachProviderError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     # Önek denetim kaydına yazılmaz; yalnız eylem ve eşleşme sayısı tutulur.
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="breach.password_range",

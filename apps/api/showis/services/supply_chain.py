@@ -18,6 +18,7 @@ from showis.services.pool import (
     normalize_value,
 )
 from sqlalchemy import and_, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 NODE_KINDS: frozenset[str] = frozenset(
@@ -132,8 +133,24 @@ async def create_node(
         confidence=confidence,
         created_by=created_by,
     )
-    db.add(node)
-    await db.flush()
+    try:
+        # Eşzamanlı AI/tarama yazımı unique constraint'i yarıştırabilir.
+        async with db.begin_nested():
+            db.add(node)
+            await db.flush()
+    except IntegrityError:
+        existing = (
+            await db.execute(
+                select(SupplyChainNode).where(
+                    SupplyChainNode.case_id == case_id,
+                    SupplyChainNode.kind == kind,
+                    SupplyChainNode.normalized == normalized,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            return existing, False
+        raise
     return node, True
 
 

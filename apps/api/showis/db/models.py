@@ -293,6 +293,10 @@ class ResearchSession(Base):
     created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: Çalışan süreç canlılık damgası (restart kurtarması bayat oturumu keser).
+    heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
@@ -458,6 +462,10 @@ class Scan(Base):
     policy_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON_TYPE, default=dict)
     stats: Mapped[dict[str, Any]] = mapped_column(JSON_TYPE, default=dict)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: Çalışan süreç canlılık damgası (stale-recovery canlı taramayı kesmesin).
+    heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -723,6 +731,13 @@ Index(
     sqlite_where=text("status IN ('queued', 'running', 'awaiting_user')"),
 )
 Index("ix_research_sessions_case_created", ResearchSession.case_id, ResearchSession.created_at)
+#: Stale recovery: durum + canlılık damgası (0025).
+Index("ix_scans_status_heartbeat", Scan.status, Scan.heartbeat_at)
+Index(
+    "ix_research_sessions_status_heartbeat",
+    ResearchSession.status,
+    ResearchSession.heartbeat_at,
+)
 
 # 0006: sorgu indeksleri (FK ve sik filtrelenen alanlar).
 Index("ix_cases_created_at", Case.created_at)
@@ -735,6 +750,9 @@ Index("ix_edges_case_id", Edge.case_id)
 Index("ix_observations_scan_id", Observation.scan_id)
 Index("ix_tasks_scan_status", Task.scan_id, Task.status)
 Index("ix_evidence_case_id", Evidence.case_id)
+#: Retention purge: `WHERE expires_at < now` (0025).
+Index("ix_evidence_expires_at", Evidence.expires_at)
+Index("ix_evidence_snapshots_expires_at", EvidenceSnapshot.expires_at)
 
 # 0003: vaka basina tek aktif (queued/running) tarama.
 Index(

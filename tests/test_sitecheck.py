@@ -7,7 +7,6 @@ import respx
 from showis_connectors.sitecheck.connector import SiteCheckConnector
 from showis_connectors.sitecheck.engine import (
     ABSENT,
-    ERROR,
     EXISTS,
     SKIPPED,
     UNKNOWN,
@@ -114,8 +113,9 @@ async def test_unknown_when_status_unexpected(engine: UsernameCheckEngine):
     assert by_key["teststatus"].status == UNKNOWN
     # json_path "data.name" -> {} uzerinde None -> absent
     assert by_key["testjson"].status == ABSENT
-    # html sitesi: 500 -> HttpClient hata firlatir -> error
-    assert by_key["testhtml"].status == ERROR
+    # html sitesi: 500 yanıtı artık çağırana döner -> expect_status dışı -> unknown
+    assert by_key["testhtml"].status == UNKNOWN
+    assert by_key["testhtml"].http_status == 500
 
 
 @pytest.mark.asyncio

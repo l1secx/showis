@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from showis.db.models import Case, Evidence, Finding
 from showis.db.session import get_db
-from showis.services.audit import record_request_audit
+from showis.services.audit import record_request_audit_safe
 from showis.services.retention import _evidence_file_path
 from showis_engine.browser import BrowserClient
 from showis_engine.http import EvidenceStore
@@ -64,16 +64,20 @@ async def patch_finding(
     res = await db.execute(select(Finding).where(Finding.id == finding_id))
     finding = res.scalar_one_or_none()
     if not finding:
-        raise HTTPException(status_code=404, detail="Finding not found")
+        raise HTTPException(status_code=404, detail="Bulgu bulunamadı")
 
     previous_status = finding.status
     finding.status = payload.status
     if payload.status in ("confirmed", "rejected"):
         finding.verified_at = datetime.now(timezone.utc)
+    else:
+        # `candidate` = makine önerisi; kullanıcı kararı geri alındı, yeniden
+        # tarama bu bulguyu "kullanıcı kararı" saymamalı.
+        finding.verified_at = None
     await db.commit()
 
     # SEC-13: kullanıcı kararı adli iz bırakır (değer değil, durum geçişi)
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="finding.update",
@@ -100,7 +104,7 @@ async def get_finding_evidence(finding_id: str, db: AsyncSession = Depends(get_d
     res = await db.execute(select(Finding).where(Finding.id == finding_id))
     finding = res.scalar_one_or_none()
     if not finding:
-        raise HTTPException(status_code=404, detail="Finding not found")
+        raise HTTPException(status_code=404, detail="Bulgu bulunamadı")
 
     evidence_ids = finding.evidence_ids or []
     if not evidence_ids:
@@ -142,7 +146,7 @@ async def capture_finding_screenshot(
         await db.execute(select(Finding).where(Finding.id == finding_id))
     ).scalar_one_or_none()
     if not finding:
-        raise HTTPException(status_code=404, detail="Finding not found")
+        raise HTTPException(status_code=404, detail="Bulgu bulunamadı")
     if not finding.url:
         raise HTTPException(status_code=422, detail="Bulgunun URL'si yok")
     try:
@@ -193,7 +197,7 @@ async def capture_finding_screenshot(
     )
     finding.evidence_ids = list(dict.fromkeys([*(finding.evidence_ids or []), ev.id]))
     await db.commit()
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="finding.screenshot",

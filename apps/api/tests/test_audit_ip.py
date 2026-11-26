@@ -287,3 +287,20 @@ async def test_audit_guvenilmeyen_peerden_gelen_sahte_ippyi_yazmaz(db_factory, t
         )
     assert res.status_code == 200, res.text
     assert await _audit_ip(db_factory) == "203.0.113.9"
+
+
+def test_edge_forwarded_ignores_x_real_ip(monkeypatch):
+    """T17-03: edge IP anahtarı istemci X-Real-IP'sine güvenmez; XFF kullanır."""
+    from showis.services.audit import client_ip_from_forwarded
+
+    monkeypatch.setenv("SHOWIS_TRUSTED_PROXIES", "10.0.0.0/8")
+    headers = {
+        "x-real-ip": "6.6.6.6",  # istemci spoof'u
+        "x-forwarded-for": "203.0.113.9",  # Caddy'nin yönettiği zincir
+    }
+    # Güvenilir proxy arkasında X-Real-IP yok sayılır.
+    assert client_ip_from_forwarded(headers, "10.1.2.3") == "203.0.113.9"
+    # Güvenilmeyen peer'da başlıklar tamamen yok sayılır.
+    assert client_ip_from_forwarded(headers, "198.51.100.7") == "198.51.100.7"
+    # XFF yoksa peer döner (X-Real-IP'ye düşülmez).
+    assert client_ip_from_forwarded({"x-real-ip": "6.6.6.6"}, "10.1.2.3") == "10.1.2.3"

@@ -106,6 +106,7 @@ async def test_case_crud_and_scan_lifecycle(test_api_db, monkeypatch):
                 "name": "Investigation Alpha",
                 "purpose": "Self-check",
                 "legal_basis": "self_check",
+                "authorization_confirmed": True,
                 "target": {
                     "first_name": "Test",
                     "last_name": "Person",
@@ -155,10 +156,11 @@ async def test_case_crud_and_scan_lifecycle(test_api_db, monkeypatch):
         assert len(findings) == 1
         assert findings[0]["label"] == "mockuser"
 
-        # 7. Cancel endpoint check
+        # 7. Terminal tarama iptal edilemez (B-006): 409 + mevcut durum.
         cancel_res = await client.post(f"/api/v1/scans/{scan_id}/cancel")
-        assert cancel_res.status_code == 200
-        assert cancel_res.json()["status"] == "cancelled"
+        assert cancel_res.status_code == 409
+        assert cancel_res.json()["detail"]["error"] == "scan_terminal"
+        assert cancel_res.json()["detail"]["status"] == "completed"
 
         # 8. Delete case cascade
         del_res = await client.delete(f"/api/v1/cases/{case_id}")
@@ -208,4 +210,34 @@ async def test_artimli_finding_yazimi_entity_satirini_olusturur(test_api_db):
         from sqlalchemy import select
 
         rows = (await session.execute(select(DbFinding))).scalars().all()
-        assert [r.id for r in rows] == ["finding:mock:fresh-user"]
+        from showis.services.scanner import scoped_entity_id, scoped_finding_id
+
+        scoped = scoped_entity_id("case-incremental", "mock:fresh-user")
+        assert [r.id for r in rows] == [scoped_finding_id("case-incremental", scoped)]
+        assert rows[0].entity_id == scoped
+
+
+@pytest.mark.asyncio
+async def test_case_create_requires_explicit_authorization(test_api_db):
+    """V-005: onay alanı yoksa/sahte ise vaka açılmaz (fail-closed)."""
+    transport = ASGITransport(app=app)
+    base = {
+        "name": "Onaysız Vaka",
+        "purpose": "Yetkisiz veri toplama denemesi",
+        "legal_basis": "self_check",
+        "target": {"first_name": "Test", "last_name": "Person"},
+    }
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        missing = await client.post("/api/v1/cases", json=base)
+        assert missing.status_code == 422
+        assert "authorization_confirmed" in missing.text
+
+        denied = await client.post(
+            "/api/v1/cases", json={**base, "authorization_confirmed": False}
+        )
+        assert denied.status_code == 422
+
+        allowed = await client.post(
+            "/api/v1/cases", json={**base, "authorization_confirmed": True}
+        )
+        assert allowed.status_code == 201

@@ -8,6 +8,7 @@ from typing import Any, Iterable, Sequence
 from showis.db.models import PoolItem, PoolRelation
 from showis.services.identity_graph import IdentityCluster, compute_identity_clusters
 from sqlalchemy import delete, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 RELATION_TYPES: frozenset[str] = frozenset(
@@ -153,8 +154,25 @@ async def upsert_relation(
         source=source,
         created_by=created_by,
     )
-    db.add(row)
-    await db.flush()
+    try:
+        # Eşzamanlı kural/AI/pivot yazımı unique constraint'i yarıştırabilir.
+        async with db.begin_nested():
+            db.add(row)
+            await db.flush()
+    except IntegrityError:
+        existing = (
+            await db.execute(
+                select(PoolRelation).where(
+                    PoolRelation.case_id == case_id,
+                    PoolRelation.src_item_id == src_item_id,
+                    PoolRelation.dst_item_id == dst_item_id,
+                    PoolRelation.type == type,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            return existing, False
+        raise
     return row, True
 
 

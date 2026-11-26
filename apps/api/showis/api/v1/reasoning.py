@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
-from showis.db.models import Case, Hypothesis, PoolItem, PoolRelation
+from showis.db.models import Hypothesis, PoolItem, PoolRelation
 from showis.db.session import get_db
-from showis.services.audit import record_request_audit
+from showis.services.audit import record_request_audit_safe
 from showis.services.chain import DEFAULT_MAX_FETCHES, run_case_chain
 from showis.services.connectors_factory import build_llm_client
 from showis.services.reasoning.avatars import hash_pool_avatars
@@ -75,11 +75,7 @@ class HypothesisPatch(BaseModel):
     next_checks: list[str] | None = Field(default=None, max_length=6)
 
 
-async def _require_case(db: AsyncSession, case_id: str) -> Case:
-    case = (await db.execute(select(Case).where(Case.id == case_id))).scalar_one_or_none()
-    if case is None:
-        raise HTTPException(status_code=404, detail="Case not found")
-    return case
+from .common import require_case as _require_case  # noqa: E402
 
 
 async def _require_item(db: AsyncSession, case_id: str, item_id: str) -> PoolItem:
@@ -89,7 +85,7 @@ async def _require_item(db: AsyncSession, case_id: str, item_id: str) -> PoolIte
         )
     ).scalar_one_or_none()
     if item is None:
-        raise HTTPException(status_code=404, detail="Pool item not found")
+        raise HTTPException(status_code=404, detail="Havuz kaydı bulunamadı")
     return item
 
 
@@ -158,7 +154,7 @@ async def create_relation(
         row.status = data.status  # kullanıcı kararı mevcut ilişkiyi günceller
     await db.commit()
     await db.refresh(row)
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="reasoning.relation.create",
@@ -185,7 +181,7 @@ async def patch_relation(
         )
     ).scalar_one_or_none()
     if row is None:
-        raise HTTPException(status_code=404, detail="Relation not found")
+        raise HTTPException(status_code=404, detail="İlişki bulunamadı")
     if data.status is not None:
         if data.status not in RELATION_STATUSES:
             raise HTTPException(status_code=422, detail="geçersiz durum")
@@ -194,7 +190,7 @@ async def patch_relation(
         row.confidence = data.confidence
     await db.commit()
     await db.refresh(row)
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="reasoning.relation.update",
@@ -217,10 +213,10 @@ async def delete_relation(
         )
     ).scalar_one_or_none()
     if row is None:
-        raise HTTPException(status_code=404, detail="Relation not found")
+        raise HTTPException(status_code=404, detail="İlişki bulunamadı")
     await db.delete(row)
     await db.commit()
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="reasoning.relation.delete",
@@ -261,7 +257,7 @@ async def reasoning_graph(case_id: str, db: AsyncSession = Depends(get_db)):
 async def correlate(case_id: str, request: Request, db: AsyncSession = Depends(get_db)):
     await _require_case(db, case_id)
     result = await run_correlation(db, case_id)
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="reasoning.correlate",
@@ -278,7 +274,7 @@ async def hash_avatars(case_id: str, request: Request, db: AsyncSession = Depend
     """Havuz öğelerinin `avatar_url` görsellerini özetler (dHash korelasyonu için)."""
     await _require_case(db, case_id)
     result = await hash_pool_avatars(db, case_id)
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="reasoning.avatars",
@@ -329,7 +325,7 @@ async def execute_pivot(
         )
     except PivotError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="reasoning.pivot",
@@ -367,7 +363,7 @@ async def run_chain(
     )
     await db.commit()
     summary = result.summary()
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="reasoning.chain",
@@ -386,7 +382,7 @@ async def _require_hypothesis(db: AsyncSession, case_id: str, hypothesis_id: str
         )
     ).scalar_one_or_none()
     if row is None:
-        raise HTTPException(status_code=404, detail="Hypothesis not found")
+        raise HTTPException(status_code=404, detail="Hipotez bulunamadı")
     return row
 
 
@@ -419,7 +415,7 @@ async def generate(case_id: str, request: Request, db: AsyncSession = Depends(ge
     rows = await generate_hypotheses(
         db, case_id=case_id, client=client, actor=f"ai:{_actor(request)}"
     )
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="reasoning.hypotheses.generate",
@@ -476,7 +472,7 @@ async def create_hypothesis(
     db.add(row)
     await db.commit()
     await db.refresh(row)
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="reasoning.hypothesis.create",
@@ -506,7 +502,7 @@ async def patch_hypothesis(
         row.next_checks = [c[:300] for c in data.next_checks]
     await db.commit()
     await db.refresh(row)
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="reasoning.hypothesis.update",
@@ -524,7 +520,7 @@ async def delete_hypothesis(
     row = await _require_hypothesis(db, case_id, hypothesis_id)
     await db.delete(row)
     await db.commit()
-    await record_request_audit(
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="reasoning.hypothesis.delete",

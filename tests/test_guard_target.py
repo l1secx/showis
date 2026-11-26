@@ -55,6 +55,7 @@ def _case_payload(**overrides) -> dict:
         "name": "AUP Testi",
         "purpose": "Kendi hesabimi denetlemek icin",
         "legal_basis": "self_check",
+        "authorization_confirmed": True,
         "target": {"first_name": "Kerem", "last_name": "Boz", "hints": {}},
     }
     payload.update(overrides)

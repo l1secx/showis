@@ -2,25 +2,28 @@
 
 from __future__ import annotations
 
+import os
+import time
 from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from showis.db.models import Case, WatchAlert
+from showis.db.models import WatchAlert
 from showis.db.session import get_db
-from showis.services.audit import record_request_audit
+from showis.services.audit import record_request_audit_safe
 from showis.services.watch import run_watch
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/cases", tags=["watch"])
 
+#: Elle izleme pahalıdır (dış sağlayıcılar + zincir). Aynı vakada art arda
+#: çağrı sağlayıcıları tüketmesin diye kısa bir bekleme uygulanır.
+_MANUAL_COOLDOWN_SECONDS = float(os.getenv("SHOWIS_WATCH_MANUAL_COOLDOWN", "60"))
+_last_manual_run: dict[str, float] = {}
 
-async def _require_case(db: AsyncSession, case_id: str) -> Case:
-    case = (await db.execute(select(Case).where(Case.id == case_id))).scalar_one_or_none()
-    if case is None:
-        raise HTTPException(status_code=404, detail="Case not found")
-    return case
+
+from .common import require_case as _require_case  # noqa: E402
 
 
 def _alert_dict(alert: WatchAlert) -> dict[str, Any]:
@@ -64,7 +67,7 @@ async def mark_seen(
         )
     ).scalar_one_or_none()
     if alert is None:
-        raise HTTPException(status_code=404, detail="Alert not found")
+        raise HTTPException(status_code=404, detail="Uyarı bulunamadı")
     if alert.seen_at is None:
         alert.seen_at = datetime.now(timezone.utc)
         await db.commit()
@@ -73,9 +76,24 @@ async def mark_seen(
 
 @router.post("/{case_id}/watch/run")
 async def run(case_id: str, request: Request, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+    now = time.monotonic()
+    last = _last_manual_run.get(case_id)
+    if last is not None and now - last < _MANUAL_COOLDOWN_SECONDS:
+        retry_after = max(1, int(_MANUAL_COOLDOWN_SECONDS - (now - last)))
+        raise HTTPException(
+            status_code=429,
+            detail="İzleme yakın zamanda çalıştı; lütfen bekleyin",
+            headers={"Retry-After": str(retry_after)},
+        )
     case = await _require_case(db, case_id)
-    result = await run_watch(db, case)
-    await record_request_audit(
+    _last_manual_run[case_id] = now
+    try:
+        result = await run_watch(db, case)
+    except Exception:
+        # Başarısız çalıştırma bekleme kilidi bırakmasın.
+        _last_manual_run.pop(case_id, None)
+        raise
+    await record_request_audit_safe(
         db=db,
         request=request,
         action="watch.run",
