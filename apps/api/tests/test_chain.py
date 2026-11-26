@@ -479,3 +479,32 @@ def test_display_name_equal_to_handle_is_neutral():
     assert node.name_match is None and node.trust == 0.5
     engine._check_name(node, "Yael Wells")
     assert node.name_match is False and node.trust == 0.25
+
+
+@pytest.mark.asyncio
+async def test_rate_limited_api_falls_back_to_profile_page_rel_me():
+    from showis_connectors.account_intel import AccountIntelError
+
+    async def intel(network: str, handle: str):
+        raise AccountIntelError("GitHub: hız sınırı; sonra tekrar deneyin")
+
+    pages: list[str] = []
+
+    async def page(url: str, trusted: bool):
+        pages.append(url)
+        if url == "https://github.com/l1sec":
+            return PageData(
+                url=url,
+                rel_me=["https://x.com/l1sec_tw"],
+                links=["https://github.com/features", "https://x.com/github"],
+            )
+        return None
+
+    engine = ChainEngine(intel_fetcher=intel, page_fetcher=page, probe_handles=False)
+    engine.add_anchor_url("https://github.com/l1sec")
+    result = await engine.run()
+    nodes = {n.key: n for n in result.nodes}
+    assert pages == ["https://github.com/l1sec"]
+    assert nodes["profile:x:l1sec_tw"].trust > 0.9
+    # Platformun kendi hesabı (marka süzgeci) zincire girmez.
+    assert "profile:x:github" not in nodes

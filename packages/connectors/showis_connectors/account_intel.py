@@ -380,7 +380,7 @@ async def fetch_github(
     return intel
 
 
-MAX_HEAD_COMMITS = 3
+MAX_HEAD_COMMITS = 2
 
 
 async def _head_commit_emails(

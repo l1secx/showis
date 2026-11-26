@@ -133,6 +133,8 @@ _FETCHABLE_NETWORKS: frozenset[str] = frozenset(
         "hashnode",
     }
 )
+#: API'si başarısız olunca profil sayfası okunabilen ağlar.
+_PAGE_FALLBACK_NETWORKS: frozenset[str] = frozenset({"github", "gitlab", "codeberg", "devto"})
 #: Kişisel site sayılmayan, kullanıcıya ait olmayan genel barındırma kökleri.
 _SHARED_HOSTS: frozenset[str] = frozenset(
     {
@@ -783,6 +785,11 @@ class ChainEngine:
             intel = await self.intel_fetcher(node.network, handle)
         except AccountIntelError as exc:
             self.result.notes.append(f"{node.label}: {exc}")
+            # API kapalı/hız sınırında: profil sayfasının rel=me ve sosyal
+            # bağlantılarına düş (GitHub profil bağlantıları rel="me" taşır).
+            trusted = node.anchor or not node._unverified()
+            if node.url and node.network in _PAGE_FALLBACK_NETWORKS and trusted:
+                await self._expand_page(node, aggregator=False)
             return
         except Exception as exc:  # noqa: BLE001 - tek uç zinciri düşürmesin
             self.result.notes.append(f"{node.label}: {type(exc).__name__}")
