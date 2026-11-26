@@ -147,7 +147,28 @@ def _finding_public(f: Finding) -> dict[str, Any]:
     }
 
 
-REASONING_LIMITS = {"hypotheses": 20, "relations": 40, "contradictions": 30, "snapshots": 50}
+REASONING_LIMITS = {
+    "hypotheses": 20,
+    "relations": 40,
+    "contradictions": 30,
+    "snapshots": 50,
+    "identity_chain": 40,
+}
+#: Zincir kanıt türlerinin rapordaki adı.
+_CHAIN_RELATION_TR = {
+    "proof": "doğrulanmış kanıt",
+    "owner": "sahip alanı",
+    "rel_me": "rel=me",
+    "readme": "profil README",
+    "aggregator": "bağlantı sayfası",
+    "commit": "commit e-postası",
+    "bio": "biyografi",
+    "site": "kişisel site",
+    "backlink": "karşılıklı bağlantı",
+    "name": "isim eşleşmesi",
+    "handle_probe": "aynı kullanıcı adı",
+    "search": "arama sonucu",
+}
 
 
 def _evidence_rows(entries: list[Any]) -> list[dict[str, Any]]:
@@ -213,6 +234,38 @@ async def build_reasoning_block(db: AsyncSession, case_id: str) -> dict[str, Any
     def name(item_id: str) -> str:
         return str(labels.get(item_id) or item_id)
 
+    chain_items = [
+        item
+        for item in (
+            await db.execute(
+                select(PoolItem)
+                .where(PoolItem.case_id == case_id, PoolItem.status != "rejected")
+                .order_by(PoolItem.confidence.desc())
+            )
+        ).scalars()
+        if isinstance(item.provenance, dict) and item.provenance.get("method") == "chain"
+    ]
+    # Onaylı kayıtlar önce, sonra güven sırası.
+    chain_items.sort(key=lambda i: (i.status != "confirmed", -float(i.confidence or 0.0)))
+    identity_chain = [
+        {
+            "label": item.label,
+            "value": item.value[:300],
+            "status": item.status,
+            "confidence": float(item.confidence or 0.0),
+            "path": [str(step)[:120] for step in (item.provenance.get("chain") or [])][:6],
+            "evidence": sorted(
+                {
+                    _CHAIN_RELATION_TR.get(str(e.get("relation")), str(e.get("relation")))
+                    for e in (item.provenance.get("evidence") or [])
+                    if isinstance(e, dict)
+                }
+            ),
+        }
+        for item in chain_items
+        if item.kind != "username"  # aynı hesabın URL kaydı yeterli
+    ][: REASONING_LIMITS["identity_chain"]]
+
     chain = [
         {
             "type": r.type,
@@ -250,6 +303,7 @@ async def build_reasoning_block(db: AsyncSession, case_id: str) -> dict[str, Any
             for h in hypotheses
         ],
         "relations": chain,
+        "identity_chain": identity_chain,
         "contradictions": conflicts,
         "snapshots": [
             {

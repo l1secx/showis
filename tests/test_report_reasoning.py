@@ -155,3 +155,74 @@ async def test_report_data_omits_empty_reasoning(db_factory):
     case_id = await _seed_case(db_factory)
     async with db_factory() as db:
         assert "reasoning" not in await build_report_data(db, case_id)
+
+
+def test_identity_chain_section_html_and_pdf():
+    data = _report_data()
+    reasoning = _reasoning()
+    reasoning["identity_chain"] = [
+        {
+            "label": f"GitLab — ada {HOSTILE}",
+            "value": "https://gitlab.com/ada",
+            "status": "proposed",
+            "confidence": 0.97,
+            "path": ["github:ada"],
+            "evidence": ["karşılıklı bağlantı", "sahip alanı"],
+        }
+    ]
+    data["reasoning"] = reasoning
+    html = render_html_report(data)
+    assert "Kimlik zinciri" in html and "github:ada" in html and "0.97" in html
+    assert "<script>alert" not in html
+    assert generate_pdf_report(data).startswith(b"%PDF")
+
+
+@pytest.mark.asyncio
+async def test_reasoning_block_lists_chain_items_confirmed_first(db_factory):
+    from showis.services.pool import create_item
+
+    case_id = await _seed_case(db_factory)
+    async with db_factory() as db:
+        chain_prov = {
+            "method": "chain",
+            "chain": ["github:ada"],
+            "evidence": [{"relation": "owner"}, {"relation": "backlink"}],
+        }
+        await create_item(
+            db,
+            case_id=case_id,
+            kind="url",
+            label="X — ada",
+            value="https://x.com/ada",
+            source="ai",
+            status="proposed",
+            confidence=0.99,
+            provenance=chain_prov,
+        )
+        confirmed, _ = await create_item(
+            db,
+            case_id=case_id,
+            kind="url",
+            label="GitLab — ada",
+            value="https://gitlab.com/ada",
+            source="ai",
+            status="proposed",
+            confidence=0.9,
+            provenance=chain_prov,
+        )
+        confirmed.status = "confirmed"
+        await create_item(
+            db,
+            case_id=case_id,
+            kind="url",
+            label="arama",
+            value="https://example.org/a",
+            source="ai",
+            status="proposed",
+            confidence=0.95,
+        )
+        await db.commit()
+        block = await build_reasoning_block(db, case_id)
+    labels = [row["label"] for row in block["identity_chain"]]
+    assert labels == ["GitLab — ada", "X — ada"]
+    assert block["identity_chain"][1]["evidence"] == ["karşılıklı bağlantı", "sahip alanı"]

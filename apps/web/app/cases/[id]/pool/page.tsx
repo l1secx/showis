@@ -21,6 +21,8 @@ import { buildNoiseMap } from "./pool-noise";
 import { TriStateCheckbox } from "./pool-selection";
 
 const PAGE_SIZE = 100;
+/** Kimlik zinciri çapası olabilen türler. */
+const CHAIN_KINDS = new Set(["url", "username", "email", "domain"]);
 
 const KINDS = [
   "name",
@@ -382,6 +384,9 @@ export default function PoolPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [breachBusy, setBreachBusy] = useState<string | null>(null);
+  // Onaylanan hesap/URL/e-posta/alan adı: zinciri bu çapadan sürdürme önerisi.
+  const [chainSuggest, setChainSuggest] = useState<PoolItem | null>(null);
+  const [chainBusy, setChainBusy] = useState(false);
   const [bulkBreach, setBulkBreach] = useState(false);
 
   const [query, setQuery] = useState("");
@@ -529,6 +534,9 @@ export default function PoolPage() {
     setError(null);
     try {
       await api.updatePoolItem(id, item.id, { status: next });
+      setChainSuggest(
+        next === "confirmed" && CHAIN_KINDS.has(item.kind) ? item : null
+      );
       await load();
     } catch (e: any) {
       setError(e.message || "Durum güncellenemedi");
@@ -650,6 +658,24 @@ export default function PoolPage() {
     }
   };
 
+  const chainFromItem = async (item: PoolItem) => {
+    setChainBusy(true);
+    setError(null);
+    try {
+      const result = await api.runChain(id, { item_ids: [item.id] });
+      setChainSuggest(null);
+      setNotice(
+        `Zincir: ${result.discovered} hesap/sayfa (${result.high_confidence} yüksek güven), ` +
+          `${result.created} yeni öneri.`
+      );
+      await load();
+    } catch (e: any) {
+      setError(e.message || "Zincir kurulamadı");
+    } finally {
+      setChainBusy(false);
+    }
+  };
+
   const researchItem = (item: PoolItem) => {
     const snippet = item.value.slice(0, 180);
     const question = `"${snippet}" hakkında vaka havuzundaki bilgileri ve kamuya açık kaynakları kullanarak ayrıntılı araştırma yap. Bulguları kanıtlarıyla sun.`;
@@ -691,6 +717,37 @@ export default function PoolPage() {
           className="rounded-[6px] border border-ok-line bg-ok-soft px-3 py-2 text-[12.5px] text-ok"
         >
           {notice}
+        </div>
+      )}
+
+      {chainSuggest && (
+        <div
+          role="status"
+          className="flex flex-wrap items-center gap-3 rounded-[6px] border border-line-2 px-3 py-2 text-[12.5px] text-ink-2"
+        >
+          <span className="min-w-0 break-words">
+            <span className="font-medium text-ink">{chainSuggest.label}</span> onaylandı. Bu
+            hesabın sahibinin yazdığı bağlantılardan diğer hesaplar aransın mı?
+          </span>
+          <span className="ml-auto flex gap-2">
+            <button
+              type="button"
+              className="btn-secondary btn-sm"
+              onClick={() => chainFromItem(chainSuggest)}
+              disabled={chainBusy}
+            >
+              {chainBusy ? <Loader2 size={12} className="animate-spin" aria-hidden /> : null}
+              Zinciri sürdür
+            </button>
+            <button
+              type="button"
+              className="btn-quiet btn-sm"
+              onClick={() => setChainSuggest(null)}
+              aria-label="Öneriyi kapat"
+            >
+              <X size={12} aria-hidden />
+            </button>
+          </span>
         </div>
       )}
 

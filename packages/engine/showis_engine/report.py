@@ -529,6 +529,20 @@ kanıt zinciri sayılır; öneri düzeyindekiler dahil edilmez.</p>
 {% if hyp.next_checks %}<p class="muted">Sonraki kontroller:
   {{ hyp.next_checks|join("; ") }}</p>{% endif %}
 {% else %}<p>Hipotez yok.</p>{% endfor %}
+{% if report.reasoning.identity_chain %}
+<h3>Kimlik zinciri</h3>
+<p class="muted">Onaylı hesaplardan sahibin kendi yazdığı bağlantılarla (profil alanı,
+kriptografik kanıt, rel=me, karşılıklı bağlantı) bulunan hesaplar. Güven, kanıt türü ve
+bağımsız yol sayısından deterministik hesaplanır.</p>
+<table>
+  <tr><th>Hesap / sayfa</th><th>Zincir</th><th>Kanıt</th><th>Güven</th><th>Durum</th></tr>
+  {% for row in report.reasoning.identity_chain %}
+  <tr><td>{{ row.label }}<br><span class="tag">{{ row.value }}</span></td>
+      <td>{{ row.path|join(" → ") or "-" }}</td><td>{{ row.evidence|join(", ") }}</td>
+      <td>{{ "%.2f"|format(row.confidence) }}</td><td>{{ row.status }}</td></tr>
+  {% endfor %}
+</table>
+{% endif %}
 {% if report.reasoning.relations %}
 <table>
   <tr><th>İlişki</th><th>Kaynak</th><th>Hedef</th><th>Güven</th><th>Durum</th><th>Kanıt</th></tr>
@@ -697,6 +711,27 @@ def _reasoning_pdf_story(
         if hyp.get("next_checks"):
             checks = "; ".join(_pdf_text(c) for c in hyp["next_checks"])
             story.append(Paragraph(_t(f"Sonraki kontroller: {checks}"), small_style))
+    if reasoning.get("identity_chain"):
+        story.append(Spacer(1, 6))
+        story.append(Paragraph(_t("<b>Kimlik zinciri</b>"), body_style))
+        story.append(
+            table(
+                [
+                    ["Hesap / sayfa", "Zincir", "Kanıt", "Güven", "Durum"],
+                    *[
+                        [
+                            f"{row['label']}\n{row['value']}",
+                            " → ".join(row["path"]) or "-",
+                            ", ".join(row["evidence"]) or "-",
+                            f"{float(row['confidence']):.2f}",
+                            row["status"],
+                        ]
+                        for row in reasoning["identity_chain"]
+                    ],
+                ],
+                [5.0 * cm, 4.0 * cm, 4.2 * cm, 1.4 * cm, 2.4 * cm],
+            )
+        )
     if reasoning.get("relations"):
         story.append(Spacer(1, 6))
         story.append(
