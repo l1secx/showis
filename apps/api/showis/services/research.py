@@ -1764,7 +1764,8 @@ async def _run_chain_phase(runtime: ResearchRuntime, *, verify_leads: bool = Fal
                     .where(
                         PoolItem.case_id == runtime.case.id,
                         PoolItem.kind == "url",
-                        PoolItem.source == "ai",
+                        # Tarama motorunun (sitecheck) bulduğu hesaplar da doğrulanır.
+                        PoolItem.source.in_(("ai", "scan")),
                         PoolItem.status.in_(("proposed", "candidate")),
                         PoolItem.confidence >= 0.3,
                     )
