@@ -18,12 +18,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 
-def _intel(platform: str, handle: str, *, name: str = "", links=(), emails=()) -> AccountIntel:
+def _intel(
+    platform: str, handle: str, *, name: str = "", links=(), emails=(), **extra
+) -> AccountIntel:
     intel = AccountIntel(
         platform=platform,
         handle=handle,
         profile_url=f"https://{platform}.com/{handle}",
         display_name=name,
+        **extra,
     )
     for url, relation in links:
         intel.links.append(AccountLink(url=url, relation=relation))
@@ -48,7 +51,12 @@ INTEL = {
     ),
     # Aynı kullanıcı adı, sahibine geri bağlanan GitLab hesabı -> doğrulanır.
     ("gitlab", "l1sec"): _intel(
-        "gitlab", "l1sec", name="", links=[("https://linktr.ee/l1sec", "owner")]
+        "gitlab",
+        "l1sec",
+        name="",
+        links=[("https://linktr.ee/l1sec", "owner")],
+        location="İstanbul",
+        company="@acme",
     ),
     # Aynı kullanıcı adı, farklı kişi -> elenir.
     ("keybase", "l1sec"): _intel("keybase", "l1sec", name="Jane Smith"),
@@ -251,6 +259,11 @@ async def test_run_case_chain_persists_proposed_items_and_relations(db_factory):
         assert any(r.type == "same_person" for r in relations)
         assert all(r.status in {"proposed", "candidate"} for r in relations)
         assert result.summary()["created"] >= 5
+        # Doğrulanmış hesabın konum/kurum alanları bağlam kaydı olur.
+        location = by_value["İstanbul"]
+        assert location.kind == "location" and location.status == "proposed"
+        assert by_value["acme"].kind == "organization"
+        assert any(r.type == "located_in" and r.dst_item_id == location.id for r in relations)
 
 
 @pytest.mark.asyncio
@@ -266,7 +279,7 @@ async def test_anchors_from_items_handles_platformless_username(db_factory):
         engine = _engine(fake)
         assert anchors_from_items(engine, [item]) == 1
         networks = {n.network for n in engine.nodes.values()}
-        assert networks == {"github", "gitlab", "keybase", "devto"}
+        assert networks == {"github", "gitlab", "keybase", "devto", "codeberg"}
         assert not any(n.anchor for n in engine.nodes.values())
 
 
@@ -377,3 +390,92 @@ def test_name_tokens_keep_word_boundaries_and_fold_turkish():
     assert _name_tokens("Kerem Demir") == {"kerem", "demir"}
     assert _name_tokens("Çağrı Öztürk") == {"cagri", "ozturk"}
     assert _fold("Ali-Veli  YILMAZ") == "ali veli yilmaz"
+
+
+def test_profile_identity_fediverse():
+    fedi = profile_identity("https://infosec.exchange/@Ali")
+    assert fedi is not None and fedi[:2] == ("mastodon", "ali@infosec.exchange")
+    assert profile_identity("https://mastodon.social/@Gargron")[:2] == (
+        "mastodon",
+        "gargron@mastodon.social",
+    )
+    assert profile_identity("https://example.com/@ali/123") is None
+
+
+@pytest.mark.asyncio
+async def test_keybase_reverse_lookup_links_walled_account():
+    """X profili okunamaz; ama onu kanıtlamış Keybase hesabı ters aramayla bulunur."""
+
+    async def intel(network: str, handle: str):
+        if (network, handle) == ("github", "l1sec"):
+            return _intel("github", "l1sec", links=[("https://x.com/l1sec_tw", "owner")])
+        if (network, handle) == ("keybase", "kerem"):
+            return _intel(
+                "keybase",
+                "kerem",
+                name="Kerem Demir",
+                links=[("https://x.com/l1sec_tw", "proof"), ("https://kerem.dev", "proof")],
+            )
+        return None
+
+    async def page(url: str, trusted: bool):
+        return None
+
+    calls: list[tuple[str, str]] = []
+
+    async def reverse(service: str, name: str):
+        calls.append((service, name))
+        return ["kerem"] if (service, name) == ("twitter", "l1sec_tw") else []
+
+    engine = ChainEngine(
+        intel_fetcher=intel,
+        page_fetcher=page,
+        reverse_fetcher=reverse,
+        names=["Kerem Demir"],
+        probe_handles=False,
+    )
+    engine.add_anchor_url("https://github.com/l1sec")
+    result = await engine.run()
+    nodes = {n.key: n for n in result.nodes}
+    assert ("github", "l1sec") in calls and ("twitter", "l1sec_tw") in calls
+    keybase = nodes["profile:keybase:kerem"]
+    assert keybase.trust > 0.95
+    # Keybase kanıtı X hesabına geri bağlanır; kişisel alan adı zincire girer.
+    assert any(e.relation == "backlink" for e in keybase.evidence)
+    assert nodes["page:kerem.dev"].trust > 0.9
+
+
+@pytest.mark.asyncio
+async def test_organization_account_is_not_expanded():
+    async def intel(network: str, handle: str):
+        if (network, handle) == ("github", "l1sec"):
+            return _intel("github", "l1sec", links=[("https://github.com/acme", "owner")])
+        if (network, handle) == ("github", "acme"):
+            org = _intel("github", "acme", links=[("https://x.com/acme_official", "owner")])
+            org.account_type = "organization"
+            return org
+        return None
+
+    async def page(url: str, trusted: bool):
+        return None
+
+    engine = ChainEngine(intel_fetcher=intel, page_fetcher=page, probe_handles=False)
+    engine.add_anchor_url("https://github.com/l1sec")
+    result = await engine.run()
+    nodes = {n.key: n for n in result.nodes}
+    assert nodes["profile:github:acme"].trust < 0.4
+    assert "profile:x:acme_official" not in nodes
+
+
+def test_display_name_equal_to_handle_is_neutral():
+    engine = ChainEngine(
+        intel_fetcher=None,  # type: ignore[arg-type]
+        page_fetcher=None,  # type: ignore[arg-type]
+        names=["Eugen Rochko"],
+    )
+    engine.add_anchor_handle("gargron")
+    node = engine.nodes["profile:gitlab:gargron"]
+    engine._check_name(node, "Gargron")
+    assert node.name_match is None and node.trust == 0.5
+    engine._check_name(node, "Yael Wells")
+    assert node.name_match is False and node.trust == 0.25

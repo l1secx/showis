@@ -88,7 +88,8 @@ async def test_github_collects_owner_links_readme_and_commit_emails():
     urls = {link.url: link.relation for link in intel.links}
     assert urls["https://ali.dev"] == "owner"
     assert urls["https://x.com/ali_tw"] == "owner"
-    assert urls["https://github.com/acme"] == "owner"
+    assert "https://github.com/acme" not in urls  # şirket alanı kişi hesabı değildir
+    assert intel.company == "@acme"
     assert urls["https://www.linkedin.com/in/ali-yilmaz"] == "owner"
     assert urls["https://linktr.ee/aliyilmaz"] == "bio"
     assert urls["https://youtube.com/@alitube"] == "readme"
@@ -263,3 +264,68 @@ async def test_gitlab_detail_forbidden_falls_back_to_list_row():
         intel = await fetch_gitlab(_client(), "ali")
     assert intel is not None and intel.display_name == "Ali"
     assert any("403" in note for note in intel.notes)
+
+
+@pytest.mark.asyncio
+async def test_mastodon_verified_fields_are_proof():
+    from showis_connectors.account_intel import fetch_mastodon
+
+    payload = {
+        "username": "ali",
+        "url": "https://infosec.exchange/@ali",
+        "display_name": "Ali",
+        "note": '<p>bkz <a href="https://ali.dev/blog">blog</a> '
+        '<a href="https://infosec.exchange/@bob">@bob</a></p>',
+        "fields": [
+            {
+                "name": "GitHub",
+                "value": '<a href="https://github.com/ali" rel="me">github.com/ali</a>',
+                "verified_at": "2024-01-01T00:00:00Z",
+            },
+            {"name": "Site", "value": "ali.dev", "verified_at": None},
+        ],
+    }
+    with respx.mock() as router:
+        router.get("https://infosec.exchange/api/v1/accounts/lookup").respond(200, json=payload)
+        intel = await fetch_mastodon(_client(), "ali@infosec.exchange")
+    assert intel is not None and intel.handle == "ali@infosec.exchange"
+    links = {(link.url, link.relation) for link in intel.links}
+    assert ("https://github.com/ali", "proof") in links
+    assert ("https://ali.dev", "owner") in links
+    assert ("https://ali.dev/blog", "bio") in links
+    assert not any("@bob" in url for url, _ in links)
+
+
+@pytest.mark.asyncio
+async def test_codeberg_lichess_and_keybase_reverse():
+    from showis_connectors.account_intel import fetch_codeberg, fetch_lichess, keybase_reverse
+
+    with respx.mock() as router:
+        router.get("https://codeberg.org/api/v1/users/ali").respond(
+            200,
+            json={
+                "login": "ali",
+                "full_name": "Ali Y",
+                "website": "ali.dev",
+                "email": "ali@noreply.codeberg.org",
+            },
+        )
+        router.get("https://lichess.org/api/user/ali").respond(
+            200,
+            json={
+                "username": "ali",
+                "profile": {"realName": "Ali Y", "links": "github.com/ali\nmas.to/@ali"},
+            },
+        )
+        router.get("https://keybase.io/_/api/1.0/user/lookup.json").respond(
+            200, json={"them": [{"basics": {"username": "alik"}}]}
+        )
+        codeberg = await fetch_codeberg(_client(), "ali")
+        lichess = await fetch_lichess(_client(), "ali")
+        users = await keybase_reverse(_client(), "github", "ali")
+        assert await keybase_reverse(_client(), "bogus", "ali") == []
+    assert codeberg is not None and codeberg.links[0].url == "https://ali.dev"
+    assert codeberg.emails == []  # noreply adresi alınmaz
+    assert lichess is not None
+    assert [link.url for link in lichess.links] == ["https://github.com/ali", "https://mas.to/@ali"]
+    assert users == ["alik"]

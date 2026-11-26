@@ -34,6 +34,7 @@ invariant'ı); ``confirmed`` yalnız kullanıcı kararıdır.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Iterable, Sequence
 from urllib.parse import parse_qs, urlparse
@@ -50,9 +51,11 @@ from showis.services.research_playbook import (
 )
 from showis_connectors.account_intel import (
     HANDLE_FETCHERS,
+    KEYBASE_SERVICES,
     AccountIntel,
     AccountIntelError,
     fetch_gravatar,
+    keybase_reverse,
     normalize_link,
 )
 from showis_engine.http import HttpClient
@@ -81,6 +84,13 @@ _UNVERIFIED_RELATIONS: frozenset[str] = frozenset({"handle_probe", "search", "na
 BACKLINK_WEIGHT = 0.9
 NAME_MATCH_WEIGHT = 0.7
 NAME_MISMATCH_FACTOR = 0.5
+#: Kurum hesabına ulaşan zincir: kişinin hesabı değil, bağlam bilgisidir.
+ORG_FACTOR = 0.3
+#: Kişisel sayfada bundan fazla profil bağlantısı varsa (blog bahsetmeleri)
+#: yalnız bilinen kullanıcı adı/isimle örtüşenler izlenir.
+SITE_LINK_FLOOD = 10
+#: Hesabın kurum/konum alanları bu güvenin üstünde bağlam kaydı olur.
+CONTEXT_MIN_TRUST = 0.9
 #: Bu güvenin altındaki düğümler genişletilmez (zincir yanlış pozitifle büyümez).
 EXPAND_MIN_TRUST = 0.6
 #: Bu güvenin altındaki düğümler havuza yazılmaz.
@@ -94,7 +104,7 @@ DEFAULT_MAX_FETCHES = 30
 DEFAULT_MAX_DEPTH = 3
 
 #: Bilinen kullanıcı adı ile başka platformlarda denenen API'ler.
-PROBE_PLATFORMS: tuple[str, ...] = ("github", "gitlab", "keybase", "devto")
+PROBE_PLATFORMS: tuple[str, ...] = ("github", "gitlab", "keybase", "devto", "codeberg")
 
 #: Giriş duvarı olan veya içeriği istemci tarafında çizilen ağlar: sayfası
 #: okunmaz, düğüm yaprak kalır (bağlantı kanıtı yine de geçerlidir).
@@ -121,8 +131,6 @@ _FETCHABLE_NETWORKS: frozenset[str] = frozenset(
         "dribbble",
         "itch.io",
         "hashnode",
-        "mastodon",
-        "keybase",
     }
 )
 #: Kişisel site sayılmayan, kullanıcıya ait olmayan genel barındırma kökleri.
@@ -208,6 +216,8 @@ class ChainNode:
     display_name: str = ""
     location: str = ""
     company: str = ""
+    #: Kurum (organizasyon) hesabı: kişi değil, zincirde ilerlenmez.
+    is_org: bool = False
     avatar_url: str = ""
     name_match: bool | None = None
 
@@ -231,6 +241,8 @@ class ChainNode:
         trust = 1.0 - missing
         if self.name_match is False and self._unverified():
             trust *= NAME_MISMATCH_FACTOR
+        if self.is_org:
+            trust *= ORG_FACTOR
         self.trust = round(min(trust, 0.995), 4)
 
     def _probe_only(self) -> bool:
@@ -336,8 +348,20 @@ def profile_identity(url: str) -> tuple[str, str, str] | None:
         return None
     ref: ProfileRef | None = canonical_profile(url)
     if ref is None:
+        # Fediverse (Mastodon uyumlu): bilinmeyen sunucuda tek parçalı /@kullanici.
+        match = _FEDI_PATH_RE.match(parsed.path)
+        host = host_of(url)
+        if match and host and "." in host and not parsed.query:
+            user = match.group(1).lower()
+            return "mastodon", f"{user}@{host}", f"https://{host}/@{match.group(1)}"
         return None
     network = ref.platform.value
+    if network == "mastodon":
+        return (
+            "mastodon",
+            f"{ref.identifier.lower()}@{host_of(url)}",
+            url.split("#")[0],
+        )
     if network == "web":
         host = host_of(url)
         if host.endswith(".carrd.co"):
@@ -347,6 +371,9 @@ def profile_identity(url: str) -> tuple[str, str, str] | None:
     if network == "linktree.com":
         network = "linktr.ee"
     return network, ref.identifier.lower(), url.split("#")[0]
+
+
+_FEDI_PATH_RE = re.compile(r"^/@([A-Za-z0-9_]{1,30})/?$")
 
 
 def _page_key(url: str) -> str:
@@ -391,8 +418,10 @@ class ChainEngine:
         max_depth: int = DEFAULT_MAX_DEPTH,
         names: Iterable[str] = (),
         probe_handles: bool = True,
+        reverse_fetcher: Callable[[str, str], Awaitable[list[str]]] | None = None,
     ):
         self.intel_fetcher = intel_fetcher
+        self.reverse_fetcher = reverse_fetcher
         self.page_fetcher = page_fetcher
         self.email_fetcher = email_fetcher
         self.max_fetches = max(0, int(max_fetches))
@@ -458,7 +487,10 @@ class ChainEngine:
         item_id: str | None = None,
         trust: float = 1.0,
     ) -> ChainNode | None:
-        ident = clean_handle(handle) if network not in {"bluesky"} else handle.strip().lower()
+        if network in {"bluesky", "mastodon"}:
+            ident = handle.strip().lstrip("@").lower()
+        else:
+            ident = clean_handle(handle)
         if not ident:
             return None
         node, _ = self._node(
@@ -483,7 +515,14 @@ class ChainEngine:
 
     def add_anchor_handle(self, handle: str) -> None:
         """Platformu bilinmeyen onaylı kullanıcı adı: API'lerde aynı adı dene."""
-        ident = clean_handle(handle)
+        text = str(handle or "").strip().lstrip("@")
+        if "@" in text:  # fediverse: kullanici@sunucu -> kullanici
+            text = text.split("@", 1)[0]
+        elif text.endswith(".bsky.social"):
+            text = text.removesuffix(".bsky.social")
+        elif "." in text and not text.replace(".", "").isalnum():
+            return
+        ident = clean_handle(text)
         if not ident or not self.probe_handles:
             return
         source_key = f"handle:{ident}"
@@ -697,6 +736,9 @@ class ChainEngine:
             )
         elif overlap and len(tokens) == 1:
             return
+        elif self._is_handle_like(node, display_name):
+            # Görünen ad kullanıcı adının kendisi (ör. "Gargron"): bilgi taşımaz.
+            return
         else:
             node.name_match = False
             node.recompute()
@@ -716,11 +758,16 @@ class ChainEngine:
             if node.network in HANDLE_FETCHERS:
                 await self._expand_intel(node)
             elif node.network in _WALLED_NETWORKS:
-                return
+                pass
             elif node.network in _FETCHABLE_NETWORKS or aggregator_domain(node.url):
                 await self._expand_page(node, aggregator=bool(aggregator_domain(node.url)))
+            service = KEYBASE_SERVICES.get(node.network)
+            if service:
+                await self._reverse_keybase(node, service, node.value)
         elif node.kind == "page":
             await self._expand_page(node, aggregator=bool(aggregator_domain(node.url)))
+            if self.is_own_site(node):
+                await self._reverse_keybase(node, "domain", host_of(node.url))
         elif node.kind == "email" and self.email_fetcher is not None:
             await self._expand_email(node)
 
@@ -751,6 +798,12 @@ class ChainEngine:
 
     def _apply_intel(self, node: ChainNode, intel: AccountIntel) -> None:
         node.url = intel.profile_url or node.url
+        if intel.account_type == "organization" and not node.anchor:
+            # Kurum hesabı kişinin kendisi değildir: güveni düşer, genişletilmez.
+            node.is_org = True
+            node.recompute()
+            self.result.notes.append(f"{node.label}: kurum hesabı, zincir burada durur")
+            return
         node.display_name = intel.display_name
         node.location = intel.location
         node.company = intel.company
@@ -811,6 +864,9 @@ class ChainEngine:
         # Platformda barındırılan profil sayfası (tangled.org/ali, medium.com/@ali):
         # gövdedeki platformun kendi hesapları/e-postaları (alt bilgi) sahibin değildir.
         brand = "" if aggregator or self.is_own_site(node) else _brand(host_of(node.url))
+        flood = not aggregator and (
+            len({profile_identity(url) for url in page.links} - {None}) > SITE_LINK_FLOOD
+        )
         added = 0
         for url in page.links:
             if added >= MAX_CHILDREN or url in rel_me:
@@ -823,6 +879,8 @@ class ChainEngine:
                 _brand(host_of(url)) == brand or (identity is not None and brand in identity[1])
             ):
                 continue
+            if flood and (identity is None or not self._resembles_identity(identity[1])):
+                continue
             if self.link(node, url, relation, source_url=node.url) is not None:
                 added += 1
         for email in page.emails[:4]:
@@ -830,12 +888,70 @@ class ChainEngine:
                 continue
             self.add_email(node, email, "owner" if aggregator else "site", note="sayfada")
 
+    def _is_handle_like(self, node: ChainNode, display_name: str) -> bool:
+        flat = _fold(display_name).replace(" ", "")
+        handles = {node.value.split("@", 1)[0]} | self.known_handles()
+        return any(flat == h.split("@", 1)[0].replace("-", "").replace("_", "") for h in handles)
+
+    def _resembles_identity(self, ident: str) -> bool:
+        """Kimlik bilinen bir kullanıcı adı veya isim parçasıyla örtüşüyor mu?"""
+        flat = ident.lower().split("@", 1)[0].replace("-", "").replace("_", "").replace(".", "")
+        handles = self.known_handles() | {n.value for n in self.nodes.values() if n.anchor}
+        for handle in handles:
+            base = handle.split("@", 1)[0].replace("-", "").replace("_", "").replace(".", "")
+            if len(base) >= 3 and (base in flat or flat in base):
+                return True
+        return any(len(token) >= 4 and token in flat for token in self.name_tokens)
+
     def is_own_site(self, node: ChainNode) -> bool:
         """Kök yolda kişisel alan adı mı (ali.dev), yoksa platformdaki bir sayfa mı?"""
         if node.kind != "page":
             return False
         path = urlparse(node.url).path.strip("/")
         return not path or self._plausible_site(node.url)
+
+    async def _reverse_keybase(self, node: ChainNode, service: str, name: str) -> None:
+        """Bu hesabı/alan adını kriptografik olarak kanıtlamış Keybase kullanıcısı.
+
+        Keybase kanıtı sahibin imzasıdır: bulunan Keybase hesabı aynı kişidir.
+        Giriş duvarlı ağlar (X) dahil; tek istekle ters yönde doğrulama yapar.
+        """
+        if (
+            self.reverse_fetcher is None
+            or node.trust < BACKLINK_MIN_TRUST
+            or not self._can_fetch()
+        ):
+            return
+        self.result.fetches += 1
+        try:
+            users = await self.reverse_fetcher(service, name)
+        except Exception as exc:  # noqa: BLE001 - ters arama zinciri düşürmesin
+            self.result.notes.append(f"Keybase ters arama ({node.label}): {type(exc).__name__}")
+            return
+        for username in users[:3]:
+            child, created = self._node(
+                f"profile:keybase:{username.lower()}",
+                kind="profile",
+                value=username.lower(),
+                network="keybase",
+                url=f"https://keybase.io/{username}",
+            )
+            if child is node:
+                continue
+            if created:
+                child.depth = node.depth + 1
+                child.parent_key = node.key
+            self._add_evidence(
+                child,
+                Evidence(
+                    relation="proof",
+                    weight=node.trust * EDGE_WEIGHTS["proof"],
+                    source_key=f"keybase-reverse:{node.key}",
+                    source_label=node.label,
+                    source_url=f"https://keybase.io/{username}",
+                    note=f"Keybase {service} kanıtı {name}",
+                ),
+            )
 
     async def _expand_email(self, node: ChainNode) -> None:
         if not self._can_fetch() or self.email_fetcher is None:
@@ -987,6 +1103,10 @@ async def _default_email_fetcher(email: str) -> AccountIntel | None:
     return await fetch_gravatar(HttpClient(timeout=12.0), email)
 
 
+async def _default_reverse_fetcher(service: str, name: str) -> list[str]:
+    return await keybase_reverse(HttpClient(timeout=12.0), service, name)
+
+
 async def build_engine(
     db: AsyncSession,
     *,
@@ -1005,6 +1125,7 @@ async def build_engine(
         intel_fetcher=intel_fetcher,
         page_fetcher=page_fetcher or _default_page_fetcher(),
         email_fetcher=email_fetcher or _default_email_fetcher,
+        reverse_fetcher=_default_reverse_fetcher,
         max_fetches=max_fetches,
         max_depth=max_depth,
         probe_handles=probe_handles,
@@ -1169,6 +1290,8 @@ async def persist_chain(
         if created:
             result.created_item_ids.append(item.id)
         item_for[node.key] = item
+        if node.kind == "profile" and node.trust >= CONTEXT_MIN_TRUST:
+            await _persist_context(db, case, item, node, status, actor, provenance, result)
         if node.kind == "profile":
             handle_item, handle_created = await _ensure_handle(
                 db, case=case, node=node, status=status, actor=actor, provenance=provenance
@@ -1219,6 +1342,45 @@ async def persist_chain(
             await _relate(db, case, src, dst, rel_type, node, result, actor, evidence=evidence)
     await db.flush()
     return result
+
+
+async def _persist_context(
+    db: AsyncSession,
+    case: Case,
+    account: PoolItem,
+    node: ChainNode,
+    status: str,
+    actor: str,
+    provenance: dict[str, Any],
+    result: ChainResult,
+) -> None:
+    """Yüksek güvenli hesabın sahip yazdığı kurum/konum alanları (bağlam kaydı)."""
+    for kind, raw, rel_type in (
+        ("organization", node.company, "works_at"),
+        ("location", node.location, "located_in"),
+    ):
+        value = " ".join(str(raw or "").split()).lstrip("@").strip()
+        if len(value) < 2 or len(value) > 120:
+            continue
+        try:
+            item, created = await create_item(
+                db,
+                case_id=case.id,
+                kind=kind,
+                label=value,
+                value=value,
+                source="ai",
+                status=status,
+                confidence=round(node.trust * 0.8, 4),
+                attributes={"from_account": node.label},
+                provenance=provenance,
+                created_by=actor,
+            )
+        except (PoolValidationError, ValueError):
+            continue
+        if created:
+            result.created_item_ids.append(item.id)
+        await _relate(db, case, account, item, rel_type, node, result, actor)
 
 
 async def _ensure_handle(

@@ -100,6 +100,8 @@ class AccountIntel:
     handle: str
     profile_url: str
     exists: bool = True
+    #: "user" kişi hesabı; "organization" kurum hesabıdır (kişinin kendisi değil).
+    account_type: str = "user"
     display_name: str = ""
     bio: str = ""
     location: str = ""
@@ -144,6 +146,7 @@ class AccountIntel:
             "handle": self.handle,
             "profile_url": self.profile_url,
             "exists": self.exists,
+            "account_type": self.account_type,
             "display_name": self.display_name,
             "bio": self.bio,
             "location": self.location,
@@ -311,9 +314,10 @@ async def fetch_github(
         intel.add_link(f"https://x.com/{user['twitter_username']}", "owner", "GitHub X alanı")
     if user.get("email"):
         intel.add_email(user["email"], "github-profile")
-    company = intel.company.strip()
-    if company.startswith("@") and _HANDLE_OK.match(company[1:]):
-        intel.add_link(f"https://github.com/{company[1:]}", "owner", "GitHub şirket alanı")
+    if str(user.get("type") or "").lower() == "organization":
+        intel.account_type = "organization"
+    # Şirket alanı (@org) kurum bağlantısıdır, kişinin hesabı değil: zincire
+    # bağlantı olarak girmez; `company` özniteliği olarak kalır.
     _add_bio(intel, intel.bio)
 
     try:
@@ -726,6 +730,147 @@ async def fetch_gravatar(client: HttpClient, email: str) -> AccountIntel | None:
     return intel
 
 
+# ---------------------------------------------------------------- Mastodon
+
+
+_MASTODON_HANDLE_RE = re.compile(r"^([A-Za-z0-9_]{1,30})@([a-z0-9.-]+\.[a-z]{2,24})$")
+
+
+def _anchor_hrefs(markup: str) -> list[str]:
+    return [html_lib.unescape(m) for m in re.findall(r'href="([^"]+)"', markup or "")]
+
+
+async def fetch_mastodon(client: HttpClient, handle: str) -> AccountIntel | None:
+    """`kullanici@sunucu`: profil alanları; `verified_at` dolu alan rel=me doğrulamalıdır."""
+    match = _MASTODON_HANDLE_RE.match(handle.strip().lstrip("@").lower())
+    if not match:
+        return None
+    user, instance = match.groups()
+    data = await _get_json(
+        client,
+        f"https://{instance}/api/v1/accounts/lookup",
+        label="Mastodon",
+        params={"acct": user},
+    )
+    if not isinstance(data, dict) or not data.get("username"):
+        return None
+    intel = AccountIntel(
+        platform="mastodon",
+        handle=f"{str(data['username']).lower()}@{instance}",
+        profile_url=str(data.get("url") or f"https://{instance}/@{user}"),
+        display_name=str(data.get("display_name") or "")[:200],
+        bio=_strip_html(data.get("note"))[:1000],
+        avatar_url=str(data.get("avatar_static") or data.get("avatar") or ""),
+        created_at=str(data.get("created_at") or ""),
+        sources=[f"https://{instance}/@{user}"],
+    )
+    for item in (data.get("fields") or [])[:12]:
+        if not isinstance(item, dict):
+            continue
+        relation = "proof" if item.get("verified_at") else "owner"
+        label = f"Mastodon alanı ({_strip_html(item.get('name'))[:40]})"
+        hrefs = _anchor_hrefs(str(item.get("value") or "")) or [_strip_html(item.get("value"))]
+        for href in hrefs[:2]:
+            intel.add_link(href, relation, label)
+    for href in _anchor_hrefs(str(data.get("note") or "")):
+        # Not içindeki @bahsetmeler başka hesaplardır; yalnız dış bağlantılar.
+        if f"//{instance}/" not in href:
+            intel.add_link(href, "bio", "Mastodon biyografisi")
+    return intel
+
+
+# ---------------------------------------------------------------- Codeberg
+
+
+async def fetch_codeberg(client: HttpClient, handle: str) -> AccountIntel | None:
+    login = handle.strip().lstrip("@")
+    if not _HANDLE_OK.match(login):
+        return None
+    data = await _get_json(
+        client, f"https://codeberg.org/api/v1/users/{quote(login)}", label="Codeberg"
+    )
+    if not isinstance(data, dict) or not data.get("login"):
+        return None
+    username = str(data["login"])
+    intel = AccountIntel(
+        platform="codeberg",
+        handle=username,
+        profile_url=str(data.get("html_url") or f"https://codeberg.org/{username}"),
+        display_name=str(data.get("full_name") or "")[:200],
+        bio=str(data.get("description") or "")[:1000],
+        location=str(data.get("location") or "")[:200],
+        avatar_url=str(data.get("avatar_url") or ""),
+        created_at=str(data.get("created") or ""),
+        sources=[f"https://codeberg.org/{username}"],
+    )
+    if data.get("website"):
+        intel.add_link(data["website"], "owner", "Codeberg web sitesi alanı")
+    if data.get("email"):
+        intel.add_email(data["email"], "codeberg-profile")
+    _add_bio(intel, intel.bio)
+    return intel
+
+
+# ---------------------------------------------------------------- Lichess
+
+
+async def fetch_lichess(client: HttpClient, handle: str) -> AccountIntel | None:
+    login = handle.strip().lstrip("@")
+    if not _HANDLE_OK.match(login):
+        return None
+    data = await _get_json(
+        client, f"https://lichess.org/api/user/{quote(login)}", label="Lichess"
+    )
+    if not isinstance(data, dict) or not data.get("username") or data.get("disabled"):
+        return None
+    username = str(data["username"])
+    profile = data.get("profile") if isinstance(data.get("profile"), dict) else {}
+    intel = AccountIntel(
+        platform="lichess",
+        handle=username,
+        profile_url=f"https://lichess.org/@/{username}",
+        display_name=str(profile.get("realName") or "")[:200],
+        bio=str(profile.get("bio") or "")[:1000],
+        location=str(profile.get("location") or "")[:200],
+        sources=[f"https://lichess.org/@/{username}"],
+    )
+    for line in str(profile.get("links") or "").splitlines()[:12]:
+        intel.add_link(line.strip(), "owner", "Lichess bağlantılar alanı")
+    _add_bio(intel, intel.bio)
+    return intel
+
+
+# ---------------------------------------------------------------- Keybase ters arama
+
+#: Zincir ağı -> Keybase kanıt servisi adı.
+KEYBASE_SERVICES: dict[str, str] = {
+    "github": "github",
+    "x": "twitter",
+    "reddit": "reddit",
+    "hackernews": "hackernews",
+}
+
+
+async def keybase_reverse(client: HttpClient, service: str, name: str) -> list[str]:
+    """Bir servis hesabını (ör. GitHub) kriptografik olarak kanıtlamış Keybase kullanıcıları."""
+    if service not in set(KEYBASE_SERVICES.values()) | {"domain"}:
+        return []
+    clean = name.strip().lstrip("@")
+    if not clean or len(clean) > 253:
+        return []
+    payload = await _get_json(
+        client, KEYBASE_LOOKUP, label="Keybase", params={service: clean, "fields": "basics"}
+    )
+    them = (payload or {}).get("them") if isinstance(payload, dict) else None
+    users: list[str] = []
+    for row in them or []:
+        if isinstance(row, dict):
+            username = str((row.get("basics") or {}).get("username") or "")
+            if username and _HANDLE_OK.match(username) and username not in users:
+                users.append(username)
+    return users[:3]
+
+
 #: Platform adı -> kullanıcı adı alan getirici. Gravatar e-posta alır (ayrı).
 HANDLE_FETCHERS = {
     "github": fetch_github,
@@ -734,4 +879,7 @@ HANDLE_FETCHERS = {
     "devto": fetch_devto,
     "bluesky": fetch_bluesky,
     "hackernews": fetch_hackernews,
+    "mastodon": fetch_mastodon,
+    "codeberg": fetch_codeberg,
+    "lichess": fetch_lichess,
 }
