@@ -824,7 +824,8 @@ async def fetch_lichess(client: HttpClient, handle: str) -> AccountIntel | None:
     if not isinstance(data, dict) or not data.get("username") or data.get("disabled"):
         return None
     username = str(data["username"])
-    profile = data.get("profile") if isinstance(data.get("profile"), dict) else {}
+    raw_profile = data.get("profile")
+    profile: dict[str, Any] = raw_profile if isinstance(raw_profile, dict) else {}
     intel = AccountIntel(
         platform="lichess",
         handle=username,
