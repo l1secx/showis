@@ -3364,14 +3364,40 @@ def _fallback_report(
         f"Bulgu: {runtime.stats.get('findings', 0)}",
         f"Durum: {stop_reason}",
     ]
+    if runtime.chain_text:
+        lines.extend(
+            [
+                "",
+                "## Doğrulanmış kimlik zinciri",
+                "Onaylı hesaplardan sahibin kendi yazdığı bağlantılarla bulunan hesaplar "
+                "(güven 0-1, zincir = bulunduğu yol):",
+                runtime.chain_text,
+            ]
+        )
+    # Onaylı/kullanıcı kayıtları önce, sonra güven sırası; düşük güvenli AI
+    # adayları (doğrulanmamış arama/sayfa çıkarımları) rapora girmez, sayılır.
+    ranked = sorted(
+        (row for row in _quality_pool_rows(pool_rows) if row.get("kind") != "bio"),
+        key=lambda row: (
+            not (row.get("status") == "confirmed" or row.get("source") == "user"),
+            -float(row.get("confidence") or 0.0),
+        ),
+    )
+    hidden = sum(
+        1
+        for row in pool_rows
+        if row.get("status") != "rejected" and row.get("kind") not in {"bio", "note"}
+    ) - len(ranked)
     groups: dict[str, list[str]] = {}
-    for item in pool_rows:
+    for item in ranked:
         kind = str(item.get("kind") or "other")
         value = " ".join(str(item.get("value") or "").split())[:500]
-        if not value or kind == "bio":
+        if not value:
             continue
         label = str(item.get("label") or "")[:140]
-        line = f"- {value}" + (f" — {label}" if label and label != value else "")
+        trusted = item.get("status") == "confirmed" or item.get("source") == "user"
+        badge = "onaylı" if trusted else f"güven %{round(float(item.get('confidence') or 0) * 100)}"
+        line = f"- {value}" + (f" — {label}" if label and label != value else "") + f" ({badge})"
         groups.setdefault(kind, []).append(line)
     titles = {
         "name": "İsimler",
@@ -3388,6 +3414,14 @@ def _fallback_report(
         values = list(dict.fromkeys(groups.get(kind, [])))[:15]
         if values:
             lines.extend(["", f"## {title}"] + values)
+    if hidden > 0:
+        lines.extend(
+            [
+                "",
+                f"_{hidden} düşük güvenli aday (doğrulanmamış arama/sayfa çıkarımı) rapora "
+                "alınmadı; havuzda onay bekliyor._",
+            ]
+        )
     if bio_markdown:
         lines.extend(["", "## Biyografi", "", bio_markdown])
     sources = list(runtime.sources.values())[:30]
@@ -3448,6 +3482,7 @@ JSON: {{"answer":"Markdown rapor","citations":[{{"label":"...","url":"https://..
             report = result
     except Exception as exc:  # noqa: BLE001 - rapor hatası kısmi sonucu korur
         runtime.errors.append(f"rapor: {type(exc).__name__}")
+        logger.warning("Nihai rapor LLM hatasi: %s: %s", type(exc).__name__, str(exc)[:300])
     if report is None:
         answer = _fallback_report(
             runtime,

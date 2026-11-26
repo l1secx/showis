@@ -237,8 +237,8 @@ async def test_run_case_chain_persists_proposed_items_and_relations(db_factory):
         await db.commit()
 
         items = (
-            await db.execute(select(PoolItem).where(PoolItem.case_id == case.id))
-        ).scalars().all()
+            (await db.execute(select(PoolItem).where(PoolItem.case_id == case.id))).scalars().all()
+        )
         by_value = {item.value: item for item in items}
         assert anchor.status == "confirmed"
         linktree = by_value["https://linktr.ee/l1sec"]
@@ -251,8 +251,10 @@ async def test_run_case_chain_persists_proposed_items_and_relations(db_factory):
         assert "keybase" not in " ".join(item.label for item in items).lower()
 
         relations = (
-            await db.execute(select(PoolRelation).where(PoolRelation.case_id == case.id))
-        ).scalars().all()
+            (await db.execute(select(PoolRelation).where(PoolRelation.case_id == case.id)))
+            .scalars()
+            .all()
+        )
         types = {(r.src_item_id, r.dst_item_id, r.type) for r in relations}
         assert (anchor.id, linktree.id, "linked_from") in types
         # Karşılıklı bağlantı: linktree -> github geri bağlantısı same_person olur.
@@ -579,9 +581,7 @@ async def test_personal_site_colleague_account_is_down_weighted():
 @pytest.mark.asyncio
 async def test_search_lead_alone_is_not_expanded_or_persisted():
     async def intel(network: str, handle: str):
-        return _intel(
-            "github", handle, name="", links=[("https://x.com/baskasi", "owner")]
-        )
+        return _intel("github", handle, name="", links=[("https://x.com/baskasi", "owner")])
 
     async def page(url: str, trusted: bool):
         return None
@@ -655,3 +655,66 @@ async def test_research_page_extraction_ignores_strangers_on_unrelated_pages(db_
         runtime.process_page(own, trusted=True)
         kinds = {d.kind for d in runtime.drafts}
         assert {"username", "email", "phone"} <= kinds
+
+
+@pytest.mark.asyncio
+async def test_fallback_report_ranks_trusted_and_hides_low_confidence(db_factory):
+    import time
+
+    from showis.db.models import ResearchSession
+    from showis.services import research as research_mod
+    from showis.services.research_playbook import build_identity_profile
+
+    async with db_factory() as db:
+        case = Case(id="c6", name="c", purpose="p", legal_basis="public_sources")
+        session = ResearchSession(id="s6", case_id="c6", title="t", question="q?", mode="research")
+        db.add_all([case, session])
+        await db.commit()
+        runtime = research_mod.ResearchRuntime(
+            db=db,
+            session=session,
+            case=case,
+            target=None,
+            client=None,  # type: ignore[arg-type]
+            identity=build_identity_profile(first_name="Ben", last_name="Halpern"),
+            pool_items=[],
+            stats={"depth": "quick"},
+            started=time.monotonic(),
+        )
+        runtime.chain_text = "- devto:ben güven=0.99 kanıt=owner zincir=devto:ben <- github:x"
+        rows = [
+            {
+                "kind": "username",
+                "value": "yabanci",
+                "label": "",
+                "status": "proposed",
+                "confidence": 0.35,
+                "source": "ai",
+                "attributes": {},
+            },
+            {
+                "kind": "username",
+                "value": "benhalpern",
+                "label": "",
+                "status": "confirmed",
+                "confidence": 0.0,
+                "source": "user",
+                "attributes": {},
+            },
+            {
+                "kind": "username",
+                "value": "bendhalpern",
+                "label": "",
+                "status": "proposed",
+                "confidence": 0.95,
+                "source": "ai",
+                "attributes": {},
+            },
+        ]
+        text = research_mod._fallback_report(
+            runtime, pool_rows=rows, bio_markdown="", stop_reason="bitti"
+        )
+    assert "## Doğrulanmış kimlik zinciri" in text and "devto:ben" in text
+    assert "yabanci" not in text and "1 düşük güvenli aday" in text
+    assert text.index("benhalpern (onaylı)") < text.index("bendhalpern")
+    assert "güven %95" in text
