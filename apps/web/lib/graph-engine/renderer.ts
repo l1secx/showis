@@ -145,7 +145,7 @@ export function nodeShapeForKind(kind: string): NodeShape {
   if (normalized.includes("platform") || normalized.includes("site")) return "square";
   if (normalized.includes("finding") || normalized.includes("breach")) return "diamond";
   if (normalized.includes("evidence") || normalized.includes("proof")) return "hexagon";
-  if (normalized.includes("company")) return "hexagon";
+  if (normalized.includes("company") || normalized.includes("organization")) return "hexagon";
   if (normalized.includes("supplier") || normalized.includes("vendor")) return "square";
   if (normalized.includes("product")) return "diamond";
   if (normalized.includes("location")) return "triangle";
