@@ -508,3 +508,37 @@ async def test_rate_limited_api_falls_back_to_profile_page_rel_me():
     assert nodes["profile:x:l1sec_tw"].trust > 0.9
     # Platformun kendi hesabı (marka süzgeci) zincire girmez.
     assert "profile:x:github" not in nodes
+
+
+@pytest.mark.asyncio
+async def test_name_only_case_verifies_search_lead_by_name_and_expands():
+    """Çapa yok (yalnız isim): aramadan gelen GitHub ad+soyadla doğrulanır, zincir sürer."""
+
+    async def intel(network: str, handle: str):
+        if (network, handle) == ("github", "kdemir"):
+            return _intel(
+                "github",
+                "kdemir",
+                name="Kerem Demir",
+                links=[("https://linktr.ee/kdemir", "owner")],
+            )
+        if (network, handle) == ("github", "kerem"):
+            return _intel("github", "kerem", name="Kerem Yıldız")
+        return None
+
+    async def page(url: str, trusted: bool):
+        if url == "https://linktr.ee/kdemir":
+            return PageData(url=url, links=["https://www.instagram.com/kdemir.ig/"])
+        return None
+
+    engine = ChainEngine(
+        intel_fetcher=intel, page_fetcher=page, names=["Kerem Demir"], probe_handles=False
+    )
+    engine.add_lead("https://github.com/kdemir", 0.55, note="arama")
+    engine.add_lead("https://github.com/kerem", 0.62, note="arama")
+    result = await engine.run()
+    nodes = {n.key: n for n in result.nodes}
+    assert nodes["profile:github:kdemir"].trust > 0.8
+    assert nodes["profile:instagram:kdemir.ig"].trust > 0.7
+    # Aynı ad, farklı soyad: arama sonucu güveni yarıya iner.
+    assert nodes["profile:github:kerem"].trust < 0.35

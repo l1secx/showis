@@ -44,6 +44,24 @@ raporlayan kişisel OSINT web uygulaması.
   kuralları** (`services/reasoning/correlate.py`; ilişki ancak ≥2 bağımsız kanıtla `candidate`
   olur), çelişki/zaman çizelgesi denetimi ve log-odds ile skorlanan **hipotezler** (LLM yalnız
   gerekçe yazar, skor kanıttan gelir). UI: Vaka > Hipotezler sekmesi, havuzda "Pivot" menüsü.
+- **Kimlik zinciri** (`services/chain.py`, `showis_connectors/account_intel.py`):
+  analistin onayladığı kayıtlar, seed'ler ve hedef alanları çapadır. Motor her
+  çapadan sahibin kendi yazdığı bağlantıları izler: GitHub (web sitesi, X, sosyal
+  hesaplar, profil README'si, kendi commit e-postası), GitLab, Codeberg, dev.to,
+  Lichess, Mastodon (doğrulanmış `verified_at` alanları), Bluesky alan adı, Hacker
+  News, Keybase kanıtları ve Keybase ters araması, Gravatar ve linktree/kişisel
+  site `rel="me"` bağlantıları. Güven kanıt türünden yayılır (kanıt 0.99, sahip
+  alanı 0.95, README 0.9, site 0.8); bağımsız yollar gürültülü-VEYA ile birleşir,
+  karşılıklı bağlantı ve ad+soyad eşleşmesi doğrular. Yalnız kullanıcı adı aynı olan
+  hesap tahmindir: doğrulanmadan öneri yazılmaz, farklı isimliyse elenir. Kurum
+  hesapları ve platform sayfalarının alt bilgi hesapları zincire girmez. Çıktı
+  `proposed`/`candidate`; provenance'ta zincir yolu ve kanıtlar saklanır. AI
+  araştırması temel taramadan önce zinciri kurar, doğrulanan hesaplardan sorgu
+  üretir ve her dalgada ajanın bulduğu profilleri zincirle doğrular (var olmayan
+  hesabın güveni düşer). UI: Havuz > "Kimlik zinciri" paneli, onay sonrası "Zinciri
+  sürdür", öğe pivotu "Kimlik zinciri"; rapor muhakeme bölümünde zincir tablosu.
+  Ayarlar'da GitHub belirteci tanımlamak GitHub API sınırını 60'tan 5000 istek/saate
+  çıkarır; sınırda motor profil sayfasının rel=me bağlantılarına düşer.
 - **Araştırma Havuzu:** Vaka hedefi, ipuçları, seed'ler, notlar, yorumlar, tarama
   ve AI önerileri tek havuzda toplanır (`pool_items`); tekilleştirme, tür/kaynak/
   durum filtresi ve onay akışı vardır. **Olay** türü tarih/yer/kurum/kaynak URL'si

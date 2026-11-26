@@ -84,6 +84,11 @@ Kurulum: `make bootstrap` (yerel `showis-*` paketleri PyPI'da yok, editable kuru
 - AI'ın havuza yazdığı kayıtlar `proposed` (araştırma) veya `candidate` (tam ajan) olur;
   kullanıcı onayı olmadan `confirmed` yazılmaz. Bu kuralı bozan değişiklik yapma.
 - AI sağlayıcı sırları Fernet ile şifrelenir; base_url allowlist ve redaksiyon korunur.
+- Kimlik zinciri (`services/chain.py`) yalnız herkese açık profil API'leri ve sayfaları
+  okur; keşfedilen sayfada robots korunur (yalnız çapa = kullanıcının verdiği URL istisna).
+  Kenar ağırlıkları/eşikler `chain.py` başındaki sabitlerdir; değiştirirsen
+  `apps/api/tests/test_chain.py` yanlış pozitif senaryolarını (kurum hesabı, platform
+  alt bilgisi, farklı isimli aynı kullanıcı adı) koru.
 - E-posta ihlal kontrolü anahtarsız zincirle çalışır (XposedOrNot + Hudson Rock; HIBP anahtarı
   isteğe bağlı ek kaynak); hepsi başarısızsa `502`. Üçüncü kişilerin düz metin parolası
   getirilmez/saklanmaz. Anahtarı repoya yazma.

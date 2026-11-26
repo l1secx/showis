@@ -3752,6 +3752,11 @@ async def _run_loop(
             # sayfa tavanının yarısını kullanır.
             await runtime.drain_pages(limit=max(2, depth.max_pages // 3))
             await runtime.persist()
+            # Temel taramanın bulduğu profiller (ör. yalnız isimle başlanan vakada
+            # aramadan gelen GitHub) zincirle doğrulanır ve genişletilir; süpervizör
+            # ilk dalgayı doğrulanmış zincirle planlar.
+            await _run_chain_phase(runtime, verify_leads=True)
+            identity = runtime.identity
             await _run_breach_checks(runtime)
         if not resume:
             stats["waves"] = 1
