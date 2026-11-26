@@ -4,6 +4,9 @@
   edilir; daha önce görülmeyen ihlal veya infostealer bulgusu uyarı üretir. İlk
   kontrol yalnız taban çizgisidir (uyarı yazmaz).
 - Hesap: son iki tamamlanmış taramanın anlık görüntüsünde yeni çıkan bulgular.
+- Kimlik zinciri: vakada zincir kullanılıyorsa onaylı hesaplardan zincir yeniden
+  kurulur (yazmadan); havuzda olmayan yüksek güvenli hesap uyarı üretir (ör. hedef
+  GitHub profiline yeni bir hesap bağladı).
 
 Uyarılar `(vaka, dedupe_key)` ile tekildir. Vakada webhook varsa SSRF korumalı
 olarak bildirilir. Yalnız okuma/kontrol yapılır; havuza öğe yazılmaz.
@@ -28,6 +31,9 @@ logger = logging.getLogger("showis.watch")
 MAX_WATCHED_EMAILS = 10
 BREACH_RECHECK_HOURS = 24
 MAX_CASES_PER_TICK = 20
+#: İzleme başına zincir istek tavanı ve uyarı eşiği.
+CHAIN_WATCH_FETCHES = 15
+CHAIN_WATCH_MIN_TRUST = 0.85
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -204,6 +210,61 @@ async def check_new_accounts(db: AsyncSession, case: Case) -> list[WatchAlert]:
     return alerts
 
 
+def _url_key(value: str) -> str:
+    return str(value or "").strip().lower().split("#", 1)[0].rstrip("/")
+
+
+async def check_chain_accounts(
+    db: AsyncSession, case: Case, *, engine: Any = None
+) -> list[WatchAlert]:
+    """Zinciri havuza yazmadan yeniden kurar; havuzda olmayan güçlü hesapları bildirir.
+
+    Yalnız zincir kullanılan vakada çalışır (havuzda zincir kaydı varsa): aksi
+    halde ilk izleme tüm hesapları "yeni" sayıp uyarı yağdırır.
+    """
+    from showis.services.chain import add_case_anchors, build_engine
+
+    items = (await db.execute(select(PoolItem).where(PoolItem.case_id == case.id))).scalars().all()
+    if not any(
+        isinstance(item.provenance, dict) and item.provenance.get("method") == "chain"
+        for item in items
+    ):
+        return []
+    known = {_url_key(item.value) for item in items} | {
+        _url_key((item.attributes or {}).get("profile_url") or "")
+        for item in items
+        if isinstance(item.attributes, dict)
+    }
+    engine = engine or await build_engine(db, max_fetches=CHAIN_WATCH_FETCHES)
+    await add_case_anchors(engine, db, case)
+    result = await engine.run()
+    alerts: list[WatchAlert] = []
+    for node in result.discovered(min_trust=CHAIN_WATCH_MIN_TRUST):
+        value = node.url if node.kind != "email" else node.value
+        if not value or _url_key(value) in known:
+            continue
+        relations = sorted({e.relation for e in node.evidence})
+        alert = await _add_alert(
+            db,
+            case_id=case.id,
+            kind="account",
+            item_id=None,
+            dedupe_key=f"chain:{node.key}",
+            title=f"Kimlik zincirinde yeni hesap: {node.label} (güven %{round(node.trust * 100)})",
+            detail={
+                "url": node.url,
+                "value": node.value,
+                "network": node.network,
+                "trust": node.trust,
+                "evidence": relations,
+                "source": "chain",
+            },
+        )
+        if alert:
+            alerts.append(alert)
+    return alerts
+
+
 async def _notify_webhook(case: Case, alerts: list[WatchAlert]) -> None:
     if not case.webhook_url or not alerts:
         return
@@ -229,6 +290,10 @@ async def run_watch(db: AsyncSession, case: Case) -> dict[str, Any]:
     """Tek vaka için izlemeyi çalıştırır; yeni uyarıları döner."""
     breach_alerts = await check_breaches(db, case)
     account_alerts = await check_new_accounts(db, case)
+    try:
+        account_alerts += await check_chain_accounts(db, case)
+    except Exception:  # noqa: BLE001 - zincir izlemesi diğer uyarıları düşürmesin
+        logger.warning("Zincir izlemesi başarısız: case=%s", case.id, exc_info=True)
     alerts = [*breach_alerts, *account_alerts]
     await db.commit()
     if alerts:

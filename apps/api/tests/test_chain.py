@@ -718,3 +718,41 @@ async def test_fallback_report_ranks_trusted_and_hides_low_confidence(db_factory
     assert "yabanci" not in text and "1 düşük güvenli aday" in text
     assert text.index("benhalpern (onaylı)") < text.index("bendhalpern")
     assert "güven %95" in text
+
+
+@pytest.mark.asyncio
+async def test_watch_alerts_new_chain_account_once(db_factory):
+    from showis.services.watch import check_chain_accounts
+
+    async with db_factory() as db:
+        case = Case(id="c7", name="c", purpose="p", legal_basis="public_sources")
+        db.add(case)
+        await db.flush()
+        await create_item(
+            db,
+            case_id="c7",
+            kind="url",
+            label="gh",
+            value="https://github.com/l1sec",
+            source="user",
+        )
+        # Zincir daha önce kullanılmamışsa izleme sessizdir.
+        assert await check_chain_accounts(db, case, engine=_engine(_Fake())) == []
+        await create_item(
+            db,
+            case_id="c7",
+            kind="url",
+            label="linktree",
+            value="https://linktr.ee/l1sec",
+            source="ai",
+            status="proposed",
+            provenance={"method": "chain"},
+        )
+        await db.commit()
+        alerts = await check_chain_accounts(db, case, engine=_engine(_Fake()))
+        titles = " ".join(alert.title for alert in alerts)
+        assert "linktr.ee" not in titles  # havuzda zaten var
+        assert "x:l1sec_tw" in titles
+        await db.commit()
+        again = await check_chain_accounts(db, case, engine=_engine(_Fake()))
+        assert again == []  # dedupe

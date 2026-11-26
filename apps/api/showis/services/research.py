@@ -1895,6 +1895,10 @@ async def _run_query_plan(
     """Sorgu listesini sırayla çalıştırır; sonuçları runtime'a işler."""
     ran = 0
     attempts = 0
+    if queries:
+        await _set_activity(
+            runtime.db, runtime.session, runtime.stats, _update_activity(runtime, phase)
+        )
     for item in queries:
         if runtime.wall_exhausted():
             break
