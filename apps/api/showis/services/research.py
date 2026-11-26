@@ -80,8 +80,10 @@ from showis.services.research_playbook import (
     fallback_bio,
     host_of,
     is_aggregator_url,
+    page_mentions_identity,
     parse_page_intel,
     render_bio_markdown,
+    resembles_identity,
 )
 from showis.services.supply_chain import (
     create_edge,
@@ -1296,7 +1298,9 @@ class ResearchRuntime:
             url=profile.url,
             title=title,
         )
-        if profile.aggregator or profile.platform in _FETCHABLE_PLATFORMS:
+        # Düşük güvenli (başkasına ait olabilecek) profil sayfası okunmaz: zincir
+        # yabancı hesaplardan büyümesin.
+        if confidence >= 0.5 and (profile.aggregator or profile.platform in _FETCHABLE_PLATFORMS):
             self.enqueue_page(
                 profile_url,
                 f"{profile.platform.value} profil sayfası",
@@ -1454,8 +1458,18 @@ class ResearchRuntime:
             return None
         self.add_source(url, title=result.title, kind="page")
         await self.archive_page(result, source="research")
-        self.process_page(result, reason=reason)
+        self.process_page(result, reason=reason, trusted=trusted or self.chain_trusted(url))
         return result
+
+    def chain_trusted(self, url: str) -> bool:
+        """Sayfa kimlik zincirinde yüksek güvenli bir hesap/site mi?"""
+        engine = self.chain_engine
+        if engine is None:
+            return False
+        return any(
+            node.url and node.url.rstrip("/") == url.rstrip("/") and node.trust >= CHAIN_LEAD_TRUST
+            for node in engine.nodes.values()
+        )
 
     async def archive_page(self, result: FetchResult, *, source: str) -> str | None:
         """Okunan sayfanın metnini kanıt arşivine yazar; hata araştırmayı düşürmez."""
@@ -1481,28 +1495,54 @@ class ResearchRuntime:
         self.snapshot_ids[result.url] = row.id
         return row.id
 
-    def process_page(self, result: FetchResult, *, reason: str = "sayfa") -> None:
+    def process_page(
+        self, result: FetchResult, *, reason: str = "sayfa", trusted: bool = False
+    ) -> None:
+        """Sayfadaki profil/e-posta/telefonları güvenle derecelendirerek önerir.
+
+        Güvenilir sayfa (seed, zincirle doğrulanmış hesap/site) bağlantıları sahibin
+        beyanıdır. Diğer sayfalarda (organizasyon, liste, haber) bağlantılar başka
+        kişilere aittir: yalnız hedefin kimliğine benzeyenler orta güven alır,
+        sayfa hedefi hiç anmıyorsa diğerleri önerilmez.
+        """
+        mentions = trusted or page_mentions_identity(
+            f"{result.title} {result.description} {result.text}", self.identity
+        )
+        page_host = host_of(result.url)
         for profile in result.profiles[:30]:
+            similar = resembles_identity(profile.identifier, self.identity)
+            if trusted:
+                confidence = 0.7
+            elif similar:
+                confidence = 0.6
+            elif mentions and host_of(profile.url) != page_host:
+                confidence = 0.35
+            else:
+                continue
             self.add_profile_draft(
                 profile,
                 title=result.title,
                 source_url=result.url,
-                confidence=0.7,
+                confidence=confidence,
                 reason=f"Sayfa içi bağlantı ({reason})",
             )
         for email in result.emails[:10]:
+            similar = resembles_identity(email, self.identity)
+            if not (trusted or similar or mentions):
+                continue
             self.add_draft(
                 FindingDraft(
                     kind="email",
                     label=f"E-posta — {result.title or result.url}"[:256],
                     value=email,
-                    confidence=0.55,
+                    confidence=0.55 if (trusted or similar) else 0.3,
                     source_url=result.url,
                     attributes={"source_title": result.title[:300]},
                     provenance={"url": result.url, "method": "page-extract"},
                 )
             )
-        for phone in result.phones[:6]:
+        # Telefon regex'i gürültülüdür: yalnız hedefe ait sayfadan.
+        for phone in result.phones[:6] if trusted else []:
             self.add_draft(
                 FindingDraft(
                     kind="phone",
@@ -1834,6 +1874,13 @@ async def _run_chain_phase(runtime: ResearchRuntime, *, verify_leads: bool = Fal
         urls=tuple(urls[:24]),
     )
     runtime.stats["discovered_handles"] = discovered[:40]
+    await _set_activity(
+        runtime.db,
+        runtime.session,
+        runtime.stats,
+        f"Kimlik zinciri: {summary['discovered']} hesap/sayfa "
+        f"({summary['high_confidence']} yüksek güven) · {summary['fetches']} istek",
+    )
     return len(new_ids)
 
 
@@ -2494,6 +2541,10 @@ def _report_from_log(ctx: SubagentContext, log: list[dict[str, Any]]) -> Subagen
         elif tool == "fetch_page":
             url = str(result.get("url") or "")
             title = str(result.get("title") or "")
+            mentions = page_mentions_identity(
+                f"{title} {result.get('description') or ''} {result.get('text') or ''}",
+                ctx.identity,
+            )
             for profile in result.get("profiles") or []:
                 if not isinstance(profile, dict):
                     continue
@@ -2501,11 +2552,17 @@ def _report_from_log(ctx: SubagentContext, log: list[dict[str, Any]]) -> Subagen
                 platform = str(profile.get("platform") or "")
                 if not username:
                     continue
+                # Başkasının sayfasındaki (organizasyon/üye listesi) profiller hedefin
+                # değildir: yalnız kimliğe benzeyen veya hedefi anan sayfadakiler.
+                similar = resembles_identity(username, ctx.identity)
+                if not similar and not mentions:
+                    continue
+                profile_confidence = 0.6 if similar else 0.35
                 add_finding(
                     "username",
                     username,
                     label=f"{platform} — {title or username}",
-                    confidence=0.65,
+                    confidence=profile_confidence,
                     source_url=url,
                     attributes={
                         "platform": platform,
@@ -2519,21 +2576,24 @@ def _report_from_log(ctx: SubagentContext, log: list[dict[str, Any]]) -> Subagen
                         "url",
                         profile_url,
                         label=(title or f"{platform}: {username}")[:256],
-                        confidence=0.6,
+                        confidence=profile_confidence - 0.05,
                         source_url=profile_url,
                     )
                 leads.append(
                     SubagentLead(kind="username", value=username, reason=f"{platform} profili")
                 )
             for email in result.get("emails") or []:
+                similar = resembles_identity(str(email), ctx.identity)
+                if not similar and not mentions:
+                    continue
                 add_finding(
                     "email",
                     str(email),
                     label=f"E-posta — {title or url}",
-                    confidence=0.5,
+                    confidence=0.5 if similar else 0.3,
                     source_url=url,
                 )
-            for phone in result.get("phones") or []:
+            for phone in (result.get("phones") or []) if mentions else []:
                 add_finding(
                     "phone",
                     str(phone),

@@ -93,6 +93,13 @@ SITE_LINK_FLOOD = 10
 CONTEXT_MIN_TRUST = 0.9
 #: Bu güvenin altındaki düğümler genişletilmez (zincir yanlış pozitifle büyümez).
 EXPAND_MIN_TRUST = 0.6
+#: Arama sonucu tek başına genişletme eşiğine ulaşmaz: önce isim veya geri
+#: bağlantıyla doğrulanmalıdır.
+SEARCH_LEAD_MAX = 0.55
+#: Zayıf bağlantılar (site/bio/README): aynı ağda zaten güçlü bir hesap varsa ve
+#: kimlik benzemiyorsa başka bir kişinin hesabıdır (iş arkadaşı, takip edilen).
+WEAK_RELATIONS: frozenset[str] = frozenset({"site", "bio", "readme"})
+DUPLICATE_NETWORK_FACTOR = 0.45
 #: Bu güvenin altındaki düğümler havuza yazılmaz.
 PERSIST_MIN_TRUST = 0.4
 #: Geri bağlantı kanıtı sayılabilmesi için hedef düğümün güveni.
@@ -220,6 +227,8 @@ class ChainNode:
     company: str = ""
     #: Kurum (organizasyon) hesabı: kişi değil, zincirde ilerlenmez.
     is_org: bool = False
+    #: Aynı ağda ikinci hesap cezası uygulandı mı (finish tekrarında çift ceza yok).
+    duplicate_checked: bool = False
     avatar_url: str = ""
     name_match: bool | None = None
 
@@ -283,14 +292,14 @@ class ChainResult:
     relations: int = 0
 
     def discovered(self, *, min_trust: float = PERSIST_MIN_TRUST) -> list[ChainNode]:
-        # Yalnız kullanıcı adı aynı olan (isimle de doğrulanmamış) tahminler
-        # öneri değildir; havuzu gürültüyle doldurmaz.
+        # Yalnız kullanıcı adı aynı olan ya da yalnız arama sonucu olan (isim/
+        # bağlantıyla doğrulanmamış) düğümler zincir önerisi değildir.
         return [
             n
             for n in self.nodes
             if not n.anchor
             and n.trust >= min_trust
-            and not (n._probe_only() and n.name_match is not True)
+            and not (n._unverified() and n.name_match is not True)
         ]
 
     def summary(self) -> dict[str, Any]:
@@ -568,7 +577,7 @@ class ChainEngine:
             node,
             Evidence(
                 relation="search",
-                weight=max(0.0, min(0.8, weight)),
+                weight=max(0.0, min(SEARCH_LEAD_MAX, weight)),
                 source_key=f"search:{node.key}",
                 source_label="araştırma bulgusu",
                 source_url=canonical,
@@ -621,8 +630,10 @@ class ChainEngine:
                 # sahibin kendisi değildir; README/bio/site bağlantısında atla.
                 if relation in {"readme", "bio", "site"}:
                     return None
-            if relation in {"readme", "bio", "site"} and ident in self.known_handles():
+            if relation in WEAK_RELATIONS and ident in self.known_handles():
                 weight = max(weight, EDGE_WEIGHTS["owner"])
+            elif relation in WEAK_RELATIONS and self._weak_duplicate(network, ident):
+                weight *= DUPLICATE_NETWORK_FACTOR
             key = f"profile:{network}:{ident}"
             node, created = self._node(
                 key, kind="profile", value=ident, network=network, url=canonical
@@ -895,6 +906,19 @@ class ChainEngine:
                 continue
             self.add_email(node, email, "owner" if aggregator else "site", note="sayfada")
 
+    def _weak_duplicate(self, network: str, ident: str) -> bool:
+        """Bu ağda kimliğe benzemeyen ikinci hesap mı (güçlü hesap zaten var)?"""
+        if self._resembles_identity(ident):
+            return False
+        return any(
+            node.kind == "profile"
+            and node.network == network
+            and node.value != ident
+            and node.trust >= 0.9
+            and (node.anchor or any(e.relation not in WEAK_RELATIONS for e in node.evidence))
+            for node in self.nodes.values()
+        )
+
     def _is_handle_like(self, node: ChainNode, display_name: str) -> bool:
         flat = _fold(display_name).replace(" ", "")
         handles = {node.value.split("@", 1)[0]} | self.known_handles()
@@ -1025,6 +1049,21 @@ class ChainEngine:
 
     def finish(self) -> ChainResult:
         """Sonucu kapatır; zaman aşımıyla kesilen çalışmada da çağrılabilir."""
+        # Sıra bağımsız ikinci geçiş: güçlü hesap sonradan bulunduysa, aynı ağdaki
+        # yalnız zayıf bağlantılı ve kimliğe benzemeyen hesaplar düşürülür.
+        for node in self.nodes.values():
+            if (
+                node.kind == "profile"
+                and not node.anchor
+                and not node.duplicate_checked
+                and node.evidence
+                and all(e.relation in WEAK_RELATIONS for e in node.evidence)
+                and self._weak_duplicate(node.network, node.value)
+            ):
+                node.duplicate_checked = True
+                for evidence in node.evidence:
+                    evidence.weight *= DUPLICATE_NETWORK_FACTOR
+                node.recompute()
         # Bütçe bitince okunmamış kullanıcı adı tahminleri doğrulanmamış kalır.
         for node in self.nodes.values():
             if not node.anchor and node._probe_only() and not node.expanded:

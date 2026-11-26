@@ -542,3 +542,116 @@ async def test_name_only_case_verifies_search_lead_by_name_and_expands():
     assert nodes["profile:instagram:kdemir.ig"].trust > 0.7
     # Aynı ad, farklı soyad: arama sonucu güveni yarıya iner.
     assert nodes["profile:github:kerem"].trust < 0.35
+
+
+@pytest.mark.asyncio
+async def test_personal_site_colleague_account_is_down_weighted():
+    """Kişisel site iş arkadaşının X hesabına bağlanır; sahibin X'i zaten biliniyor."""
+
+    async def intel(network: str, handle: str):
+        if (network, handle) == ("github", "l1sec"):
+            return _intel(
+                "github",
+                "l1sec",
+                links=[("https://l1sec.dev", "owner"), ("https://x.com/l1sec_tw", "owner")],
+            )
+        return None
+
+    async def page(url: str, trusted: bool):
+        if url == "https://l1sec.dev":
+            return PageData(
+                url=url,
+                links=["https://x.com/meslektas", "https://www.linkedin.com/in/l1sec"],
+            )
+        return None
+
+    engine = ChainEngine(intel_fetcher=intel, page_fetcher=page, probe_handles=False)
+    engine.add_anchor_url("https://github.com/l1sec")
+    result = await engine.run()
+    nodes = {n.key: n for n in result.nodes}
+    discovered = {n.key for n in result.discovered()}
+    assert nodes["profile:x:meslektas"].trust < 0.4
+    assert "profile:x:meslektas" not in discovered
+    # Kimliğe benzeyen ve ağda ilk olan hesap korunur.
+    assert nodes["profile:linkedin:l1sec"].trust > 0.75
+
+
+@pytest.mark.asyncio
+async def test_search_lead_alone_is_not_expanded_or_persisted():
+    async def intel(network: str, handle: str):
+        return _intel(
+            "github", handle, name="", links=[("https://x.com/baskasi", "owner")]
+        )
+
+    async def page(url: str, trusted: bool):
+        return None
+
+    engine = ChainEngine(intel_fetcher=intel, page_fetcher=page, names=["Kerem Demir"])
+    engine.add_lead("https://github.com/rastgele", 0.62)
+    result = await engine.run()
+    nodes = {n.key: n for n in result.nodes}
+    assert nodes["profile:github:rastgele"].trust <= 0.55
+    assert "profile:x:baskasi" not in nodes
+    assert result.discovered() == []
+
+
+@pytest.mark.asyncio
+async def test_research_page_extraction_ignores_strangers_on_unrelated_pages(db_factory):
+    import time
+
+    from showis.db.models import ResearchSession
+    from showis.services import research as research_mod
+    from showis.services.research_playbook import ProfileRef, build_identity_profile
+    from showis_contracts import Platform
+
+    async with db_factory() as db:
+        case = Case(id="c5", name="c", purpose="p", legal_basis="public_sources")
+        session = ResearchSession(id="s5", case_id="c5", title="t", question="q", mode="research")
+        db.add_all([case, session])
+        await db.commit()
+        runtime = research_mod.ResearchRuntime(
+            db=db,
+            session=session,
+            case=case,
+            target=None,
+            client=None,  # type: ignore[arg-type]
+            identity=build_identity_profile(
+                first_name="Ben", last_name="Halpern", seed_usernames=["benhalpern"]
+            ),
+            pool_items=[],
+            stats={"depth": "quick"},
+            started=time.monotonic(),
+        )
+
+        def ref(name: str) -> ProfileRef:
+            return ProfileRef(Platform.GITHUB, name, f"https://github.com/{name}")
+
+        org_page = research_mod.FetchResult(
+            url="https://github.com/virtual-coffee",
+            title="Virtual Coffee",
+            text="Virtual Coffee community members and projects",
+            profiles=[ref("sophiabrandt"), ref("bendhalpern")],
+            emails=["hello@virtualcoffee.io"],
+            phones=["265 279 21 3"],
+        )
+        runtime.process_page(org_page)
+        values = {(d.kind, d.value): d.confidence for d in runtime.drafts}
+        assert ("username", "sophiabrandt") not in values
+        assert values[("username", "bendhalpern")] == 0.6
+        assert not any(kind in {"email", "phone"} for kind, _ in values)
+        # Yabancı profil sayfası okunmak üzere kuyruğa da girmez.
+        assert "https://github.com/sophiabrandt" not in runtime.pending_url_set
+
+        runtime.drafts.clear()
+        runtime.finding_keys.clear()
+        own = research_mod.FetchResult(
+            url="https://benhalpern.com",
+            title="Ben Halpern",
+            text="Hi, I am Ben Halpern",
+            profiles=[ref("someproject")],
+            emails=["hi@benhalpern.com"],
+            phones=["+1 555 010 9999"],
+        )
+        runtime.process_page(own, trusted=True)
+        kinds = {d.kind for d in runtime.drafts}
+        assert {"username", "email", "phone"} <= kinds

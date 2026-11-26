@@ -360,6 +360,44 @@ def build_identity_profile(
     )
 
 
+def _flat(value: object) -> str:
+    """Kimlik karşılaştırması: Türkçe katlama + yalnız harf/rakam."""
+    from showis_engine.variants import normalize_turkish
+
+    words = re.split(r"[\s._@-]+", str(value or ""))
+    return "".join(normalize_turkish(word).casefold() for word in words if word)
+
+
+def resembles_identity(value: object, profile: IdentityProfile) -> bool:
+    """Kullanıcı adı/e-posta/alan adı hedefin kimliğine benziyor mu?
+
+    Bilinen bir kullanıcı adını (≥4 karakter) içermesi ya da ad ve soyadın ikisini
+    birden içermesi gerekir; yalnız soyad (ör. başka bir "Halpern") yetmez.
+    """
+    flat = _flat(str(value or "").split("@", 1)[0] if "@" in str(value or "") else value)
+    if len(flat) < 3:
+        return False
+    for handle in (*profile.handles, *profile.variants[:6]):
+        base = _flat(handle)
+        if len(base) >= 4 and (base in flat or (len(flat) >= 4 and flat in base)):
+            return True
+    first, last = _flat(profile.first_name), _flat(profile.last_name)
+    if len(first) >= 2 and len(last) >= 3 and first in flat and last in flat:
+        return True
+    return False
+
+
+def page_mentions_identity(text: object, profile: IdentityProfile) -> bool:
+    """Sayfa metni hedefin tam adını veya bilinen bir kullanıcı adını geçiriyor mu?"""
+    haystack = _clean_text(text, limit=60000).casefold()
+    if not haystack:
+        return False
+    if profile.full_name and profile.full_name.casefold() in haystack:
+        return True
+    words = set(re.findall(r"[a-z0-9._-]{4,}", haystack))
+    return any(handle and len(handle) >= 4 and handle in words for handle in profile.handles)
+
+
 @dataclass(frozen=True)
 class ResearchQuery:
     text: str

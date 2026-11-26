@@ -175,3 +175,27 @@ def test_build_chain_queries_prioritises_verified_seeds_and_skips_known():
     texts = [q.text for q in queries]
     assert texts == ['"ali_dev"', '"ali_dev" "Ali Yılmaz"', '"ali@ali.dev"']
     assert all(q.priority == 1 for q in queries)
+
+
+def test_resembles_identity_requires_handle_or_full_name():
+    from showis.services.research_playbook import (
+        build_identity_profile,
+        page_mentions_identity,
+        resembles_identity,
+    )
+
+    profile = build_identity_profile(
+        first_name="Ben", last_name="Halpern", seed_usernames=["benhalpern"]
+    )
+    assert resembles_identity("benhalpern", profile)
+    assert resembles_identity("bendhalpern", profile)  # ad + soyad birlikte
+    assert resembles_identity("ben.halpern@gmail.com", profile)
+    assert not resembles_identity("barthalpern", profile)  # yalnız soyad
+    assert not resembles_identity("sophiabrandt", profile)
+    assert not resembles_identity("hello@virtualcoffee.io", profile)
+    assert page_mentions_identity("Founder: Ben Halpern", profile)
+    assert page_mentions_identity("by @benhalpern on dev", profile)
+    assert not page_mentions_identity("Virtual Coffee members", profile)
+
+    turkish = build_identity_profile(first_name="Çağrı", last_name="Öztürk")
+    assert resembles_identity("cagriozturk", turkish)
