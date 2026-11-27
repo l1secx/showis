@@ -35,6 +35,7 @@ class SiteCheckSearchConnector(SiteCheckConnector):
     name: str = "sitecheck_search"
     supported_kinds: set[str] = {"search_and_check"}
     detection: str = "sitecheck_search"
+    budget_role = "search"
 
     def __init__(
         self,
@@ -51,6 +52,10 @@ class SiteCheckSearchConnector(SiteCheckConnector):
         self.max_search_usernames = max(0, int(max_search_usernames))
 
     async def plan(self, ctx: ScanContext) -> list[TaskSpec]:
+        # Aramadan gelen kimlikler eklendikten sonra limit yeniden hesaplanır.
+        return self._finalize(await self._plan_with_search(ctx), ctx)
+
+    async def _plan_with_search(self, ctx: ScanContext) -> list[TaskSpec]:
         tasks = await super().plan(ctx)
         if not self.search_provider:
             return tasks
