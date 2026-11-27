@@ -8,6 +8,27 @@ raporlayan kişisel OSINT web uygulaması.
 > duvarı, CAPTCHA bypass, unofficial API ve yasak host'lar kodda yoktur.
 > Bkz. `docs/legal/`.
 
+## Demo
+
+Vercel üzerinde çalışan bir demo yayında: <https://showis-kerem-1ee7.vercel.app>
+
+Demo herkese açık değildir. Vercel Authentication ile korunur ve yalnız sahibinin
+Vercel ekibindeki hesaplar açabilir; başkaları giriş sayfasına yönlendirilir. Bu
+bilinçlidir: Caddy'nin basic-auth katmanı Vercel'de yoktur ve web proxy'si API
+token'ını sunucu tarafında eklediği için erişimi platform koruması sınırlar.
+
+Mimari (`vercel.json`): `web` (Next.js) ve `api` (`infra/docker/Dockerfile.api`,
+container) tek projede servis olarak çalışır; `api` yalnız `web`'e verilen
+servis bağlantısıyla erişilir, dışarıya açık değildir. Tarama işlerini `worker`
+daemon'ı (Celery, `infra/docker/Dockerfile.worker`) yürütür. Postgres Neon'dan,
+Redis Upstash'ten gelir (`DATABASE_URL`, `REDIS_URL`); ayrıca `MASTER_KEY` ve
+`SHOWIS_API_TOKEN` tanımlanmalıdır.
+
+Bilinen sınırlar: Vercel daemon'ları yalnız production deploy'unda çalışır,
+preview'larda tarama koşmaz. Kanıt ve rapor dosyaları yerel diske yazıldığı için
+Vercel'de kalıcı değildir; API ve worker aynı diski paylaşmaz. Tam kurulum için
+Docker Compose yolunu kullanın (aşağıda `Kurulum`).
+
 ## Özellikler
 
 - **26 Zengin Connector (anahtarsız, Tier A/B):** GitHub, GitLab, Keybase, Reddit,
