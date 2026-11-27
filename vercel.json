@@ -10,8 +10,7 @@
     "api": {
       "runtime": "container",
       "root": ".",
-      "entrypoint": "infra/docker/Dockerfile.api",
-      "command": ["sh", "-c", "exec /app/entrypoint-api.sh uvicorn showis.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+      "entrypoint": "infra/docker/Dockerfile.api"
     }
   },
   "daemons": {

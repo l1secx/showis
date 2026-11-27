@@ -46,4 +46,5 @@ USER showis
 EXPOSE 8000
 
 ENTRYPOINT ["/app/entrypoint-api.sh"]
-CMD ["uvicorn", "showis.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Vercel istekleri $PORT'a yönlendirir; compose kendi `command`'ını verir (8000).
+CMD ["sh", "-c", "exec uvicorn showis.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
