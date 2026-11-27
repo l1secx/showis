@@ -5,6 +5,7 @@ from logging.config import fileConfig
 import showis.db.models  # noqa: F401
 from alembic import context
 from showis.db.base import Base
+from showis.db.url import normalize_database_url
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
@@ -16,9 +17,11 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
-database_url = os.getenv(
-    "DATABASE_URL",
-    "postgresql+asyncpg://showis:change-me@localhost:5432/showis",
+database_url = normalize_database_url(
+    os.getenv(
+        "DATABASE_URL",
+        "postgresql+asyncpg://showis:change-me@localhost:5432/showis",
+    )
 )
 config.set_main_option("sqlalchemy.url", database_url)
 

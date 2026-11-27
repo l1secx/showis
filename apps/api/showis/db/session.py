@@ -4,6 +4,7 @@ import os
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 
+from showis.db.url import normalize_database_url
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -14,9 +15,11 @@ from sqlalchemy.pool import NullPool
 
 logger = logging.getLogger("showis.db.session")
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql+asyncpg://showis:change-me@localhost:5432/showis",
+DATABASE_URL = normalize_database_url(
+    os.getenv(
+        "DATABASE_URL",
+        "postgresql+asyncpg://showis:change-me@localhost:5432/showis",
+    )
 )
 
 # API/uzun omurlu surec icin havuzlu engine. Tek event loop varsayimi gecerlidir.
