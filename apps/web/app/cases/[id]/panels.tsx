@@ -644,6 +644,15 @@ function readStoredShowRejected(caseId: string): boolean {
   return window.sessionStorage.getItem(findingsRejectedKey(caseId)) === "1";
 }
 
+/** `Finding.confidence_basis` kodlarının Türkçe etiketi; eski/boş kayıtta etiket yok. */
+const BASIS_LABELS: Record<string, string> = {
+  cross_link: "çapraz bağlantı",
+  identifier: "hedef tanımlayıcısı birebir",
+  commit_email: "commit e-postası",
+  avatar: "avatar eşleşmesi",
+  weak: "bağımsız doğrulama yok",
+};
+
 /* --- T-301: authenticity (hesap güvenilirliği) --- */
 
 /**
@@ -914,6 +923,11 @@ function FindingRecord({
           {isLead && (
             <p className="mt-1.5 text-[12px] font-medium text-warn">
               Tekil kaynak; henüz doğrulanmadı.
+            </p>
+          )}
+          {f.status !== "rejected" && BASIS_LABELS[f.confidence_basis ?? ""] && (
+            <p className="mt-1.5 text-[12px] text-ink-3">
+              Doğrulama: {BASIS_LABELS[f.confidence_basis ?? ""]}
             </p>
           )}
           {f.status === "rejected" && (

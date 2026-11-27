@@ -1989,6 +1989,7 @@ class ScannerService:
                 # T-326/T-301: sahte/atil hesap sinyali DB'de kalici (0004 migration).
                 authenticity=finding.authenticity,
                 authenticity_reasons=finding.authenticity_reasons or [],
+                confidence_basis=finding.confidence_basis,
             )
             # SEC-15: kullanicinin confirmed/rejected karari yeniden taramada
             # EZILMEZ. Karar varsa (verified_at dolu veya status candidate degil)
@@ -2006,6 +2007,7 @@ class ScannerService:
                 # Kullanici karari korunur; kanit sinyalleri (skor gibi) guncellenir.
                 existing.authenticity = db_finding.authenticity
                 existing.authenticity_reasons = db_finding.authenticity_reasons
+                existing.confidence_basis = db_finding.confidence_basis
             else:
                 existing.scan_id = db_finding.scan_id
                 existing.entity_id = db_finding.entity_id
@@ -2017,6 +2019,7 @@ class ScannerService:
                 existing.breakdown = db_finding.breakdown
                 existing.explanation = db_finding.explanation
                 existing.evidence_ids = db_finding.evidence_ids
+                existing.confidence_basis = db_finding.confidence_basis
             if notify:
                 await event_broadcaster.broadcast(
                     scan.id,

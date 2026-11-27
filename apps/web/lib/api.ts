@@ -139,6 +139,8 @@ export interface FindingItem {
   verified_at?: string | null;
   authenticity?: number | null;
   authenticity_reasons?: string[] | null;
+  /** CONFIRMED kararının dayandığı bağımsız doğrulama: cross_link | identifier | commit_email | avatar | weak. */
+  confidence_basis?: string;
   /** Skora katkı veren bağımsız sinyal sayısı (OSINT çapraz doğrulama). */
   corroboration?: number;
   signals?: string[];

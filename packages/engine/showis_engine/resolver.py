@@ -54,6 +54,33 @@ def _token_overlap(left: list[str], right: list[str]) -> float:
     return matched / max(len(left), len(right))
 
 
+#: Bağımsız doğrulama sinyali etiketleri (`Finding.confidence_basis`).
+BASIS_CROSS_LINK = "cross_link"
+BASIS_IDENTIFIER = "identifier"
+BASIS_COMMIT_EMAIL = "commit_email"
+BASIS_AVATAR = "avatar"
+BASIS_WEAK = "weak"
+
+
+def compute_confidence_basis(breakdown: ConfidenceBreakdown) -> str:
+    """Bağımsız doğrulama sinyalini tek etikete indirger.
+
+    cross_link, identifier_match (hedefin e-posta/telefon/alan adı/IP'si profilde
+    birebir görüldü), commit_email_or_pgp ve avatar_exact_hash bizzat gözlemlenen
+    kanıtlardır; kullanıcı adı/bio benzerliği tek başına kimlik kanıtı sayılmaz
+    (`weak`). Öncelik: cross_link > identifier > commit_email > avatar > weak.
+    """
+    if breakdown.cross_link > 0:
+        return BASIS_CROSS_LINK
+    if breakdown.identifier_match > 0:
+        return BASIS_IDENTIFIER
+    if breakdown.commit_email_or_pgp > 0:
+        return BASIS_COMMIT_EMAIL
+    if breakdown.avatar_exact_hash > 0:
+        return BASIS_AVATAR
+    return BASIS_WEAK
+
+
 def calculate_name_similarity(target_fullname: str, candidate_name: str | None) -> float:
     """Ad-soyad benzerliğini hesaplar (≥0.92 -> 0.20 tam puan, altı lineer).
 
@@ -247,9 +274,12 @@ class Resolver:
             auth_score = auth.score
         auth_reasons = list(auth.reasons)
 
-        # Status threshold: >=0.80 CONFIRMED, 0.50-0.79 CANDIDATE,
+        # Status threshold: >=0.80 AYRICA bagimsiz dogrulama sinyali gerektirir
+        # (cross_link | commit_email_or_pgp | avatar_exact_hash) -> CONFIRMED;
+        # sinyal yoksa CANDIDATE (REJECTED degil). 0.50-0.79 CANDIDATE,
         # isim/okul/handle benzerligi olan dusuk skorlar LEAD (ipucu), gerisi REJECTED.
-        if total_score >= 0.80:
+        confidence_basis = compute_confidence_basis(breakdown)
+        if total_score >= 0.80 and confidence_basis != BASIS_WEAK:
             status = FindingStatus.CONFIRMED
         elif total_score >= 0.50:
             status = FindingStatus.CANDIDATE
@@ -276,6 +306,7 @@ class Resolver:
             breakdown=breakdown,
             explanation="",
             evidence_ids=entity.evidence_ids,
+            confidence_basis=confidence_basis,
             authenticity=auth_score,
             authenticity_reasons=auth_reasons,
         )

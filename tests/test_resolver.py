@@ -408,3 +408,65 @@ def test_domain_hedefi_yanlis_eslesirse_puan_yok():
     )
     finding = resolver.resolve_entity(entity, target, case_id="c", scan_id="s")
     assert finding.breakdown.identifier_match == 0.0
+
+
+def _high_score_entity():
+    target = Target(
+        first_name="Ahmet",
+        last_name="Yılmaz",
+        hints={"city": "Ankara", "company": "CyberSec Inc"},
+    )
+    entity = Entity(
+        id="github:ahmetyilmaz",
+        type=EntityType.ACCOUNT,
+        platform=Platform.GITHUB,
+        label="ahmetyilmaz",
+        url="https://github.com/ahmetyilmaz",
+        attributes={
+            "name": "Ahmet Yılmaz",
+            "location": "Ankara, Turkey",
+            "company": "CyberSec Inc",
+        },
+    )
+    return target, entity
+
+
+def test_confirmed_baskisi_cross_link_basis_tasir():
+    target, entity = _high_score_entity()
+    f = Resolver().resolve_entity(
+        entity,
+        target,
+        case_id="c",
+        scan_id="s",
+        known_platforms_with_username={"github", "tryhackme"},
+        has_cross_link=True,
+    )
+    assert f.status == FindingStatus.CONFIRMED
+    assert f.confidence_basis == "cross_link"
+
+
+def test_bagimsiz_sinyalsiz_bulgu_weak_ve_candidate_kalir():
+    # username 0.30 + isim 0.20 + bio 0.10 = 0.60: bağımsız sinyal yok.
+    target, entity = _high_score_entity()
+    f = Resolver().resolve_entity(
+        entity,
+        target,
+        case_id="c",
+        scan_id="s",
+        known_platforms_with_username={"github", "tryhackme"},
+    )
+    assert f.status == FindingStatus.CANDIDATE
+    assert f.confidence_basis == "weak"
+
+
+def test_confidence_basis_oncelik_sirasi():
+    from showis_contracts import ConfidenceBreakdown
+    from showis_engine.resolver import compute_confidence_basis
+
+    b = ConfidenceBreakdown(avatar_exact_hash=0.10, commit_email_or_pgp=0.15)
+    assert compute_confidence_basis(b) == "commit_email"
+    b.identifier_match = 0.50
+    assert compute_confidence_basis(b) == "identifier"
+    b.cross_link = 0.25
+    assert compute_confidence_basis(b) == "cross_link"
+    assert compute_confidence_basis(ConfidenceBreakdown(username_exact_match=0.30)) == "weak"

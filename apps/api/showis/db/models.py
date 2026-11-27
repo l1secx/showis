@@ -673,6 +673,11 @@ class Finding(Base):
     #: Sahte/atil hesap sinyali (0..1). Guven skorundan bagimsizdir (T-301).
     authenticity: Mapped[float | None] = mapped_column(Float, nullable=True)
     authenticity_reasons: Mapped[list[str] | None] = mapped_column(JSON_TYPE, nullable=True)
+    #: CONFIRMED kararinin dayandigi bagimsiz dogrulama sinyali:
+    #: cross_link | commit_email | avatar | weak | "" (eski kayitlar).
+    confidence_basis: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="", default=""
+    )
     explanation: Mapped[str | None] = mapped_column(Text, nullable=True)
     evidence_ids: Mapped[list[str]] = mapped_column(JSON_TYPE, default=list)
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
