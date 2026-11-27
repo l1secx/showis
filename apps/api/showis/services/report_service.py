@@ -144,6 +144,7 @@ def _finding_public(f: Finding) -> dict[str, Any]:
         "evidence_ids": f.evidence_ids or [],
         "verified_at": f.verified_at.isoformat() if f.verified_at else None,
         "created_at": f.created_at.isoformat() if f.created_at else None,
+        "confidence_basis": f.confidence_basis or "",
     }
 
 

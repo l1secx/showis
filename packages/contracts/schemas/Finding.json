@@ -259,6 +259,11 @@
       "default": null,
       "title": "Verified At"
     },
+    "confidence_basis": {
+      "default": "",
+      "title": "Confidence Basis",
+      "type": "string"
+    },
     "authenticity": {
       "anyOf": [
         {

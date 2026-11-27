@@ -1674,6 +1674,7 @@ async def get_case_findings(
                 # T-327: sahte/spam (authenticity) sinyali — eski istemciler icin ek alan
                 "authenticity": finding.authenticity,
                 "authenticity_reasons": finding.authenticity_reasons,
+                "confidence_basis": finding.confidence_basis,
                 # Yeni: kaç bağımsız sinyal bu skoru destekliyor?
                 "corroboration": len(signals),
                 "signals": signals,
@@ -1982,6 +1983,7 @@ async def export_case(
                 # T-327: authenticity alanlari export'ta da yer alir
                 "authenticity": f.authenticity,
                 "authenticity_reasons": f.authenticity_reasons,
+                "confidence_basis": f.confidence_basis,
                 # Yeni: küme kimliği + bağımsız sinyal özeti
                 "corroboration": len(corroboration_signals(f.breakdown)),
                 "cluster_id": (

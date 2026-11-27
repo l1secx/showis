@@ -27,12 +27,16 @@ from showis_contracts import (
 )
 from showis_engine.http import EvidenceStore, HttpClient
 
+from .budget import Role, primary_site_limit, search_site_limit, share_budget
 from .cache import CheckCache, get_default_cache
 from .dedupe import ScanPlanRegistry, get_default_registry
 from .engine import EXISTS, SKIPPED, UsernameCheckEngine
 from .sites import SITES, SiteSpec, select_sites
 
 logger = logging.getLogger("showis.sitecheck.connector")
+
+#: `site_limit` eksik/geçersiz görevlerde varsayılan kullanıcı adı sayısı (fail-safe).
+MAX_PLANNED_USERNAMES = 10
 
 
 class SiteCheckConnector:
@@ -42,6 +46,8 @@ class SiteCheckConnector:
     supported_kinds: set[str] = {"check_username"}
     #: Entity.attributes icindeki tespit etiketi
     detection: str = "sitecheck"
+    #: Aile istek butcesindeki pay (primary %80 / search %20).
+    budget_role: Role = "primary"
 
     def __init__(
         self,
@@ -131,7 +137,31 @@ class SiteCheckConnector:
             if len(tasks) > before:
                 budget -= 1
 
+        return self._finalize(tasks, ctx)
+
+    def _finalize(self, tasks: list[TaskSpec], ctx: ScanContext) -> list[TaskSpec]:
+        """Görevlere kullanıcı adı başına site limitini yazar.
+
+        Sitecheck ve sitecheck_search aynı **aile** istek bütçesini paylaşır;
+        limit = pay / (kullanıcı adı × robots dahil istek). Böylece toplam
+        planlanan istek tarama bütçesini aşmaz.
+        """
+        mode = ctx.mode
+        limit_for = search_site_limit if self.budget_role == "search" else primary_site_limit
+        site_limit = limit_for(mode, len(tasks))
+        for task in tasks:
+            task.params["site_limit"] = site_limit
         return tasks
+
+    def _site_limit(self, task: TaskSpec, mode: str | None) -> int:
+        """Görevin site limiti; eksik/geçersizse fail-safe, bayat değer pay ile kırpılır."""
+        cap = share_budget(mode, self.budget_role)
+        limit_for = search_site_limit if self.budget_role == "search" else primary_site_limit
+        try:
+            value = int(task.params["site_limit"])
+        except (KeyError, TypeError, ValueError):
+            return limit_for(mode, MAX_PLANNED_USERNAMES)
+        return min(max(0, value), cap)
 
     @staticmethod
     def _seed_username(seed: Seed) -> str | None:
@@ -159,7 +189,10 @@ class SiteCheckConnector:
                 )
             ]
 
-        results = await self.engine.check_username(username, self.sites_for_mode(ctx.mode))
+        sites = self.sites_for_mode(ctx.mode)
+        if self.sites is SITES:
+            sites = sites[: self._site_limit(task, ctx.mode)]
+        results = await self.engine.check_username(username, sites)
 
         hits = [r for r in results if r.exists]
         cache_hits = sum(1 for r in results if r.from_cache)
