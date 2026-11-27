@@ -17,7 +17,7 @@ Tek tek:
 make lint
 make typecheck
 make test
-make web-build     # kökte package.json yok; doğru dizin apps/web
+make web-build     # kökteki package.json yalnız npm installer'ı; web dizini apps/web
 ```
 
 Tek test (PYTHONPATH zorunlu; `make test` bunu kendisi kurar):
@@ -96,12 +96,9 @@ Kurulum: `make bootstrap` (yerel `showis-*` paketleri PyPI'da yok, editable kuru
 
 ## Git / uzak depo
 
-- Varsayılan uzak depo `l1secx/showis` (`git remote` adı `l1secx`). Tüm değişiklikler oraya
-  gider; `origin` (`l1secc/showis`) yalnız kullanıcı açıkça isterse kullanılır.
-- `gh` iki hesapla açık (`l1secc` aktif, `l1secx` ikinci). `l1secx` özel repo olduğu için
-  `l1secc` ile görünmez. Hesabı değiştirmeden: `gh auth token --user l1secx` ile token al ve
-  tek komutluk `git -c http.extraheader="Authorization: Basic <base64(x-access-token:TOKEN)>"
-  push l1secx <dal>` kullan. Token'ı repoya, remote URL'sine veya sohbete yazma.
+- Uzak depo `l1secx/showis` (public; `git remote` adı `l1secx`). Eski `l1secc/showis`
+  artık yok; `origin` remote'u kaldırıldı.
+- `gh` aktif hesabı `l1secx`; ek token veya `http.extraheader` gerekmez.
 - Yeni remote yoksa: `git remote add l1secx https://github.com/l1secx/showis`.
 - Push (özellikle `main`) kullanıcı istediğinde yapılır; commit'ler yerelde kalır.
 

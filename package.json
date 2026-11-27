@@ -1,0 +1,27 @@
+{
+  "name": "@l1secx/showis",
+  "version": "0.1.0",
+  "description": "Showis OSINT investigation tool: installer and lifecycle CLI for the Docker Compose stack",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/l1secx/showis.git"
+  },
+  "homepage": "https://github.com/l1secx/showis#readme",
+  "bin": {
+    "showis": "bin/showis.js"
+  },
+  "files": [
+    "bin/",
+    "install.sh"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "prepublishOnly": "node bin/showis.js --check"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -61,8 +61,8 @@ test:
 dev:
 	@bash scripts/dev.sh
 
-# Web (Next.js) üretim derlemesi. Kök dizinde package.json yoktur — monorepo
-# kökünde `npm run build` çalışmaz; bu hedef doğru dizinde çalıştırır.
+# Web (Next.js) üretim derlemesi. Kökteki package.json yalnız npm installer'ıdır
+# (`@l1secx/showis`) — kökte `npm run build` yoktur; bu hedef doğru dizinde çalıştırır.
 web-build:
 	cd apps/web && npm run build
 

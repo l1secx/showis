@@ -111,7 +111,29 @@ raporlayan kişisel OSINT web uygulaması.
 
 ## Kurulum
 
-### Docker (önerilen)
+### Hızlı kurulum (tek komut)
+
+Gereksinimler: `git`, Docker Engine + **Docker Compose v2**.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/l1secx/showis/main/install.sh | bash
+# veya npm ile:
+npm install -g @l1secx/showis && showis install
+```
+
+Installer repoyu `~/.local/share/showis` altına klonlar (`--dir` ile değişir),
+ilk kurulumda `infra/.env` dosyasını rastgele sırlarla (`POSTGRES_PASSWORD`,
+`MASTER_KEY`, `SHOWIS_API_TOKEN`) ve bir Caddy basic-auth kullanıcısıyla
+(`admin`) üretir, ardından yığını başlatır. Parola kurulum sonunda bir kez
+yazdırılır ve `infra/.secrets/caddy-basic-auth.txt` (0600) dosyasında durur.
+Yeniden çalıştırmak mevcut `infra/.env`'i korur, yalnız kodu günceller.
+`--no-start` yalnız hazırlar, `--dry-run` hiçbir şeyi değiştirmez.
+
+npm CLI'ı yaşam döngüsü komutlarını da verir: `showis up | down | ps |
+logs [servis] | password`. Container adları sabit olduğu için bir host'ta tek
+kurulum çalışır.
+
+### Docker (elle)
 
 Gereksinimler: Docker Engine + **Docker Compose v2** (`docker compose` eklentisi;
 eski `docker-compose` v1, `depends_on` sağlık koşullarını desteklemez), `make`,
@@ -183,8 +205,9 @@ değerleri atlar ve docker kimlik bilgilerini `localhost` adresine bağlar
 değilse yığın izi yerine çalıştırılacak tek komutu yazar; iki süreçten biri
 kapanınca diğerini de kapatır (portta öksüz süreç kalmaz).
 
-Kök dizinde `package.json` **yoktur** — monorepo kökünde `npm run build`
-çalışmaz. Web derlemesi için `make web-build` veya `cd apps/web && npm run build`.
+Kökteki `package.json` yalnız npm installer'ıdır (`@l1secx/showis`) — monorepo
+kökünde `npm run build` yoktur. Web derlemesi için `make web-build` veya
+`cd apps/web && npm run build`.
 
 > **NixOS:** `pip` ile gelen native uzantılar (greenlet → SQLAlchemy asyncio)
 > sistem yolunda olmayan `libstdc++.so.6` arar. `Makefile` ve `scripts/dev.sh`
