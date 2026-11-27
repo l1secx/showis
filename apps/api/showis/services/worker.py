@@ -24,7 +24,7 @@ from celery import Celery
 from celery.schedules import crontab
 from celery.signals import worker_process_init
 from showis.core.logging import install_redaction_filter
-from showis.core.queues import scan_queue
+from showis.core.queues import celery_redis_url, scan_queue
 from showis.db.models import Scan
 from showis.db.session import reset_inherited_engine, task_session
 from showis.services.retention import run_retention_purge
@@ -37,6 +37,7 @@ logger = logging.getLogger("showis.worker")
 install_redaction_filter()
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+CELERY_REDIS_URL = celery_redis_url(REDIS_URL)
 
 # Yalnizca osint kuyrugunu tuketen worker icin gecerli ayarlar.
 SCAN_QUEUE = scan_queue()
@@ -52,8 +53,8 @@ TERMINAL_SCAN_STATUSES = ("completed", "failed", "cancelled")
 
 celery_app = Celery(
     "showis",
-    broker=REDIS_URL,
-    backend=REDIS_URL,
+    broker=CELERY_REDIS_URL,
+    backend=CELERY_REDIS_URL,
     include=["showis.services.worker"],
 )
 celery_app.conf.update(
