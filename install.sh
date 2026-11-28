@@ -108,6 +108,12 @@ else
     || die "could not hash the edge password with $CADDY_IMAGE"
 
   (umask 077 && cp infra/.env.example "$ENV_FILE")
+  # Own Compose project: the default name ("infra", from the directory) would
+  # reuse an unrelated infra_postgres_data volume whose password differs from
+  # the one generated here, and the API would fail with "password
+  # authentication failed". Only on first install, so existing installs keep
+  # their data volumes.
+  set_key COMPOSE_PROJECT_NAME showis
   set_key POSTGRES_PASSWORD "$(rand 24)"
   set_key MASTER_KEY "$(head -c 32 /dev/urandom | base64 | tr '+/' '-_')"
   set_key SHOWIS_API_TOKEN "$(rand 32)"
